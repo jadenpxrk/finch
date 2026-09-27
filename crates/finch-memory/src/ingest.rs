@@ -364,15 +364,15 @@ pub fn create_entity(mut input: EntityInput) -> EntityRecord {
 
 pub fn create_edge(mut input: EdgeInput) -> EdgeRecord {
     let id = input.id.take().unwrap_or_else(|| {
-        stable_memory_id(
-            "edge",
-            &[
-                input.scope.space_id.as_str(),
-                input.src_entity_id.as_str(),
-                input.dst_entity_id.as_str(),
-                input.relation_type.as_str(),
-            ],
-        )
+        let scope_hash = narrower_scope_hash(&input.scope);
+        let mut parts = vec![
+            input.scope.space_id.as_str(),
+            input.src_entity_id.as_str(),
+            input.dst_entity_id.as_str(),
+            input.relation_type.as_str(),
+        ];
+        parts.extend(scope_hash.as_deref());
+        stable_memory_id("edge", &parts)
     });
     input.into_record(id)
 }

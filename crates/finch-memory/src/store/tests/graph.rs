@@ -505,3 +505,43 @@ fn explicit_slot_alias_id_cannot_take_over_another_scope() {
 
     let _ = std::fs::remove_dir_all(&store.path);
 }
+
+#[test]
+fn generated_edge_ids_stay_distinct_between_tenants() {
+    // The same relation written independently by two tenants must not collide on its generated id.
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("edge_scope_generated_id");
+    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let scopes = ["tenant_a", "tenant_b"].map(|tenant| {
+        let mut scope = scope();
+        scope.tenant_id = Some(tenant.to_string());
+        scope
+    });
+    let edges = scopes.each_ref().map(|scope| {
+        store
+            .add_edge(EdgeInput {
+                id: None,
+                scope: scope.clone(),
+                visibility: Visibility::Private,
+                policy_tags: Vec::new(),
+                src_entity_id: "entity_seed".to_string(),
+                dst_entity_id: "entity_target".to_string(),
+                relation_type: "owns".to_string(),
+                claim_id: None,
+                source_span_ids: Vec::new(),
+                valid_from_ms: Some(10),
+                valid_to_ms: None,
+                confidence: Some(1.0),
+            })
+            .unwrap()
+    });
+    assert_ne!(edges[0].id, edges[1].id);
+    for (scope, edge) in scopes.iter().zip(&edges) {
+        let seen = store
+            .expand_edges_one_hop(scope, &["entity_seed".to_string()], 10, Some(20))
+            .unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].id, edge.id);
+    }
+    let _ = std::fs::remove_dir_all(&store.path);
+}
