@@ -19,7 +19,7 @@ fn build_expr_column<P: ArrowPrimitiveType>(
 ) -> ZResult<Arc<dyn Array>> {
     let mut b = PrimitiveBuilder::<P>::new();
     for row in 0..batch.num_rows() {
-        match bound.and_then(|e| e.eval(batch, row)) {
+        match bound.map(|e| e.eval(batch, row)).transpose()?.flatten() {
             None => b.append_null(),
             Some(Num::Float(v)) if !v.is_finite() => {
                 return Err(Status::invalid_argument(
@@ -32,14 +32,8 @@ fn build_expr_column<P: ArrowPrimitiveType>(
     Ok(Arc::new(b.finish()))
 }
 
-fn truncate_in_range<T: TryFrom<i128>>(v: Num, type_name: &str) -> ZResult<T> {
-    let t = match v {
-        Num::Int(i) => Some(i),
-        // The float-to-int cast saturates, so a truncated value past i128 fails the conversion.
-        Num::Float(f) if f.trunc().abs() < i128::MAX as f64 => Some(f.trunc() as i128),
-        Num::Float(_) => None,
-    };
-    t.and_then(|t| T::try_from(t).ok()).ok_or_else(|| {
+fn exact_in_range<T: TryFrom<i128>>(v: Num, type_name: &str) -> ZResult<T> {
+    T::try_from(v.to_exact_int()?).map_err(|_| {
         Status::invalid_argument(format!("expression value out of {} range", type_name))
     })
 }
@@ -52,16 +46,16 @@ fn build_numeric_column(
     use finch_types::DataType;
     match dt {
         DataType::Int32 => {
-            build_expr_column::<Int32Type>(batch, bound, |v| truncate_in_range(v, "int32"))
+            build_expr_column::<Int32Type>(batch, bound, |v| exact_in_range(v, "int32"))
         }
         DataType::Int64 => {
-            build_expr_column::<Int64Type>(batch, bound, |v| truncate_in_range(v, "int64"))
+            build_expr_column::<Int64Type>(batch, bound, |v| exact_in_range(v, "int64"))
         }
         DataType::Uint32 => {
-            build_expr_column::<UInt32Type>(batch, bound, |v| truncate_in_range(v, "uint32"))
+            build_expr_column::<UInt32Type>(batch, bound, |v| exact_in_range(v, "uint32"))
         }
         DataType::Uint64 => {
-            build_expr_column::<UInt64Type>(batch, bound, |v| truncate_in_range(v, "uint64"))
+            build_expr_column::<UInt64Type>(batch, bound, |v| exact_in_range(v, "uint64"))
         }
         DataType::Float32 => build_expr_column::<Float32Type>(batch, bound, |v| {
             let f = v.as_f64() as f32;

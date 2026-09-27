@@ -280,6 +280,16 @@ pub enum Num {
     Float(f64),
 }
 
+// At 2^53 and beyond, a whole f64 may be the rounding of a neighbouring integer.
+fn exact_float_int(v: f64) -> Option<i128> {
+    const EXACT_LIMIT: f64 = 9_007_199_254_740_992.0;
+    (v.fract() == 0.0 && v.abs() < EXACT_LIMIT).then_some(v as i128)
+}
+
+fn integer_overflow() -> Status {
+    Status::invalid_argument("integer overflow in expression")
+}
+
 impl Num {
     pub fn as_f64(self) -> f64 {
         match self {
@@ -288,27 +298,31 @@ impl Num {
         }
     }
 
-    fn literal(v: f64) -> Num {
-        const MAX_EXACT: f64 = 9_007_199_254_740_992.0;
-        if v.fract() == 0.0 && v.abs() <= MAX_EXACT {
-            Num::Int(v as i128)
-        } else {
-            Num::Float(v)
+    /// The integer value, or an error for a float that is fractional or not provably exact.
+    pub fn to_exact_int(self) -> ZResult<i128> {
+        match self {
+            Num::Int(v) => Ok(v),
+            Num::Float(v) => exact_float_int(v).ok_or_else(|| {
+                Status::invalid_argument(format!("expression value {v} is not an exact integer"))
+            }),
         }
     }
 
+    fn literal(v: f64) -> Num {
+        exact_float_int(v).map_or(Num::Float(v), Num::Int)
+    }
+
+    /// Integer operands overflowing i128 are an error, never a silently rounded float.
     fn combine(
         self,
         other: Num,
         int_op: fn(i128, i128) -> Option<i128>,
         float_op: fn(f64, f64) -> f64,
-    ) -> Num {
+    ) -> ZResult<Num> {
         if let (Num::Int(x), Num::Int(y)) = (self, other) {
-            if let Some(v) = int_op(x, y) {
-                return Num::Int(v);
-            }
+            return int_op(x, y).map(Num::Int).ok_or_else(integer_overflow);
         }
-        Num::Float(float_op(self.as_f64(), other.as_f64()))
+        Ok(Num::Float(float_op(self.as_f64(), other.as_f64())))
     }
 }
 
@@ -346,43 +360,63 @@ fn numeric_value(col: &dyn Array, row: usize, dtype: &ArrowType) -> Option<Num> 
 }
 
 impl BoundExpr {
-    pub fn eval(&self, batch: &RecordBatch, row: usize) -> Option<Num> {
-        let pair = |a: &BoundExpr, b: &BoundExpr| Some((a.eval(batch, row)?, b.eval(batch, row)?));
+    /// `Ok(None)` is a null result: a null operand or division by zero.
+    pub fn eval(&self, batch: &RecordBatch, row: usize) -> ZResult<Option<Num>> {
+        let pair = |a: &BoundExpr, b: &BoundExpr| -> ZResult<Option<(Num, Num)>> {
+            let Some(x) = a.eval(batch, row)? else {
+                return Ok(None);
+            };
+            Ok(b.eval(batch, row)?.map(|y| (x, y)))
+        };
+        let arith = |a: &BoundExpr,
+                     b: &BoundExpr,
+                     int_op: fn(i128, i128) -> Option<i128>,
+                     float_op: fn(f64, f64) -> f64| {
+            pair(a, b)?
+                .map(|(x, y)| x.combine(y, int_op, float_op))
+                .transpose()
+        };
         match self {
-            BoundExpr::Number(v) => Some(*v),
+            BoundExpr::Number(v) => Ok(Some(*v)),
             BoundExpr::Column { index, dtype } => {
                 let col = batch.column(*index);
-                numeric_value(col.as_ref(), row, dtype)
+                Ok(numeric_value(col.as_ref(), row, dtype))
             }
-            BoundExpr::Neg(a) => a.eval(batch, row).map(|v| match v {
-                Num::Int(i) => i.checked_neg().map_or(Num::Float(-(i as f64)), Num::Int),
-                Num::Float(f) => Num::Float(-f),
-            }),
-            BoundExpr::Add(a, b) => {
-                pair(a, b).map(|(x, y)| x.combine(y, i128::checked_add, |x, y| x + y))
-            }
-            BoundExpr::Sub(a, b) => {
-                pair(a, b).map(|(x, y)| x.combine(y, i128::checked_sub, |x, y| x - y))
-            }
-            BoundExpr::Mul(a, b) => {
-                pair(a, b).map(|(x, y)| x.combine(y, i128::checked_mul, |x, y| x * y))
-            }
-            BoundExpr::Div(a, b) => {
-                let (x, y) = pair(a, b)?;
-                // Exact integer quotients stay integers so values beyond 2^53 are not rounded.
-                if let (Num::Int(x), Num::Int(y)) = (x, y) {
-                    if x.checked_rem(y) == Some(0) {
-                        return Some(Num::Int(x / y));
-                    }
-                }
-                let y = y.as_f64();
-                if y == 0.0 {
-                    return None;
-                }
-                Some(Num::Float(x.as_f64() / y))
-            }
+            BoundExpr::Neg(a) => a.eval(batch, row)?.map(negate).transpose(),
+            BoundExpr::Add(a, b) => arith(a, b, i128::checked_add, |x, y| x + y),
+            BoundExpr::Sub(a, b) => arith(a, b, i128::checked_sub, |x, y| x - y),
+            BoundExpr::Mul(a, b) => arith(a, b, i128::checked_mul, |x, y| x * y),
+            BoundExpr::Div(a, b) => match pair(a, b)? {
+                Some((x, y)) => divide(x, y),
+                None => Ok(None),
+            },
         }
     }
+}
+
+fn negate(v: Num) -> ZResult<Num> {
+    match v {
+        Num::Int(i) => i.checked_neg().map(Num::Int).ok_or_else(integer_overflow),
+        Num::Float(f) => Ok(Num::Float(-f)),
+    }
+}
+
+fn divide(x: Num, y: Num) -> ZResult<Option<Num>> {
+    // Exact integer quotients stay integers so values beyond 2^53 are not rounded.
+    if let (Num::Int(x), Num::Int(y)) = (x, y) {
+        // checked_rem is None only for i128::MIN % -1, whose remainder is zero.
+        if y != 0 && x.checked_rem(y).unwrap_or(0) == 0 {
+            return x
+                .checked_div(y)
+                .map(|q| Some(Num::Int(q)))
+                .ok_or_else(integer_overflow);
+        }
+    }
+    let y = y.as_f64();
+    if y == 0.0 {
+        return Ok(None);
+    }
+    Ok(Some(Num::Float(x.as_f64() / y)))
 }
 
 #[cfg(test)]

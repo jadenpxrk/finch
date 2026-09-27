@@ -11,6 +11,16 @@ pub fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(i) = obj.extract::<i64>() {
         return Ok(Value::I64(i));
     }
+    if let Ok(u) = obj.extract::<u64>() {
+        return Ok(Value::U64(u));
+    }
+    // A Python int must not fall through to f64, which rounds it beyond 2^53.
+    if obj.is_instance_of::<pyo3::types::PyLong>() {
+        return Err(pyo3::exceptions::PyOverflowError::new_err(
+            "int out of range for int64 and uint64",
+        )
+        .into());
+    }
     if let Ok(f) = obj.extract::<f64>() {
         return Ok(Value::F64(f));
     }
@@ -34,6 +44,9 @@ pub fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
     if let Ok(list) = obj.extract::<Vec<i64>>() {
         return Ok(Value::ArrayI64(list));
+    }
+    if let Ok(list) = obj.extract::<Vec<u64>>() {
+        return Ok(Value::ArrayU64(list));
     }
     if let Ok(list) = obj.extract::<Vec<i32>>() {
         return Ok(Value::ArrayI32(list));

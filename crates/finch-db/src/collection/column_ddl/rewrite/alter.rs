@@ -31,6 +31,16 @@ fn finite_float(v: f64) -> ZResult<f64> {
     Ok(v)
 }
 
+fn whole_float(v: f64) -> ZResult<f64> {
+    let v = finite_float(v)?;
+    if v.fract() != 0.0 {
+        return Err(Status::invalid_argument(format!(
+            "alter_column cast of fractional value {v} to integer"
+        )));
+    }
+    Ok(v)
+}
+
 fn non_negative<T: Default + PartialOrd>(v: T) -> ZResult<T> {
     if v < T::default() {
         return Err(Status::invalid_argument(
@@ -58,12 +68,12 @@ fn get_i128(col: &Arc<dyn Array>, row: usize) -> ZResult<Option<i128>> {
             Ok(Some(v as i128))
         }
         DataType::Float32 => {
-            let v = finite_float(value::<Float32Type>(col, row)? as f64)?;
-            Ok(Some(v.trunc() as i128))
+            let v = whole_float(value::<Float32Type>(col, row)? as f64)?;
+            Ok(Some(v as i128))
         }
         DataType::Float64 => {
-            let v = finite_float(value::<Float64Type>(col, row)?)?;
-            Ok(Some(v.trunc() as i128))
+            let v = whole_float(value::<Float64Type>(col, row)?)?;
+            Ok(Some(v as i128))
         }
         _ => Err(unsupported_cast()),
     }
@@ -79,12 +89,12 @@ fn get_u128(col: &Arc<dyn Array>, row: usize) -> ZResult<Option<u128>> {
         DataType::UInt32 => Ok(Some(value::<UInt32Type>(col, row)? as u128)),
         DataType::UInt64 => Ok(Some(value::<UInt64Type>(col, row)? as u128)),
         DataType::Float32 => {
-            let v = finite_float(value::<Float32Type>(col, row)? as f64)?;
-            Ok(Some(non_negative(v.trunc())? as u128))
+            let v = whole_float(value::<Float32Type>(col, row)? as f64)?;
+            Ok(Some(non_negative(v)? as u128))
         }
         DataType::Float64 => {
-            let v = finite_float(value::<Float64Type>(col, row)?)?;
-            Ok(Some(non_negative(v.trunc())? as u128))
+            let v = whole_float(value::<Float64Type>(col, row)?)?;
+            Ok(Some(non_negative(v)? as u128))
         }
         _ => Err(unsupported_cast()),
     }

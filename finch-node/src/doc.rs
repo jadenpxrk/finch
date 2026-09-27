@@ -308,4 +308,30 @@ mod tests {
         assert_eq!(out.fields.get("id").unwrap(), big);
         assert_eq!(out.fields.get("ids").unwrap(), &serde_json::json!([big, 7]));
     }
+
+    #[test]
+    fn test_large_js_number_is_rejected_for_64_bit_integer_fields() {
+        // napi hands integers outside the i32/u32 range to Rust as f64-backed JSON numbers.
+        let schema = finch_types::CollectionSchema::new("test")
+            .with_field(finch_types::FieldSchema::new(
+                "id",
+                finch_types::DataType::Int64,
+            ))
+            .with_field(finch_types::FieldSchema::new(
+                "uid",
+                finch_types::DataType::Uint64,
+            ));
+        let rounded = serde_json::Number::from_f64(9_007_199_254_740_992.0).unwrap();
+        for field in ["id", "uid"] {
+            let obj = DocObject {
+                pk: "d0".to_string(),
+                score: None,
+                fields: HashMap::from([(
+                    field.to_string(),
+                    serde_json::Value::Number(rounded.clone()),
+                )]),
+            };
+            assert!(docobject_to_doc(obj, &schema).is_err(), "{field}");
+        }
+    }
 }
