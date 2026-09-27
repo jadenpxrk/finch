@@ -920,12 +920,14 @@ impl MemoryStore {
         mut affected_slot_ids: BTreeSet<MemoryId>,
     ) -> ZResult<()> {
         let transaction_time_ms = system_time_ms();
-        let changed_claims = self.scan_current_claims_for_slot_ids(
+        let mut changed_claims = self.scan_current_claims_for_slot_ids(
             &record.scope,
             &affected_slot_ids,
-            MAX_VECTOR_QUERY_TOPK,
+            usize::MAX,
             Some(record.effective_at_ms),
         )?;
+        changed_claims.retain(|claim| claim.scope == record.scope);
+        changed_claims.truncate(MAX_VECTOR_QUERY_TOPK);
         let known_ids = changed_claims
             .iter()
             .map(|claim| claim.id.clone())

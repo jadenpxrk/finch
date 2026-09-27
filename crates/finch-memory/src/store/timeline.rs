@@ -24,12 +24,13 @@ impl MemoryStore {
 
         let mut snapshots = Vec::new();
         for boundary in boundaries {
-            let claims = self.scan_current_claims_for_slot_ids(
+            let mut claims = self.scan_current_claims_for_slot_ids(
                 scope,
                 affected_slot_ids,
                 usize::MAX,
                 Some(boundary),
             )?;
+            claims.retain(|claim| claim.scope == *scope);
             let set_states =
                 state_records_from_claims(scope, &claims, rule_ids_by_claim, write.time_ms)
                     .into_iter()

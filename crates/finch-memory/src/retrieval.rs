@@ -244,14 +244,13 @@ pub fn apply_corrections_to_span_hits_at(
 }
 
 fn correction_targets_span_hit(correction: &CorrectionRecord, hit: &SpanSearchHit) -> bool {
-    // A selector sweeps text, so it only reaches spans inside the correction's own scope.
+    // A selector sweeps text, so it only reaches spans of the correction's exact scope.
     correction.target_ids.iter().any(|id| id == &hit.span.id)
         || correction
             .target_selector
             .as_deref()
             .is_some_and(|selector| {
-                hit.span.scope.matches_filter(&correction.scope)
-                    && span_matches_selector(&hit.span, selector)
+                hit.span.scope == correction.scope && span_matches_selector(&hit.span, selector)
             })
 }
 

@@ -1243,6 +1243,8 @@ impl MemoryStore {
                 .filter(|claim| rules.iter().any(|rule| rule_targets_claim(rule, claim)))
                 .cloned(),
         );
+        // Rules fire within one scope, so only that scope's targets can go stale.
+        claims.retain(|claim| claim.scope == *scope);
         dedupe_claims_by_id(&mut claims);
         Ok(claims)
     }

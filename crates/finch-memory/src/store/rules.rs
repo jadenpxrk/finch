@@ -89,20 +89,25 @@ impl MemoryStore {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let trigger_slot_ids = self
+        // A rule's trigger slot is keyed with its scope: each scope repairs its own slot.
+        let trigger_slots = self
             .scan_rules(scope, usize::MAX, at_ms)?
             .into_iter()
             .filter(|rule| matches!(rule.activation, RuleActivation::OnChange))
-            .filter_map(|rule| rule.trigger_slot_id)
+            .filter_map(|rule| Some((rule.trigger_slot_id?, rule.scope)))
             .collect::<BTreeSet<_>>();
-        if trigger_slot_ids.is_empty() {
+        if trigger_slots.is_empty() {
             return Ok(Vec::new());
         }
+        let trigger_slot_ids = trigger_slots
+            .iter()
+            .map(|(slot_id, _)| slot_id.clone())
+            .collect::<BTreeSet<_>>();
         let mut slots = self
             .scan_slots(scope, usize::MAX, at_ms)?
             .into_iter()
-            .filter(|slot| trigger_slot_ids.contains(&slot.slot_key))
-            .map(|slot| (slot.slot_key.clone(), slot))
+            .map(|slot| ((slot.slot_key.clone(), slot.scope.clone()), slot))
+            .filter(|(key, _)| trigger_slots.contains(key))
             .collect::<BTreeMap<_, _>>();
         let current = latest_comparable_claims_by_slot(self.scan_current_claims_for_slot_ids(
             scope,
@@ -113,8 +118,8 @@ impl MemoryStore {
 
         let mut repairable = current
             .into_iter()
-            .filter_map(|(slot_id, claim)| {
-                let slot = slots.remove(&slot_id)?;
+            .filter_map(|((slot_id, claim_scope), claim)| {
+                let slot = slots.remove(&(slot_id.clone(), claim_scope))?;
                 Some(RepairableTriggerSlot {
                     slot_id,
                     subject_key: slot.subject_key,
@@ -296,7 +301,7 @@ impl MemoryStore {
             .map(|doc| rule_from_doc(&doc))
             .collect::<ZResult<Vec<_>>>()?
             .into_iter()
-            .filter(|rule| rule_bound_and_in_force(rule, at_ms))
+            .filter(|rule| rule.scope == trigger.scope && rule_bound_and_in_force(rule, at_ms))
             .collect::<Vec<_>>();
         let trigger_slot = claim_slot(&trigger);
         let mut rules = self
@@ -374,22 +379,25 @@ fn rule_bound_and_in_force(rule: &RuleRecord, at_ms: Option<i64>) -> bool {
     rule_endpoints_bound(rule) && rule_in_force_at(rule, at_ms)
 }
 
-/// The latest directly asserted, active claim per slot that carries a value or state text a
-/// later transition can be compared against.
-fn latest_comparable_claims_by_slot(claims: Vec<ClaimRecord>) -> BTreeMap<MemoryId, ClaimRecord> {
-    let mut latest = BTreeMap::<MemoryId, ClaimRecord>::new();
+/// The latest directly asserted, active claim per slot and scope that carries a value or state
+/// text a later transition can be compared against.
+fn latest_comparable_claims_by_slot(
+    claims: Vec<ClaimRecord>,
+) -> BTreeMap<(MemoryId, MemoryScope), ClaimRecord> {
+    let mut latest = BTreeMap::<(MemoryId, MemoryScope), ClaimRecord>::new();
     for claim in claims {
         let Some(slot_id) = claim.slot_id.clone() else {
             continue;
         };
+        let key = (slot_id, claim.scope.clone());
         let comparable = claim_actively_affirmed(&claim)
             && crate::is_direct_state_claim(&claim)
             && (claim.object_value.is_some() || !claim.claim_text.trim().is_empty());
-        let newer = latest.get(&slot_id).is_none_or(|held| {
+        let newer = latest.get(&key).is_none_or(|held| {
             (claim_effective_from_ms(&claim), &claim.id) > (claim_effective_from_ms(held), &held.id)
         });
         if comparable && newer {
-            latest.insert(slot_id, claim);
+            latest.insert(key, claim);
         }
     }
     latest

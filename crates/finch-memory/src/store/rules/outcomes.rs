@@ -52,7 +52,66 @@ impl MemoryStore {
         Ok((closure.rules, closure.slot_ids))
     }
 
+    /// Completes the read set's dependency chains once per scope: a rule completes over its own
+    /// scope's claims, so a read over several scopes never pairs one scope's rule with another's
+    /// trigger or target.
     pub(in crate::store) fn complete_target_dependency_chains(
+        &self,
+        rules: &[RuleRecord],
+        available_claims: &[ClaimRecord],
+        existing_applications: &[ResolvedRuleApplication],
+        max_hops: usize,
+    ) -> ZResult<DependencyChainResolution> {
+        let scopes = rules
+            .iter()
+            .map(|rule| &rule.scope)
+            .chain(available_claims.iter().map(|claim| &claim.scope))
+            .chain(
+                existing_applications
+                    .iter()
+                    .map(|application| &application.claim.scope),
+            )
+            .collect::<BTreeSet<_>>();
+        let mut resolution = DependencyChainResolution {
+            applications: Vec::new(),
+            projected_claims: Vec::new(),
+            suppressed_claim_ids: BTreeSet::new(),
+            outcomes: Vec::new(),
+        };
+        for scope in scopes {
+            let rules = rules
+                .iter()
+                .filter(|rule| rule.scope == *scope)
+                .cloned()
+                .collect::<Vec<_>>();
+            let claims = available_claims
+                .iter()
+                .filter(|claim| claim.scope == *scope)
+                .cloned()
+                .collect::<Vec<_>>();
+            let applications = existing_applications
+                .iter()
+                .filter(|application| application.claim.scope == *scope)
+                .cloned()
+                .collect::<Vec<_>>();
+            let scoped =
+                self.complete_scope_dependency_chains(&rules, &claims, &applications, max_hops)?;
+            resolution.applications.extend(scoped.applications);
+            resolution.projected_claims.extend(scoped.projected_claims);
+            resolution
+                .suppressed_claim_ids
+                .extend(scoped.suppressed_claim_ids);
+            resolution.outcomes.extend(scoped.outcomes);
+        }
+        resolution.outcomes.sort_by(|a, b| {
+            a.rule_id
+                .cmp(&b.rule_id)
+                .then_with(|| a.target_slot_id.cmp(&b.target_slot_id))
+        });
+        Ok(resolution)
+    }
+
+    fn complete_scope_dependency_chains(
         &self,
         rules: &[RuleRecord],
         available_claims: &[ClaimRecord],

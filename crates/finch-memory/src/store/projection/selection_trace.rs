@@ -206,16 +206,17 @@ impl MemoryStore {
 
     /// Every slot the scope's claims revised at least once, with its version and value counts.
     fn trace_slot_histories(&self, scope: &MemoryScope) -> ZResult<Vec<SlotHistoryTrace>> {
-        let mut claims_by_slot = BTreeMap::<MemoryId, Vec<ClaimRecord>>::new();
+        // Two scopes' claims on one slot are two histories, not revisions of each other.
+        let mut claims_by_slot = BTreeMap::<(MemoryId, MemoryScope), Vec<ClaimRecord>>::new();
         for claim in self.scan_claims(scope, usize::MAX, None)? {
             claims_by_slot
-                .entry(claim_slot_lifecycle_key(&claim))
+                .entry((claim_slot_lifecycle_key(&claim), claim.scope.clone()))
                 .or_default()
                 .push(claim);
         }
         Ok(claims_by_slot
             .into_iter()
-            .filter_map(|(slot_id, claims)| slot_history_trace(slot_id, claims))
+            .filter_map(|((slot_id, _), claims)| slot_history_trace(slot_id, claims))
             .collect())
     }
 }

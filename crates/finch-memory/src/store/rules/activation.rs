@@ -109,8 +109,15 @@ impl MemoryStore {
         } else {
             self.scan_claim_versions_for_slot_ids(scope, &slot_ids, usize::MAX, prior_at_ms)?
         };
+        // The prior value is the trigger's own scope's, never a narrower scope's.
+        let own_scope = |claim: &ClaimRecord| claim.scope == *scope;
+        candidates.retain(own_scope);
         if !any_rule_trigger(rule, &candidates) {
-            candidates.extend(self.scan_current_claims(scope, usize::MAX, prior_at_ms)?);
+            candidates.extend(
+                self.scan_current_claims(scope, usize::MAX, prior_at_ms)?
+                    .into_iter()
+                    .filter(own_scope),
+            );
         }
         if any_rule_trigger(rule, &candidates) {
             return Ok(candidates);

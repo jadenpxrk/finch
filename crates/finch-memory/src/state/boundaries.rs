@@ -12,8 +12,9 @@ impl MemoryStore {
             .iter()
             .filter_map(|rule| rule.trigger_slot_id.clone())
             .collect::<BTreeSet<_>>();
-        let rule_activation_claims =
+        let mut rule_activation_claims =
             self.scan_current_claims_for_slot_ids(scope, &rule_trigger_slot_ids, usize::MAX, None)?;
+        rule_activation_claims.retain(|claim| claim.scope == *scope);
         let rule_start_trigger_claims = self.rule_start_trigger_claims(scope, rules)?;
         let mut valid_boundaries = batch_valid_boundaries(claims, corrections, rules);
         valid_boundaries.extend(rule_activation_claims.iter().map(claim_start_ms));
@@ -48,12 +49,13 @@ impl MemoryStore {
         trigger_slots_by_rule_from
             .iter()
             .map(|(from, slot_ids)| {
-                let claims = self.scan_current_claims_for_slot_ids(
+                let mut claims = self.scan_current_claims_for_slot_ids(
                     scope,
                     slot_ids,
                     usize::MAX,
                     Some(*from),
                 )?;
+                claims.retain(|claim| claim.scope == *scope);
                 Ok((*from, claims))
             })
             .collect()
@@ -151,12 +153,16 @@ impl MemoryStore {
             .iter()
             .any(|correction| correction.effective_at_ms == boundary)
         {
-            changed.extend(self.scan_current_claims_for_slot_ids(
-                inputs.scope,
-                &plan.correction_target_slot_ids,
-                usize::MAX,
-                Some(boundary),
-            )?);
+            changed.extend(
+                self.scan_current_claims_for_slot_ids(
+                    inputs.scope,
+                    &plan.correction_target_slot_ids,
+                    usize::MAX,
+                    Some(boundary),
+                )?
+                .into_iter()
+                .filter(|claim| claim.scope == *inputs.scope),
+            );
         }
         dedupe_claims_by_id(&mut changed);
         Ok(changed)
@@ -195,6 +201,7 @@ impl MemoryStore {
                 Some(before_expiry),
             )?
             .into_iter()
+            .filter(|claim| claim.scope == *inputs.scope)
             .map(|claim| expired_at(claim, boundary))
             .collect::<Vec<_>>();
         applications.extend(self.resolve_rules_for_changed_claims_at(

@@ -118,7 +118,7 @@ impl MemoryStore {
             .current_state_kinds(scope, &candidate_slot_ids, temporal)?
             .into_iter()
             .filter(|(_, kind)| matches!(kind, StateRecordKind::Derived))
-            .map(|(slot_id, _)| slot_id)
+            .map(|((slot_id, _), _)| slot_id)
             .collect())
     }
 
@@ -138,7 +138,7 @@ impl MemoryStore {
             .current_state_kinds(scope, query_slot_ids, temporal)?
             .into_iter()
             .filter(|(_, kind)| is_lifecycle_state_kind(*kind))
-            .map(|(slot_id, _)| slot_id)
+            .map(|((slot_id, _), _)| slot_id)
             .collect::<BTreeSet<_>>();
         if lifecycle_ids.is_empty() {
             return Ok(BTreeSet::new());
@@ -166,16 +166,17 @@ impl MemoryStore {
             .collect())
     }
 
-    /// The highest-priority current state kind of each of `slot_ids`.
+    /// The highest-priority current state kind of each of `slot_ids` in each scope that has one;
+    /// one scope's state must not stand for another's.
     fn current_state_kinds(
         &self,
         scope: &MemoryScope,
         slot_ids: &BTreeSet<MemoryId>,
         temporal: BiTemporalQuery,
-    ) -> ZResult<BTreeMap<MemoryId, StateRecordKind>> {
+    ) -> ZResult<BTreeMap<(MemoryId, MemoryScope), StateRecordKind>> {
         let records =
             self.scan_state_records_bitemporal_for_slot_ids(scope, slot_ids, usize::MAX, temporal)?;
-        let mut kinds = BTreeMap::<MemoryId, StateRecordKind>::new();
+        let mut kinds = BTreeMap::<(MemoryId, MemoryScope), StateRecordKind>::new();
         for record in records {
             let Some(slot_id) = record.slot_id else {
                 continue;
@@ -183,11 +184,12 @@ impl MemoryStore {
             if !slot_ids.contains(&slot_id) {
                 continue;
             }
-            let replace = kinds.get(&slot_id).is_none_or(|existing| {
+            let key = (slot_id, record.scope);
+            let replace = kinds.get(&key).is_none_or(|existing| {
                 state_record_priority(record.state_kind) < state_record_priority(*existing)
             });
             if replace {
-                kinds.insert(slot_id, record.state_kind);
+                kinds.insert(key, record.state_kind);
             }
         }
         Ok(kinds)

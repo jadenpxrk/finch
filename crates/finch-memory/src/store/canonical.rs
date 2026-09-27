@@ -137,76 +137,101 @@ impl MemoryStore {
             return Ok(Vec::new());
         }
         let entities = self.scan_entities(scope, usize::MAX)?;
-        let mut sources = SlotBindingSources {
-            entities_by_id: entities
+        let slot_aliases = self.scan_slot_aliases(scope, usize::MAX, at_ms)?;
+        let states = self.scan_state_records(
+            scope,
+            StateRecordScan {
+                limit: usize::MAX,
+                temporal: BiTemporalQuery {
+                    valid_at_ms: at_ms,
+                    transaction_at_ms: None,
+                },
+            },
+        )?;
+        let rules = self.scan_rules(scope, usize::MAX, at_ms)?;
+        let mut slots_by_scope = BTreeMap::<MemoryScope, Vec<CanonicalSlotRecord>>::new();
+        for slot in self.scan_slots(scope, usize::MAX, at_ms)? {
+            slots_by_scope
+                .entry(slot.scope.clone())
+                .or_default()
+                .push(slot);
+        }
+        // Each scope's slots take their entities, aliases, states, and rules from that scope only.
+        let mut contexts = Vec::new();
+        for (slot_scope, slots) in slots_by_scope {
+            let scope_entities = entities
                 .iter()
-                .map(|entity| (entity.id.as_str(), entity))
-                .collect(),
-            entity_alias_owners: entity_alias_owners(&entities),
-            aliases_by_slot: unambiguous_slot_aliases(self.scan_slot_aliases(
-                scope,
-                usize::MAX,
-                at_ms,
-            )?),
-            states_by_slot: self.recent_states_by_slot(scope, at_ms)?,
-            rule_neighbors: RuleNeighbors::from_rules(self.scan_rules(scope, usize::MAX, at_ms)?),
-        };
-        let mut contexts = self
-            .scan_slots(scope, usize::MAX, at_ms)?
-            .into_iter()
-            .map(|slot| sources.context_for(slot))
-            .collect::<Vec<_>>();
+                .filter(|entity| entity.scope == slot_scope)
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut sources = SlotBindingSources {
+                entities_by_id: scope_entities
+                    .iter()
+                    .map(|entity| (entity.id.as_str(), entity))
+                    .collect(),
+                entity_alias_owners: entity_alias_owners(&scope_entities),
+                aliases_by_slot: unambiguous_slot_aliases(
+                    slot_aliases
+                        .iter()
+                        .filter(|alias| alias.scope == slot_scope)
+                        .cloned()
+                        .collect(),
+                ),
+                states_by_slot: recent_states_by_slot(
+                    states.iter().filter(|state| state.scope == slot_scope),
+                ),
+                rule_neighbors: RuleNeighbors::from_rules(
+                    rules
+                        .iter()
+                        .filter(|rule| rule.scope == slot_scope)
+                        .cloned()
+                        .collect(),
+                ),
+            };
+            contexts.extend(slots.into_iter().map(|slot| sources.context_for(slot)));
+        }
         contexts.sort_by(|a, b| a.slot_id.cmp(&b.slot_id));
         contexts.truncate(limit);
         Ok(contexts)
     }
+}
 
-    /// Up to eight distinct recent states of every slot, newest first.
-    fn recent_states_by_slot(
-        &self,
-        scope: &MemoryScope,
-        at_ms: Option<i64>,
-    ) -> ZResult<BTreeMap<MemoryId, Vec<SlotTemporalState>>> {
-        let scan = StateRecordScan {
-            limit: usize::MAX,
-            temporal: BiTemporalQuery {
-                valid_at_ms: at_ms,
-                transaction_at_ms: None,
-            },
+/// Up to eight distinct recent states of every slot, newest first.
+fn recent_states_by_slot<'s>(
+    states: impl Iterator<Item = &'s StateRecord>,
+) -> BTreeMap<MemoryId, Vec<SlotTemporalState>> {
+    let mut states_by_slot = BTreeMap::<MemoryId, Vec<SlotTemporalState>>::new();
+    for state in states {
+        let Some(slot_id) = state.slot_id.clone() else {
+            continue;
         };
-        let mut states_by_slot = BTreeMap::<MemoryId, Vec<SlotTemporalState>>::new();
-        for state in self.scan_state_records(scope, scan)? {
-            let Some(slot_id) = state.slot_id else {
-                continue;
-            };
-            states_by_slot
-                .entry(slot_id)
-                .or_default()
-                .push(SlotTemporalState {
-                    state_kind: state.state_kind,
-                    state_text: state.state_text,
-                    observed_at_ms: state.observed_at_ms,
-                    valid_from_ms: state.valid_from_ms,
-                    valid_to_ms: state.valid_to_ms,
-                });
-        }
-        for states in states_by_slot.values_mut() {
-            states.sort_by(|a, b| {
-                b.observed_at_ms
-                    .cmp(&a.observed_at_ms)
-                    .then_with(|| a.state_kind.as_str().cmp(b.state_kind.as_str()))
-                    .then_with(|| a.state_text.cmp(&b.state_text))
+        states_by_slot
+            .entry(slot_id)
+            .or_default()
+            .push(SlotTemporalState {
+                state_kind: state.state_kind,
+                state_text: state.state_text.clone(),
+                observed_at_ms: state.observed_at_ms,
+                valid_from_ms: state.valid_from_ms,
+                valid_to_ms: state.valid_to_ms,
             });
-            states.dedup_by(|a, b| {
-                a.state_kind == b.state_kind
-                    && a.state_text == b.state_text
-                    && a.valid_from_ms == b.valid_from_ms
-                    && a.valid_to_ms == b.valid_to_ms
-            });
-            states.truncate(8);
-        }
-        Ok(states_by_slot)
     }
+    for states in states_by_slot.values_mut() {
+        states.sort_by(|a, b| {
+            b.observed_at_ms
+                .cmp(&a.observed_at_ms)
+                .then_with(|| a.state_kind.as_str().cmp(b.state_kind.as_str()))
+                .then_with(|| a.state_text.cmp(&b.state_text))
+        });
+        states.dedup_by(|a, b| {
+            a.state_kind == b.state_kind
+                && a.state_text == b.state_text
+                && a.valid_from_ms == b.valid_from_ms
+                && a.valid_to_ms == b.valid_to_ms
+        });
+        states.truncate(8);
+    }
+    states_by_slot
 }
 
 /// Everything a slot's binding context is assembled from, keyed for per-slot lookup.

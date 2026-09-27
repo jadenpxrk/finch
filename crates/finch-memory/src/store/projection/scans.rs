@@ -282,7 +282,8 @@ impl MemoryStore {
         let query = VectorQuery::new("", Vec::new(), usize::MAX)
             .with_filter(scope_filter(scope))
             .with_output_fields(output_fields(SLOT_OUTPUT_FIELDS));
-        let stored_records = self
+        let mut stored_by_scope = BTreeMap::<MemoryScope, Vec<CanonicalSlotRecord>>::new();
+        for record in self
             .slots
             .scan_filter_only(query)?
             .into_iter()
@@ -295,10 +296,24 @@ impl MemoryStore {
                     .transaction_at_ms
                     .is_none_or(|at| record.recorded_at_ms <= at)
             })
-            .collect::<Vec<_>>();
+        {
+            stored_by_scope
+                .entry(record.scope.clone())
+                .or_default()
+                .push(record);
+        }
+        // Versions merge within a scope; two scopes on one slot key stay two identities.
         let mut records = Vec::new();
-        merge_slot_identity_records(&mut records, stored_records);
-        records.sort_by(|a, b| a.slot_key.cmp(&b.slot_key));
+        for stored_records in stored_by_scope.into_values() {
+            let mut identities = Vec::new();
+            merge_slot_identity_records(&mut identities, stored_records);
+            records.extend(identities);
+        }
+        records.sort_by(|a, b| {
+            a.slot_key
+                .cmp(&b.slot_key)
+                .then_with(|| a.scope.cmp(&b.scope))
+        });
         records.truncate(limit);
         Ok(records)
     }
@@ -329,7 +344,8 @@ impl MemoryStore {
                 .map(|doc| slot_from_doc(&doc))
                 .collect::<ZResult<Vec<_>>>()?
             {
-                if record.scope.matches_filter(scope) && slot_keys.contains(&record.slot_key) {
+                // Writes merge and bind these identities, so a narrower scope's must not reach them.
+                if record.scope == *scope && slot_keys.contains(&record.slot_key) {
                     records.push(record);
                 }
             }
@@ -366,9 +382,15 @@ impl MemoryStore {
             .map(|name| canonical_slot_part(name.as_ref()))
             .filter(|name| !name.is_empty())
             .collect::<Vec<_>>();
+        // Canonicalisation feeds writes: a narrower scope's alias must not rename this scope's
+        // subjects or slots.
+        let mut entity_aliases = self.entity_aliases_for_keys(scope, &alias_keys)?;
+        entity_aliases.retain(|alias| alias.scope == *scope);
+        let mut slot_aliases = self.scan_slot_aliases(scope, usize::MAX, at_ms)?;
+        slot_aliases.retain(|alias| alias.scope == *scope);
         Ok(CanonicalRegistry::from_alias_records(
-            &self.entity_aliases_for_keys(scope, &alias_keys)?,
-            &self.scan_slot_aliases(scope, usize::MAX, at_ms)?,
+            &entity_aliases,
+            &slot_aliases,
         ))
     }
 }

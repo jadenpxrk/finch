@@ -21,7 +21,9 @@ impl MemoryStore {
         {
             return Ok(correction);
         }
-        let identities = self.scan_slots(&correction.scope, usize::MAX, None)?;
+        // A correction reaches its own scope only, so it binds only that scope's slots and claims.
+        let mut identities = self.scan_slots(&correction.scope, usize::MAX, None)?;
+        identities.retain(|slot| slot.scope == correction.scope);
         let mut targets = self.named_target_claims(&correction, &pending_claims)?;
         let structured_slot_ids =
             structured_target_slot_ids(&correction, &identities, &targets.claims, &pending_claims)?;
@@ -78,6 +80,7 @@ impl MemoryStore {
         pending_claims: &[ClaimRecord],
     ) -> ZResult<CorrectionTargetClaims> {
         let mut claims = self.claims_by_ids(&correction.scope, &correction.target_ids)?;
+        claims.retain(|claim| claim.scope == correction.scope);
         let requested_ids = correction
             .target_ids
             .iter()
@@ -111,6 +114,7 @@ impl MemoryStore {
         let selector_claims = self
             .scan_claims(&correction.scope, usize::MAX, None)?
             .into_iter()
+            .filter(|claim| claim.scope == correction.scope)
             .filter(|claim| claim_matches_selector(claim, selector))
             .filter(|claim| correction_applies_to_claim_time(correction, claim))
             .collect::<Vec<_>>();

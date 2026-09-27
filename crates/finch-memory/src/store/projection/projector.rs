@@ -53,7 +53,8 @@ impl MemoryStore {
         scope: &MemoryScope,
         valid_at_ms: Option<i64>,
     ) -> ZResult<(Vec<ClaimRecord>, Vec<ResolvedRuleApplication>)> {
-        let claims = self.scan_current_claims(scope, usize::MAX, valid_at_ms)?;
+        let mut claims = self.scan_current_claims(scope, usize::MAX, valid_at_ms)?;
+        claims.retain(|claim| claim.scope == *scope);
         let registry = self.canonical_registry_for_names_at(
             scope,
             claims.iter().filter_map(|claim| claim.subject.as_deref()),
@@ -84,6 +85,7 @@ impl MemoryStore {
         let rule_endpoints = self
             .scan_rules(scope, usize::MAX, valid_at_ms)?
             .into_iter()
+            .filter(|rule| rule.scope == *scope)
             .flat_map(|rule| rule.trigger_slot_id.into_iter().chain(rule.target_slot_id));
         Ok(claims
             .iter()
@@ -144,12 +146,14 @@ impl MemoryStore {
         if slot_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let claims = match claims {
+        let mut claims = match claims {
             Some(claims) => claims,
             None => {
                 self.scan_current_claims_for_slot_ids(scope, slot_ids, usize::MAX, valid_at_ms)?
             }
         };
+        // The read filter also returns narrower scopes' claims; this write projects only its own.
+        claims.retain(|claim| claim.scope == *scope);
         let rules = self.rules_touching_slots(scope, slot_ids, valid_at_ms)?;
         let rule_ids_by_claim = rule_ids_by_claim(applications);
         let mut records = versioned_state_records(scope, &claims, &rule_ids_by_claim, write);
@@ -202,6 +206,7 @@ impl MemoryStore {
         Ok(self
             .scan_rules(scope, usize::MAX, valid_at_ms)?
             .into_iter()
+            .filter(|rule| rule.scope == *scope)
             .filter(|rule| touches(&rule.trigger_slot_id) || touches(&rule.target_slot_id))
             .collect())
     }

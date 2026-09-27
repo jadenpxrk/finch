@@ -38,6 +38,7 @@ impl MemoryStore {
         let claims = self
             .scan_claims(&rule.scope, usize::MAX, at_ms)?
             .into_iter()
+            .filter(|claim| claim.scope == rule.scope)
             .map(|claim| canonicalize_claim(claim, &registry))
             .collect::<Vec<_>>();
         bind_trigger_endpoint(&mut rule, &claims);
@@ -93,7 +94,8 @@ impl MemoryStore {
         scope: &MemoryScope,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<RuleRecord>> {
-        let rules = self.scan_rules(scope, usize::MAX, at_ms)?;
+        let mut rules = self.scan_rules(scope, usize::MAX, at_ms)?;
+        rules.retain(|rule| rule.scope == *scope);
         let mut rebound = Vec::with_capacity(rules.len());
         for rule in rules {
             rebound.push(self.bind_rule_endpoints(rule, at_ms)?);

@@ -456,8 +456,10 @@ fn correction_targets_state(correction: &CorrectionRecord, record: &StateRecord)
     }
 }
 
+/// A correction reaches claims of its exact scope only, whatever its authority: reads never load
+/// a parent scope's corrections, so a wider reach would answer differently at each level.
 pub(super) fn correction_targets_claim(correction: &CorrectionRecord, claim: &ClaimRecord) -> bool {
-    if !correction_applies_to_claim_time(correction, claim) {
+    if claim.scope != correction.scope || !correction_applies_to_claim_time(correction, claim) {
         return false;
     }
     match correction.target_match {

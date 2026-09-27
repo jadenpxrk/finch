@@ -28,7 +28,8 @@ impl MemoryStore {
                 "slot aliases require source claim evidence",
             ));
         }
-        let source_claims = self.claims_by_ids(&input.scope, &input.source_claim_ids)?;
+        let mut source_claims = self.claims_by_ids(&input.scope, &input.source_claim_ids)?;
+        source_claims.retain(|claim| claim.scope == input.scope);
         if source_claims.len() != input.source_claim_ids.iter().collect::<BTreeSet<_>>().len() {
             return Err(Status::invalid_argument(
                 "slot alias source claims must exist in the alias scope",
@@ -100,7 +101,7 @@ impl MemoryStore {
             Some(claim_id) => self
                 .claims_by_ids(&input.scope, std::slice::from_ref(claim_id))?
                 .into_iter()
-                .next()
+                .find(|claim| claim.scope == input.scope)
                 .and_then(|claim| claim.slot_id),
             None => None,
         };
@@ -122,7 +123,7 @@ impl MemoryStore {
             || self
                 .scan_slots(&input.scope, usize::MAX, None)?
                 .iter()
-                .any(|slot| slot.slot_key == canonical_slot_id);
+                .any(|slot| slot.scope == input.scope && slot.slot_key == canonical_slot_id);
         if !slot_exists {
             return Err(Status::invalid_argument(
                 "slot alias target must be an existing canonical slot",

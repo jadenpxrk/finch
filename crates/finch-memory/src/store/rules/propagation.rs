@@ -13,12 +13,13 @@ impl MemoryStore {
             return Ok(());
         }
         let valid_at_ms = record.valid_from_ms;
-        let changed_claims = self.scan_current_claims_for_slot_ids(
+        let mut changed_claims = self.scan_current_claims_for_slot_ids(
             &record.scope,
             &trigger_slot_ids,
             usize::MAX,
             valid_at_ms,
         )?;
+        changed_claims.retain(|claim| claim.scope == record.scope);
         if changed_claims.is_empty() && self.rule_endpoint_slots_exist(record)? {
             return Ok(());
         }
@@ -76,12 +77,39 @@ impl MemoryStore {
         max_hops: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<ResolvedRuleApplication>> {
-        if changed_claims.is_empty() || max_hops == 0 {
+        if max_hops == 0 {
             return Ok(Vec::new());
         }
-        let Some(scope) = changed_claims.first().map(|claim| &claim.scope) else {
-            return Ok(Vec::new());
-        };
+        // A rule fires only on claims of its own scope, so each scope propagates on its own.
+        let mut claims_by_scope = BTreeMap::<&MemoryScope, Vec<ClaimRecord>>::new();
+        for claim in changed_claims {
+            claims_by_scope
+                .entry(&claim.scope)
+                .or_default()
+                .push(claim.clone());
+        }
+        let mut applications = Vec::new();
+        for (scope, claims) in claims_by_scope {
+            applications.extend(self.resolve_rules_in_scope(
+                scope,
+                &claims,
+                existing_ids,
+                max_hops,
+                at_ms,
+            )?);
+        }
+        Ok(applications)
+    }
+
+    /// Propagation from changed claims that all belong to `scope`.
+    fn resolve_rules_in_scope(
+        &self,
+        scope: &MemoryScope,
+        changed_claims: &[ClaimRecord],
+        existing_ids: &BTreeSet<String>,
+        max_hops: usize,
+        at_ms: Option<i64>,
+    ) -> ZResult<Vec<ResolvedRuleApplication>> {
         let registry = self.canonical_registry_for_names_at(
             scope,
             changed_claims

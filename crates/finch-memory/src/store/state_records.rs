@@ -1398,14 +1398,15 @@ pub(super) fn reconcile_set_states_with_slot_lifecycle(
     claims: &[ClaimRecord],
     set_states: &mut Vec<SetStateRecord>,
 ) {
-    let mut invalidators = BTreeMap::<MemoryId, ClaimRecord>::new();
+    // Exact scope is part of the key: one scope's invalidation must not drop another's set.
+    let mut invalidators = BTreeMap::<(MemoryId, &MemoryScope), ClaimRecord>::new();
     for claim in claims
         .iter()
         .filter(|claim| claim_invalidates_entire_set_slot(claim))
     {
         let slot_id = claim_slot_lifecycle_key(claim);
         invalidators
-            .entry(slot_id)
+            .entry((slot_id, &claim.scope))
             .and_modify(|current| {
                 if claim_is_newer(claim, current) {
                     *current = claim.clone();
@@ -1419,7 +1420,7 @@ pub(super) fn reconcile_set_states_with_slot_lifecycle(
             return true;
         };
         invalidators
-            .get(slot_id)
+            .get(&(slot_id.clone(), &state.scope))
             .is_none_or(|claim| set_state_is_newer_than_claim(state, claim))
     });
 }
