@@ -133,15 +133,11 @@ pub fn ingest_episode(
     let id = input.id.unwrap_or_else(|| {
         let sequence_no = input.sequence_no.to_string();
         let event_time_ms = input.event_time_ms.unwrap_or(ingested_at_ms).to_string();
-        let scope_hash = narrower_scope_hash(&input.scope);
-        let mut parts = vec![
-            input.scope.space_id.as_str(),
-            &sequence_no,
-            &event_time_ms,
-            &content_hash,
-        ];
-        parts.extend(scope_hash.as_deref());
-        stable_memory_id("ep", &parts)
+        generated_id(
+            "ep",
+            &input.scope,
+            &[&sequence_no, &event_time_ms, &content_hash],
+        )
     });
     let temporal = TemporalFields {
         created_at_ms: ingested_at_ms,
@@ -235,15 +231,10 @@ pub fn add_correction(input: CorrectionInput, created_at_ms: i64) -> CorrectionR
     );
     let id = input.id.unwrap_or_else(|| {
         let created_at = created_at_ms.to_string();
-        let mut parts = vec![
-            input.scope.space_id.as_str(),
-            input.target_type.as_str(),
-            &target_hash,
-            &created_at,
-        ];
+        let mut parts = vec![input.target_type.as_str(), &target_hash, &created_at];
         // Appended only when set so corrections without a selector keep their existing IDs.
         parts.extend(input.target_selector.as_deref());
-        stable_memory_id("corr", &parts)
+        generated_id("corr", &input.scope, &parts)
     });
     CorrectionRecord {
         id,
@@ -287,15 +278,11 @@ pub fn create_manual_claim(input: ManualClaimInput) -> ClaimRecord {
     );
     let id = input.id.unwrap_or_else(|| {
         let observed_at_ms = input.observed_at_ms.to_string();
-        let scope_hash = narrower_scope_hash(&input.scope);
-        let mut parts = vec![
-            input.scope.space_id.as_str(),
-            input.claim_text.as_str(),
-            &observed_at_ms,
-            &source_hash,
-        ];
-        parts.extend(scope_hash.as_deref());
-        stable_memory_id("claim", &parts)
+        generated_id(
+            "claim",
+            &input.scope,
+            &[&input.claim_text, &observed_at_ms, &source_hash],
+        )
     });
     ClaimRecord {
         id,
@@ -335,44 +322,37 @@ pub fn create_profile(mut input: ProfileInput) -> ProfileRecord {
             .collect::<Vec<_>>();
         let generated_at = input.generated_at_ms.to_string();
         let evidence_hash = stable_hash_hex(&evidence_ids);
-        let scope_hash = narrower_scope_hash(&input.scope);
-        let mut parts = vec![
-            input.scope.space_id.as_str(),
-            input.profile_key.as_str(),
-            generated_at.as_str(),
-            evidence_hash.as_str(),
-        ];
-        parts.extend(scope_hash.as_deref());
-        stable_memory_id("profile", &parts)
+        generated_id(
+            "profile",
+            &input.scope,
+            &[&input.profile_key, &generated_at, &evidence_hash],
+        )
     });
     input.into_record(id)
 }
 
 pub fn create_entity(mut input: EntityInput) -> EntityRecord {
     let id = input.id.take().unwrap_or_else(|| {
-        let scope_hash = narrower_scope_hash(&input.scope);
-        let mut parts = vec![
-            input.scope.space_id.as_str(),
-            input.entity_type.as_str(),
-            input.canonical_name.as_str(),
-        ];
-        parts.extend(scope_hash.as_deref());
-        stable_memory_id("entity", &parts)
+        generated_id(
+            "entity",
+            &input.scope,
+            &[&input.entity_type, &input.canonical_name],
+        )
     });
     input.into_record(id)
 }
 
 pub fn create_edge(mut input: EdgeInput) -> EdgeRecord {
     let id = input.id.take().unwrap_or_else(|| {
-        let scope_hash = narrower_scope_hash(&input.scope);
-        let mut parts = vec![
-            input.scope.space_id.as_str(),
-            input.src_entity_id.as_str(),
-            input.dst_entity_id.as_str(),
-            input.relation_type.as_str(),
-        ];
-        parts.extend(scope_hash.as_deref());
-        stable_memory_id("edge", &parts)
+        generated_id(
+            "edge",
+            &input.scope,
+            &[
+                &input.src_entity_id,
+                &input.dst_entity_id,
+                &input.relation_type,
+            ],
+        )
     });
     input.into_record(id)
 }
@@ -486,6 +466,15 @@ fn chunk_span(
 }
 
 // Space-only scopes keep their existing ids; any narrower scope gets its own id.
+pub(crate) fn generated_id(kind: &str, scope: &MemoryScope, parts: &[&str]) -> MemoryId {
+    let scope_hash = narrower_scope_hash(scope);
+    let mut all = Vec::with_capacity(parts.len() + 2);
+    all.push(scope.space_id.as_str());
+    all.extend_from_slice(parts);
+    all.extend(scope_hash.as_deref());
+    stable_memory_id(kind, &all)
+}
+
 fn narrower_scope_hash(scope: &MemoryScope) -> Option<String> {
     let narrower = [
         &scope.tenant_id,

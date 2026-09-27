@@ -192,6 +192,7 @@ fn make_claim(
 
 mod adversarial_round_1;
 mod claims;
+mod generated_ids;
 mod graph;
 mod lifecycle;
 mod retrieval;

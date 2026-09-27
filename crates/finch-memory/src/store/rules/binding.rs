@@ -159,18 +159,20 @@ pub(super) fn rule_record_from_input(input: RuleInput) -> ZResult<RuleRecord> {
         provenance_keys.extend_from_slice(&input.source_episode_ids);
         provenance_keys.sort_unstable();
         provenance_keys.dedup();
-        let rule_hash = stable_hash_hex(&[
-            &input.scope.space_id,
-            &trigger_subject_key,
-            &trigger_predicate_key,
-            &target_subject_key,
-            &target_predicate_key,
-            input.target_match.as_str(),
-            input.activation.as_str(),
-            input.action.as_str(),
-            &provenance_keys.join(","),
-        ]);
-        format!("rule_{rule_hash}")
+        crate::ingest::generated_id(
+            "rule",
+            &input.scope,
+            &[
+                &trigger_subject_key,
+                &trigger_predicate_key,
+                &target_subject_key,
+                &target_predicate_key,
+                input.target_match.as_str(),
+                input.activation.as_str(),
+                input.action.as_str(),
+                &provenance_keys.join(","),
+            ],
+        )
     });
     let target_slot_id = matches!(input.target_match, RuleTargetMatch::ExactSlot)
         .then_some(input.target_slot_id)
