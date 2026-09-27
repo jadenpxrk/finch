@@ -543,3 +543,20 @@ fn test_in_list_size_limit_matches_reference() {
         .message
         .contains("In rel expr only support list size no more than 20000"));
 }
+
+#[test]
+fn test_parse_like_custom_escape() {
+    let expr = parse_filter(r"name LIKE 'a\b!%' ESCAPE '!'").unwrap();
+    assert!(matches!(
+        expr,
+        FilterExpr::Compare { field, op: CompareOp::Equal, value: Value::String(s) }
+        if field == "name" && s == r"a\b%"
+    ));
+    let expr = parse_filter(r"name LIKE 'a\_%' ESCAPE '\\'").unwrap();
+    assert!(matches!(
+        expr,
+        FilterExpr::HasPrefix { field, prefix } if field == "name" && prefix == "a_"
+    ));
+    assert!(parse_filter("name LIKE 'ab!' ESCAPE '!'").is_err());
+    assert!(parse_filter("name LIKE 'ab' ESCAPE '!!'").is_err());
+}

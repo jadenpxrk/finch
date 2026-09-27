@@ -63,8 +63,9 @@ pub(super) fn convert_expr(expr: &Expr) -> ZResult<FilterExpr> {
             expr,
             pattern,
             negated,
+            escape_char,
             ..
-        } => convert_like_expr(expr, pattern, *negated),
+        } => convert_like_expr(expr, pattern, *negated, escape_char.as_deref()),
         Expr::InList {
             expr,
             list,
@@ -103,7 +104,12 @@ fn convert_not_expr(expr: &Expr) -> ZResult<FilterExpr> {
     Ok(FilterExpr::Not(Box::new(convert_expr(expr)?)))
 }
 
-fn convert_like_expr(expr: &Expr, pattern: &Expr, negated: bool) -> ZResult<FilterExpr> {
+fn convert_like_expr(
+    expr: &Expr,
+    pattern: &Expr,
+    negated: bool,
+    escape: Option<&str>,
+) -> ZResult<FilterExpr> {
     if negated {
         // upstream grammar does not support `NOT LIKE`.
         return Err(Status::invalid_argument("syntax error"));
@@ -120,7 +126,43 @@ fn convert_like_expr(expr: &Expr, pattern: &Expr, negated: bool) -> ZResult<Filt
             ));
         }
     };
-    Ok(like_pattern_to_filter_expr(field, pat))
+    Ok(like_pattern_to_filter_expr(
+        field,
+        rewrite_like_escape(&pat, escape)?,
+    ))
+}
+
+/// Rewrites a pattern with a custom `ESCAPE` character into the backslash form the matchers use.
+fn rewrite_like_escape(pattern: &str, escape: Option<&str>) -> ZResult<String> {
+    let Some(escape) = escape.filter(|e| *e != "\\") else {
+        return Ok(pattern.to_string());
+    };
+    let mut escape_chars = escape.chars();
+    let (Some(esc), None) = (escape_chars.next(), escape_chars.next()) else {
+        return Err(Status::invalid_argument(
+            "LIKE ESCAPE must be a single character",
+        ));
+    };
+    let mut out = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c == esc {
+            let Some(next) = chars.next() else {
+                return Err(Status::invalid_argument(
+                    "LIKE pattern must not end with the escape character",
+                ));
+            };
+            out.push('\\');
+            out.push(next);
+        } else {
+            // Without backslash as the escape, a backslash is an ordinary character.
+            if c == '\\' {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+    }
+    Ok(out)
 }
 
 fn convert_in_list_expr(expr: &Expr, list: &[Expr], negated: bool) -> ZResult<FilterExpr> {

@@ -333,15 +333,17 @@ pub fn create_profile(mut input: ProfileInput) -> ProfileRecord {
             .chain(input.source_span_ids.iter())
             .map(String::as_str)
             .collect::<Vec<_>>();
-        stable_memory_id(
-            "profile",
-            &[
-                input.scope.space_id.as_str(),
-                input.profile_key.as_str(),
-                &input.generated_at_ms.to_string(),
-                &stable_hash_hex(&evidence_ids),
-            ],
-        )
+        let generated_at = input.generated_at_ms.to_string();
+        let evidence_hash = stable_hash_hex(&evidence_ids);
+        let scope_hash = narrower_scope_hash(&input.scope);
+        let mut parts = vec![
+            input.scope.space_id.as_str(),
+            input.profile_key.as_str(),
+            generated_at.as_str(),
+            evidence_hash.as_str(),
+        ];
+        parts.extend(scope_hash.as_deref());
+        stable_memory_id("profile", &parts)
     });
     input.into_record(id)
 }
