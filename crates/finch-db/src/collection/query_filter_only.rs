@@ -7,6 +7,7 @@ use crate::query_filter::prepare_filter_expr;
 use crate::query_output::QueryOutputSelection;
 use crate::sqlengine::parser::FilterExpr;
 use crate::vector_normalization::has_query_vector_payload;
+use crate::version::Version;
 
 use super::{Collection, MAX_OUTPUT_FIELDS};
 
@@ -15,8 +16,19 @@ impl Collection {
     ///
     /// Unlike `query`, this is not a ranked top-k operation and is intended for
     /// correctness-sensitive maintenance work that must not silently truncate.
-    pub fn scan_filter_only(&self, mut query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
-        let version = self.cur_version();
+    pub fn scan_filter_only(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
+        // Taken before the version so a concurrent column rename cannot split schema and data.
+        let published = self.delete_store.read();
+        self.scan_filter_only_impl(&self.cur_version(), &published.bitmap(), query)
+    }
+
+    // The caller holds the delete store read lock that `version` and `delete_bitmap` came from.
+    pub(super) fn scan_filter_only_impl(
+        &self,
+        version: &Version,
+        delete_bitmap: &roaring::RoaringTreemap,
+        mut query: VectorQuery,
+    ) -> ZResult<Vec<Arc<Doc>>> {
         let output_selection =
             QueryOutputSelection::prepare(&version.schema, &mut query, MAX_OUTPUT_FIELDS)?;
         if has_query_vector_payload(&query) {
@@ -25,16 +37,9 @@ impl Collection {
             ));
         }
         let filter_expr = prepare_filter_expr(&version.schema, query.filter.as_deref())?;
-        let delete_store = self.delete_store.read();
-        let matched_ids = self.collect_filter_only_doc_ids(
-            filter_expr.as_ref(),
-            &delete_store.bitmap(),
-            usize::MAX,
-        )?;
-        // Held through materialization so a concurrent column rename cannot split schema and data.
-        let docs = self.materialize_filter_only_results(&matched_ids, &query, &output_selection);
-        drop(delete_store);
-        docs
+        let matched_ids =
+            self.collect_filter_only_doc_ids(filter_expr.as_ref(), delete_bitmap, usize::MAX)?;
+        self.materialize_filter_only_results(&matched_ids, &query, &output_selection)
     }
 
     fn collect_filter_only_doc_ids(

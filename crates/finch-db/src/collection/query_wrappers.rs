@@ -11,13 +11,21 @@ use super::{Collection, MAX_QUERY_TOPK};
 
 impl Collection {
     pub fn query(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
-        self.query_impl(query, None)
+        // Taken before the version so schema, segments, and tombstones come from one publication.
+        let published = self.delete_store.read();
+        self.query_impl(&self.cur_version(), &published.bitmap(), query, None)
     }
 
     pub fn query_profiled(&self, query: VectorQuery) -> ZResult<(Vec<Arc<Doc>>, QueryProfile)> {
         let start = std::time::Instant::now();
         let mut profile = QueryProfile::default();
-        let docs = self.query_impl(query, Some(&mut profile))?;
+        let published = self.delete_store.read();
+        let docs = self.query_impl(
+            &self.cur_version(),
+            &published.bitmap(),
+            query,
+            Some(&mut profile),
+        )?;
         profile.total = start.elapsed();
         profile.result_count = docs.len();
         Ok((docs, profile))
@@ -36,16 +44,20 @@ impl Collection {
     ///   Multi-row matrix literals (e.g. `[[...],[...]]`) are interpreted as a single
     ///   flattened query vector by concatenating the inner vectors (row-major).
     pub fn query_sql(&self, sql: &str) -> ZResult<Vec<Arc<Doc>>> {
+        // The plan and the scan share one version, so ORDER BY never names a renamed column.
+        let published = self.delete_store.read();
         let version = self.cur_version();
+        let delete_bitmap = published.bitmap();
         let (query, projection) = SqlQueryPlan::prepare(sql, &version.schema)?.into_parts();
         let docs = if projection.sorts_all_matches() {
-            self.scan_filter_only(query)?
+            self.scan_filter_only_impl(&version, &delete_bitmap, query)?
         } else {
-            self.query(query)?
+            self.query_impl(&version, &delete_bitmap, query, None)?
         };
 
         if projection.needs_projection() {
             let row_locator = self.row_locator();
+            drop(published);
             projection.apply(docs, &row_locator)
         } else {
             Ok(docs)
@@ -65,7 +77,10 @@ impl Collection {
             return Err(Status::invalid_argument("group by should has vector query"));
         }
 
+        // The plan and every widened query share one version, so the group field stays named.
+        let published = self.delete_store.read();
         let version = self.cur_version();
+        let delete_bitmap = published.bitmap();
         let (plan, base_query) = GroupByPlan::prepare(
             &version.schema,
             query.base,
@@ -85,7 +100,7 @@ impl Collection {
         let mut base_query = base_query;
         loop {
             let topk = base_query.topk;
-            let results = self.query(base_query.clone())?;
+            let results = self.query_impl(&version, &delete_bitmap, base_query.clone(), None)?;
             let exhausted = results.len() < topk || topk >= MAX_QUERY_TOPK;
             let groups = plan.build_results(results, row_locator.as_ref())?;
             if exhausted || plan.is_filled(&groups) {

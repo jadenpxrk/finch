@@ -14,6 +14,7 @@ use crate::sqlengine::executor::DocFilterEvaluator;
 use crate::sqlengine::parser::FilterExpr;
 use crate::vector_normalization::{has_query_vector_payload, validate_and_normalize_query_payload};
 use crate::vector_search_field::{resolve_vector_search_field, VectorSearchField};
+use crate::version::Version;
 
 use super::{Collection, MAX_OUTPUT_FIELDS, MAX_QUERY_TOPK};
 
@@ -522,8 +523,11 @@ impl Collection {
         })
     }
 
+    // The caller holds the delete store read lock that `version` and `delete_bitmap` came from.
     pub(super) fn query_impl(
         &self,
+        version: &Version,
+        delete_bitmap: &Arc<roaring::RoaringTreemap>,
         query: VectorQuery,
         mut profile: Option<&mut QueryProfile>,
     ) -> ZResult<Vec<Arc<Doc>>> {
@@ -537,14 +541,10 @@ impl Collection {
             )));
         }
 
-        let version = self.cur_version();
         let output_selection =
             QueryOutputSelection::prepare(&version.schema, &mut query, MAX_OUTPUT_FIELDS)?;
 
         let filter_expr = prepare_filter_expr(&version.schema, query.filter.as_deref())?;
-        // Held until the scan ends so an upsert's tombstone and new version are seen together.
-        let delete_store = self.delete_store.read();
-        let delete_bitmap = delete_store.bitmap();
 
         if let Some(p) = profile.as_deref_mut() {
             p.prepare = prepare_start.elapsed();
@@ -579,7 +579,7 @@ impl Collection {
             schema: &version.schema,
             output_selection: &output_selection,
             filter_expr: filter_expr.as_ref(),
-            delete_bitmap: &delete_bitmap,
+            delete_bitmap,
             topk,
         };
         self.run_vector_query(query, &prepared, profile)

@@ -241,9 +241,10 @@ impl Collection {
 
     pub fn delete_by_filter(&self, filter_str: &str) -> ZResult<Status> {
         self.check_not_readonly()?;
+        // Taken before the version so a column rename cannot land between compile and scan.
+        let _guard = self.write_lock.lock();
         let version = self.cur_version();
         let filter = prepare_required_filter_expr(&version.schema, filter_str)?;
-        let _guard = self.write_lock.lock();
         let mut delete_store = self.delete_store.write();
         let delete_bitmap = delete_store.bitmap();
 
