@@ -86,3 +86,20 @@ fn concurrent_column_rename_makes_an_acknowledged_value_disappear_from_fetch() {
         "fetch observed a partial rename: {missing:?}"
     );
 }
+
+#[test]
+fn sql_scalar_order_by_rejects_a_limit_above_the_query_cap() {
+    // The sort-then-limit path must enforce the same top-k cap as every other query path.
+    let path = temp_dir("round_8_order_by_limit_cap");
+    let schema =
+        CollectionSchema::new("test").with_field(FieldSchema::new("value", DataType::Int64));
+    let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
+    col.insert(vec![Doc::new("row").set("value", 1i64)])
+        .unwrap();
+    let capped = col.query_sql("SELECT value FROM test ORDER BY value DESC LIMIT 1024");
+    let over = col.query_sql("SELECT value FROM test ORDER BY value DESC LIMIT 1025");
+    drop(col);
+    std::fs::remove_dir_all(path).unwrap();
+    assert_eq!(capped.unwrap().len(), 1);
+    assert!(over.is_err());
+}

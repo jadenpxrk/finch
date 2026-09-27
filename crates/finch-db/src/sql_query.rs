@@ -7,6 +7,7 @@ use finch_types::{
     SYS_LOCAL_ROW_ID, SYS_SCORE, SYS_USER_ID,
 };
 
+use crate::collection::MAX_QUERY_TOPK;
 use crate::row_locator::RowLocator;
 use crate::sqlengine::query::{
     CmpOp, LogicExpr, RelExpr, SelectItem as SqlSelectItem, SqlSelect, ValueExpr, VectorCond,
@@ -80,6 +81,12 @@ impl SqlQueryPlan {
 
         apply_vector_condition(schema, vector_cond, &mut query)?;
         if !projection.order_by.is_empty() && !has_query_vector_payload(&query) {
+            // The scan path skips `query`'s top-k check, so keep the same cap here.
+            if topk > MAX_QUERY_TOPK {
+                return Err(Status::invalid_argument(format!(
+                    "query validate failed: topk[{topk}] is too large, max is {MAX_QUERY_TOPK}"
+                )));
+            }
             projection.limit_after_sort = Some(topk);
         }
 

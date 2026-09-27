@@ -42,7 +42,7 @@ const COMPACT_DELETE_RATIO_THRESHOLD: f64 = 0.3;
 // Large monolithic HNSW graphs lose recall at ordinary ef values. Keep the public HNSW
 // parameters unchanged, but optimize default dense-HNSW collections into searchable segments.
 const HNSW_AUTO_MAX_DOCS_PER_SEGMENT: u64 = 175_000;
-const MAX_QUERY_TOPK: usize = 1024;
+pub(crate) const MAX_QUERY_TOPK: usize = 1024;
 const MAX_OUTPUT_FIELDS: usize = 1024;
 
 fn bitmap_count_in_range_inclusive(bm: &roaring::RoaringTreemap, min: u64, max: u64) -> u64 {
