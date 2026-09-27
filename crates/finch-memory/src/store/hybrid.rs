@@ -52,18 +52,27 @@ impl MemoryStore {
         if query_terms.is_empty() {
             return Ok(Vec::new());
         }
-        let postings = self.term_postings(scope, &query_terms, scan_limit.max(k))?;
+        let posting_chunks = self.term_postings(scope, &query_terms)?;
+        let span_ids = posting_chunks
+            .iter()
+            .flatten()
+            .map(|posting| posting.span_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let by_id = self
+            .fetch_spans_by_ids(scope, &span_ids, at_ms)?
+            .into_iter()
+            .map(|span| (span.id.clone(), span))
+            .collect::<BTreeMap<_, _>>();
+        let postings = posting_chunks
+            .into_iter()
+            .flat_map(|chunk| live_posting_prefix(chunk, &by_id, scan_limit.max(k)))
+            .collect::<Vec<_>>();
         if postings.is_empty() {
             return Ok(Vec::new());
         }
         let scores = bm25_posting_scores(&query_terms, &postings);
-        let mut span_ids = scores.keys().cloned().collect::<Vec<_>>();
-        span_ids.sort();
-        let spans = self.fetch_spans_by_ids(scope, &span_ids, at_ms)?;
-        let by_id = spans
-            .into_iter()
-            .map(|span| (span.id.clone(), span))
-            .collect::<BTreeMap<_, _>>();
         let mut hits = scores
             .into_iter()
             .filter_map(|(span_id, score)| {
@@ -83,34 +92,31 @@ impl MemoryStore {
         Ok(hits)
     }
 
+    /// Every posting of `terms`, one list per filter chunk, in storage order.
     fn term_postings(
         &self,
         scope: &MemoryScope,
         terms: &[String],
-        limit: usize,
-    ) -> ZResult<Vec<TermPosting>> {
-        if limit == 0 || terms.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut postings = Vec::new();
+    ) -> ZResult<Vec<Vec<TermPosting>>> {
+        let mut chunks = Vec::new();
         for chunk in terms.chunks(MAX_CONTAINS_FILTER_VALUES) {
             let filter = format!(
                 "{} AND ({})",
                 scope_filter(scope),
                 sql_or_eq_list("term", chunk.iter().map(String::as_str))
             );
-            let query = VectorQuery::new("", Vec::new(), limit)
+            let query = VectorQuery::new("", Vec::new(), usize::MAX)
                 .with_filter(filter)
                 .with_output_fields(output_fields(TERM_OUTPUT_FIELDS));
-            postings.extend(
+            chunks.push(
                 self.terms
-                    .query(query)?
+                    .scan_filter_only(query)?
                     .iter()
                     .map(|doc| term_posting_from_doc(doc))
                     .collect::<ZResult<Vec<_>>>()?,
             );
         }
-        Ok(postings)
+        Ok(chunks)
     }
 
     pub fn fetch_spans_by_ids(
@@ -210,20 +216,18 @@ impl MemoryStore {
                 scope_filter(scope),
                 sql_string_list(chunk.iter().copied())
             );
-            let query = VectorQuery::new("", Vec::new(), DEFAULT_CORRECTION_SCAN_LIMIT)
+            let query = VectorQuery::new("", Vec::new(), usize::MAX)
                 .with_filter(filter)
                 .with_output_fields(output_fields(CORRECTION_OUTPUT_FIELDS));
-            for doc in self.corrections.query(query)? {
+            for doc in self.corrections.scan_filter_only(query)? {
                 insert_scoped_correction(&mut corrections, scope, correction_from_doc(&doc)?);
             }
         }
         let selector_filter =
             format!("{active_filter} AND target_type = 'span' AND target_selector IS NOT NULL");
-        for correction in self.scan_corrections_with_filter(
-            scope,
-            DEFAULT_CORRECTION_SCAN_LIMIT,
-            Some(selector_filter),
-        )? {
+        for correction in
+            self.scan_corrections_with_filter(scope, usize::MAX, Some(selector_filter))?
+        {
             if correction.target_type == "span" && correction.target_selector.is_some() {
                 corrections.insert(correction.id.clone(), correction);
             }
@@ -232,6 +236,28 @@ impl MemoryStore {
         sort_corrections_by_effect(&mut corrections);
         Ok(corrections)
     }
+}
+
+/// The shortest prefix of `postings` that holds `limit` postings of `live` spans.
+// Postings carry no status or validity; dead ones inside the prefix still feed BM25 as before.
+fn live_posting_prefix(
+    postings: Vec<TermPosting>,
+    live: &BTreeMap<String, SpanRecord>,
+    limit: usize,
+) -> Vec<TermPosting> {
+    let mut remaining = limit;
+    postings
+        .into_iter()
+        .take_while(|posting| {
+            if remaining == 0 {
+                return false;
+            }
+            if live.contains_key(&posting.span_id) {
+                remaining -= 1;
+            }
+            true
+        })
+        .collect()
 }
 
 fn term_posting_from_doc(doc: &Doc) -> ZResult<TermPosting> {

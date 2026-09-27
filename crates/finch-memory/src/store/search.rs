@@ -642,12 +642,15 @@ impl MemoryStore {
         if query_embedding.is_empty() || k == 0 {
             return Ok(Vec::new());
         }
+        let valid_from_clause = at_ms.map_or_else(String::new, |at| {
+            format!(" AND (valid_from_ms IS NULL OR valid_from_ms <= {at})")
+        });
         let query = VectorQuery::new(
             "embedding",
             query_embedding,
             expanded_claim_slot_vector_fetch_k(k),
         )
-        .with_filter(scope_filter(scope))
+        .with_filter(format!("{}{valid_from_clause}", scope_filter(scope)))
         .with_output_fields(output_fields(CLAIM_OUTPUT_FIELDS));
         let hits = self
             .claims
@@ -741,8 +744,13 @@ impl MemoryStore {
         if query_embedding.is_empty() || fetch_k == 0 || output_k == 0 {
             return Ok(Vec::new());
         }
+        let filter = format!(
+            "{} AND status = 'active'{}",
+            scope_filter(scope),
+            interval_filter_clause(at_ms)
+        );
         let query = VectorQuery::new("embedding", query_embedding, fetch_k)
-            .with_filter(scope_filter(scope))
+            .with_filter(filter)
             .with_output_fields(output_fields(SPAN_OUTPUT_FIELDS));
         let mut hits = self
             .spans
@@ -910,17 +918,15 @@ impl MemoryStore {
                 sql_or_eq_list("target_slot_id", chunk.iter().copied())
             );
             let query = claim_correction_query(scope, &active_filter, &target_filter);
-            for doc in self.corrections.query(query)? {
+            for doc in self.corrections.scan_filter_only(query)? {
                 insert_scoped_correction(&mut corrections, scope, correction_from_doc(&doc)?);
             }
         }
         let selector_filter =
             format!("{active_filter} AND target_type = 'claim' AND target_selector IS NOT NULL");
-        for correction in self.scan_corrections_with_filter(
-            scope,
-            DEFAULT_CORRECTION_SCAN_LIMIT,
-            Some(selector_filter),
-        )? {
+        for correction in
+            self.scan_corrections_with_filter(scope, usize::MAX, Some(selector_filter))?
+        {
             if correction.target_type == "claim" && correction.target_selector.is_some() {
                 corrections.insert(correction.id.clone(), correction);
             }
@@ -947,7 +953,6 @@ impl MemoryStore {
         }
         let mut corrections = corrections.into_values().collect::<Vec<_>>();
         sort_corrections_by_effect(&mut corrections);
-        corrections.truncate(DEFAULT_CORRECTION_SCAN_LIMIT);
         Ok(corrections)
     }
 
@@ -967,7 +972,7 @@ impl MemoryStore {
             .with_filter(filter)
             .with_output_fields(output_fields(CORRECTION_OUTPUT_FIELDS));
         self.corrections
-            .query(query)?
+            .scan_filter_only(query)?
             .into_iter()
             .map(|doc| correction_from_doc(&doc))
             .filter(|record| {
@@ -975,6 +980,7 @@ impl MemoryStore {
                     .as_ref()
                     .map_or(true, |correction| correction.scope.matches_filter(scope))
             })
+            .take(limit)
             .collect()
     }
 
@@ -1340,7 +1346,7 @@ fn claim_correction_query(
     active_filter: &str,
     target_filter: &str,
 ) -> VectorQuery {
-    VectorQuery::new("", Vec::new(), DEFAULT_CORRECTION_SCAN_LIMIT)
+    VectorQuery::new("", Vec::new(), usize::MAX)
         .with_filter(format!(
             "{} AND {active_filter} AND target_type = 'claim' AND {target_filter}",
             scope_filter(scope)

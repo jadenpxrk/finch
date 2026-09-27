@@ -404,7 +404,6 @@ const CORRECTION_OUTPUT_FIELDS: &[&str] = &[
     "metadata_json",
 ];
 
-const DEFAULT_CORRECTION_SCAN_LIMIT: usize = 1024;
 const MAX_VECTOR_QUERY_TOPK: usize = 1024;
 const MAX_CONTAINS_FILTER_VALUES: usize = 31;
 const SPAN_VECTOR_FETCH_MULTIPLIER: usize = 8;

@@ -11,6 +11,9 @@ use crate::StateMutationBatch;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+// The correction scan cap that used to drop corrections; saturation tests insert this many.
+const DEFAULT_CORRECTION_SCAN_LIMIT: usize = 1024;
+
 fn temp_dir(name: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -195,6 +198,7 @@ mod claims;
 mod generated_ids;
 mod graph;
 mod lifecycle;
+mod limit_after_filter;
 mod retrieval;
 mod review_round_10;
 mod review_round_2;
