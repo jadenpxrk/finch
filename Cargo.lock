@@ -598,6 +598,7 @@ version = "0.1.0"
 dependencies = [
  "finch-db",
  "finch-types",
+ "parking_lot",
  "serde",
  "serde_json",
 ]

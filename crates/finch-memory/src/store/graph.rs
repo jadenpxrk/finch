@@ -6,7 +6,7 @@ impl MemoryStore {
         input: SlotAliasInput,
         recorded_at_ms: i64,
     ) -> ZResult<SlotAliasRecord> {
-        let _mutation_guard = self.lock_state_mutation()?;
+        let _mutation_guard = self.lock_state_mutation();
         let record = self.build_slot_alias_record(input, recorded_at_ms, &BTreeSet::new())?;
         upsert_many(
             &self.slot_aliases,
@@ -137,6 +137,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SlotAliasRecord>> {
+        let _state_guard = self.lock_state_read();
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -159,6 +160,7 @@ impl MemoryStore {
     }
 
     pub fn scan_entities(&self, scope: &MemoryScope, limit: usize) -> ZResult<Vec<EntityRecord>> {
+        let _state_guard = self.lock_state_read();
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -362,6 +364,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<GraphExpansionHit>> {
+        let _state_guard = self.lock_state_read();
         if max_depth == 0 || limit == 0 || seed_entity_ids.is_empty() {
             return Ok(Vec::new());
         }

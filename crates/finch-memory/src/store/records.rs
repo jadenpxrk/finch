@@ -2,7 +2,7 @@ use super::*;
 
 impl MemoryStore {
     pub fn append_claim(&self, record: &ClaimRecord, embedding: Option<&[f32]>) -> ZResult<()> {
-        let _mutation_guard = self.lock_state_mutation()?;
+        let _mutation_guard = self.lock_state_mutation();
         #[cfg(not(test))]
         if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {
             self.validate_evidence_references(
@@ -138,7 +138,7 @@ impl MemoryStore {
         record: &EntityRecord,
         embedding: Option<&[f32]>,
     ) -> ZResult<()> {
-        let _mutation_guard = self.lock_state_mutation()?;
+        let _mutation_guard = self.lock_state_mutation();
         #[cfg(not(test))]
         if !record.aliases.is_empty() && record.source_claim_ids.is_empty() {
             return Err(Status::invalid_argument(

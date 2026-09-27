@@ -24,7 +24,7 @@ impl MemoryStore {
         mut batch: StateMutationBatch,
         claim_embeddings: BTreeMap<MemoryId, Vec<f32>>,
     ) -> ZResult<StateMutationResult> {
-        let _mutation_guard = self.lock_state_mutation()?;
+        let _mutation_guard = self.lock_state_mutation();
         for correction in &mut batch.corrections {
             *correction =
                 self.resolve_correction_target_with_pending_claims(correction, &batch.claims)?;

@@ -36,8 +36,10 @@ impl SqlQueryPlan {
         }
 
         let topk = match select.limit {
-            Some(n) if n > 0 => n as usize,
-            _ => DEFAULT_SQL_TOPN,
+            None => DEFAULT_SQL_TOPN,
+            Some(n) => usize::try_from(n).map_err(|_| {
+                Status::invalid_argument(format!("LIMIT must not be negative: {n}"))
+            })?,
         };
 
         let (vector_cond, scalar_expr) = match select.where_expr.clone() {

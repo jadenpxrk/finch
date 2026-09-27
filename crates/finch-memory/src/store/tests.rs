@@ -178,6 +178,7 @@ mod review_round_2;
 mod review_round_3;
 mod review_round_4;
 mod review_round_5;
+mod review_round_6;
 mod rule_projection;
 mod rules;
 mod state_protocol;

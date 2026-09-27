@@ -6,6 +6,7 @@ impl MemoryStore {
         scope: &MemoryScope,
         scan: StateRecordScan,
     ) -> ZResult<Vec<StateRecord>> {
+        let _state_guard = self.lock_state_read();
         let StateRecordScan { limit, temporal } = scan;
         if limit == 0 {
             return Ok(Vec::new());
@@ -96,6 +97,7 @@ impl MemoryStore {
         slot_id: &MemoryId,
         at_ms: Option<i64>,
     ) -> ZResult<usize> {
+        let _state_guard = self.lock_state_read();
         let ids = BTreeSet::from([slot_id.clone()]);
         let temporal = BiTemporalQuery {
             valid_at_ms: at_ms,
@@ -175,6 +177,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<DependencyTraceRecord>> {
+        let _state_guard = self.lock_state_read();
         self.scan_dependency_traces_bitemporal(
             scope,
             limit,
@@ -256,6 +259,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<CanonicalSlotRecord>> {
+        let _state_guard = self.lock_state_read();
         self.scan_slots_bitemporal(
             scope,
             limit,
@@ -391,12 +395,13 @@ fn state_record_in_history_at(
             .is_none_or(|at| record.valid_from_ms.unwrap_or(record.observed_at_ms) <= at)
 }
 
+/// Exact scope, not the read filter: a projection must not supersede a narrower scope's state.
 fn current_state_on_slots(
     record: &StateRecord,
     scope: &MemoryScope,
     slot_ids: &BTreeSet<MemoryId>,
 ) -> bool {
-    record.scope.matches_filter(scope)
+    record.scope == *scope
         && record
             .slot_id
             .as_ref()
@@ -409,7 +414,7 @@ fn current_trace_on_slots(
     scope: &MemoryScope,
     slot_ids: &BTreeSet<MemoryId>,
 ) -> bool {
-    record.scope.matches_filter(scope)
+    record.scope == *scope
         && record
             .target_slot_id
             .as_ref()

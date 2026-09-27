@@ -44,11 +44,13 @@ use finch_types::{
     CollectionOptions, CollectionSchema, CreateIndexOptions, Doc, HnswIndexParams, IndexParams,
     Status, Value, VectorQuery, ZResult,
 };
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 pub(crate) mod canonical;
 mod corrections;
@@ -114,14 +116,38 @@ pub struct MemoryStore {
     dependency_traces: Arc<Collection>,
     slots: Arc<Collection>,
     pub(crate) slot_aliases: Arc<Collection>,
-    state_mutation_lock: Mutex<()>,
+    state_mutation_lock: RwLock<()>,
+}
+
+thread_local! {
+    // Write locks this thread holds; a write calls public reads, which must not relock.
+    static STATE_WRITE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(crate) struct StateWriteGuard<'a> {
+    _lock: RwLockWriteGuard<'a, ()>,
+}
+
+impl Drop for StateWriteGuard<'_> {
+    fn drop(&mut self) {
+        STATE_WRITE_DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
 }
 
 impl MemoryStore {
-    pub(crate) fn lock_state_mutation(&self) -> ZResult<MutexGuard<'_, ()>> {
-        self.state_mutation_lock
-            .lock()
-            .map_err(|_| Status::internal("state mutation lock poisoned"))
+    pub(crate) fn lock_state_mutation(&self) -> StateWriteGuard<'_> {
+        let lock = self.state_mutation_lock.write();
+        STATE_WRITE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        StateWriteGuard { _lock: lock }
+    }
+
+    /// Public reads hold this so they see a state mutation batch whole or not at all.
+    pub(crate) fn lock_state_read(&self) -> Option<RwLockReadGuard<'_, ()>> {
+        if STATE_WRITE_DEPTH.with(Cell::get) > 0 {
+            return None;
+        }
+        // Recursive so a public read that calls another cannot deadlock behind a waiting writer.
+        Some(self.state_mutation_lock.read_recursive())
     }
 }
 
@@ -702,7 +728,7 @@ impl MemoryStore {
             dependency_traces: create(DEPENDENCY_TRACES_COLLECTION, dependency_trace_schema())?,
             slots: create(SLOTS_COLLECTION, slot_schema())?,
             slot_aliases: create(SLOT_ALIASES_COLLECTION, slot_alias_schema())?,
-            state_mutation_lock: Mutex::new(()),
+            state_mutation_lock: RwLock::new(()),
         };
         store.recover_pending_state_mutation()?;
         Ok(store)
@@ -751,7 +777,7 @@ impl MemoryStore {
             dependency_traces,
             slots,
             slot_aliases,
-            state_mutation_lock: Mutex::new(()),
+            state_mutation_lock: RwLock::new(()),
         };
         store.recover_pending_state_mutation()?;
         Ok(store)
@@ -829,7 +855,7 @@ impl MemoryStore {
     }
 
     pub fn add_correction(&self, record: &CorrectionRecord) -> ZResult<()> {
-        let _mutation_guard = self.lock_state_mutation()?;
+        let _mutation_guard = self.lock_state_mutation();
         #[cfg(not(test))]
         if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {
             self.validate_evidence_references(

@@ -11,14 +11,23 @@ impl MemoryStore {
         let transaction_time_ms = system_time_ms();
         let (claims, applications) = self.rebuild_current_claims(scope, valid_at_ms)?;
         let slot_ids = self.rebuild_frontier_slot_ids(scope, &claims, valid_at_ms)?;
-        let active_states = self.scan_state_records(
-            scope,
-            StateRecordScan {
-                limit: usize::MAX,
-                temporal: BiTemporalQuery::default(),
-            },
-        )?;
-        let active_traces = self.scan_dependency_traces(scope, usize::MAX, None)?;
+        // The read filter also returns narrower scopes' records, which this rebuild must not retire.
+        let active_states = self
+            .scan_state_records(
+                scope,
+                StateRecordScan {
+                    limit: usize::MAX,
+                    temporal: BiTemporalQuery::default(),
+                },
+            )?
+            .into_iter()
+            .filter(|record| record.scope == *scope)
+            .collect::<Vec<_>>();
+        let active_traces = self
+            .scan_dependency_traces(scope, usize::MAX, None)?
+            .into_iter()
+            .filter(|record| record.scope == *scope)
+            .collect::<Vec<_>>();
         let write_key =
             rebuild_write_key(scope, valid_at_ms, &claims, &active_states, &active_traces);
         self.retire_outside_frontier(&slot_ids, active_states, active_traces, transaction_time_ms)?;

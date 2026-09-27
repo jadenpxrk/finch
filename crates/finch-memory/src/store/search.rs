@@ -314,6 +314,7 @@ impl MemoryStore {
         k: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanSearchHit>> {
+        let _state_guard = self.lock_state_read();
         let fetch_k = expanded_span_vector_fetch_k(k);
         let mut hits = self.query_span_candidates_with_corrections(
             scope,
@@ -338,6 +339,7 @@ impl MemoryStore {
         max_spans_per_source: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanSearchHit>> {
+        let _state_guard = self.lock_state_read();
         if candidate_k == 0 || max_sources == 0 || max_spans_per_source == 0 {
             return Ok(Vec::new());
         }
@@ -360,6 +362,7 @@ impl MemoryStore {
         index: &SourceLexicalIndex,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanSearchHit>> {
+        let _state_guard = self.lock_state_read();
         let span_ids = selections
             .iter()
             .filter(|selection| selection.max_spans > 0)
@@ -431,6 +434,7 @@ impl MemoryStore {
         query: HybridSourceDiverseQuery<'_>,
         options: HybridSourceDiverseOptions,
     ) -> ZResult<Vec<SpanSearchHit>> {
+        let _state_guard = self.lock_state_read();
         let HybridSourceDiverseQuery {
             query_embedding,
             query_text,
@@ -584,6 +588,7 @@ impl MemoryStore {
         k: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<MemoryId>> {
+        let _state_guard = self.lock_state_read();
         self.ranked_claim_vector_slot_ids(scope, query_embedding, k, at_ms)
     }
 
@@ -595,6 +600,7 @@ impl MemoryStore {
         k: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<MemoryId>> {
+        let _state_guard = self.lock_state_read();
         Ok(self
             .query_current_state_slot_rankings(scope, query_embedding, query_text, k, at_ms)?
             .fused)
@@ -611,6 +617,7 @@ impl MemoryStore {
         k: usize,
         at_ms: Option<i64>,
     ) -> ZResult<CurrentStateSlotRankings> {
+        let _state_guard = self.lock_state_read();
         let vector = self.ranked_claim_vector_slot_ids(scope, query_embedding, k, at_ms)?;
         let lexical = self.ranked_current_state_lexical_slot_ids(scope, query_text, k, at_ms)?;
         let fused = if lexical.is_empty() {
@@ -710,6 +717,7 @@ impl MemoryStore {
         at_ms: Option<i64>,
         corrections: &[CorrectionRecord],
     ) -> ZResult<Vec<SpanSearchHit>> {
+        let _state_guard = self.lock_state_read();
         let fetch_k = expanded_span_vector_fetch_k(k);
         self.query_span_candidates_with_corrections(
             scope,
@@ -799,6 +807,7 @@ impl MemoryStore {
         scan_limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanSearchHit>> {
+        let _state_guard = self.lock_state_read();
         if hits.is_empty() || (before == 0 && after == 0) {
             return Ok(hits.to_vec());
         }
@@ -858,6 +867,7 @@ impl MemoryStore {
         scope: &MemoryScope,
         limit: usize,
     ) -> ZResult<Vec<CorrectionRecord>> {
+        let _state_guard = self.lock_state_read();
         self.scan_corrections_with_filter(scope, limit, None)
     }
 
@@ -927,6 +937,7 @@ impl MemoryStore {
         hits: &[SpanSearchHit],
         at_ms: Option<i64>,
     ) -> ZResult<Vec<CorrectionRecord>> {
+        let _state_guard = self.lock_state_read();
         let mut corrections = BTreeMap::<String, CorrectionRecord>::new();
         for correction in self.scan_claim_corrections_for_claims(scope, claims, at_ms)? {
             corrections.insert(correction.id.clone(), correction);
@@ -1000,6 +1011,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<ClaimRecord>> {
+        let _state_guard = self.lock_state_read();
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -1044,6 +1056,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<ClaimRecord>> {
+        let _state_guard = self.lock_state_read();
         if limit == 0 {
             return Ok(Vec::new());
         }

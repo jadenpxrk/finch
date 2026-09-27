@@ -8,8 +8,8 @@ pub struct SqlSelect {
     pub selected: Vec<SelectItem>,
     pub where_expr: Option<LogicExpr>,
     pub order_by: Vec<OrderByItem>,
-    /// LIMIT accepts a signed integer; values <= 0 behave as "unset"
-    /// (QueryAnalyzer defaults topN when limit <= 0).
+    /// Parsed as a signed integer; the planner rejects a negative LIMIT and only a missing one
+    /// gets the default.
     pub limit: Option<i32>,
 }
 

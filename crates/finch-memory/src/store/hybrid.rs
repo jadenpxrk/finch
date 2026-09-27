@@ -9,6 +9,7 @@ impl MemoryStore {
         scan_limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanSearchHit>> {
+        let _state_guard = self.lock_state_read();
         let mut hits = self.keyword_search_spans_with_corrections(
             scope,
             query_text,
@@ -161,6 +162,7 @@ impl MemoryStore {
         scope: &MemoryScope,
         search: HybridSpanSearch<'_>,
     ) -> ZResult<HybridSearchDebug> {
+        let _state_guard = self.lock_state_read();
         let HybridSpanSearch {
             query_embedding,
             query_text,

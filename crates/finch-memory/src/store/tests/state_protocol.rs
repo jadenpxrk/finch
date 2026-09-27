@@ -3262,3 +3262,34 @@ fn claim_scans_fail_on_undecodable_row() {
 
     let _ = std::fs::remove_dir_all(&store.path);
 }
+
+#[test]
+fn scope_rebuild_does_not_retire_a_narrower_scopes_state() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("rebuild_keeps_tenant_state");
+    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let mut tenant = scope();
+    tenant.tenant_id = Some("tenant_a".to_string());
+    let mut claim = make_claim(
+        &tenant,
+        "tenant_claim",
+        "project",
+        "owner",
+        Some("private"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    claim.source_span_ids.clear();
+    claim.source_episode_ids.clear();
+    store.append_claim(&claim, None).unwrap();
+
+    // At valid time 5 the tenant claim does not hold yet, so its slot is outside the frontier.
+    store.refresh_state_projection(&scope(), Some(5)).unwrap();
+    let tenant_states = store
+        .scan_state_records(&tenant, state_scan(10, Some(30)))
+        .unwrap();
+
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+    assert_eq!(tenant_states.len(), 1);
+}

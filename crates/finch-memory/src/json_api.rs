@@ -387,6 +387,7 @@ impl MemoryStore {
     }
 
     pub fn build_memory_context_json(&self, request_json: &str) -> ZResult<String> {
+        let _state_guard = self.lock_state_read();
         let request =
             serde_json::from_str::<MemoryContextJsonRequest>(request_json).map_err(json_status)?;
         let scope = &request.scope;
@@ -444,6 +445,7 @@ impl MemoryStore {
     /// target slots are retrieved for the query; otherwise `hits` and `selections` are used as
     /// given.
     pub fn build_answer_ready_context_json(&self, request_json: &str) -> ZResult<String> {
+        let _state_guard = self.lock_state_read();
         let request =
             serde_json::from_str::<AnswerContextJsonRequest>(request_json).map_err(json_status)?;
         let scope = &request.scope;

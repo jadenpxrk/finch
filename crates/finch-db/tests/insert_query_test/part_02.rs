@@ -28,10 +28,11 @@ fn test_sql_score_virtual_column_and_limit_signed_int_parity() {
     assert!(statuses.iter().all(|s| s.is_ok()));
     col.flush().unwrap();
 
-    // LIMIT accepts signed integers; <=0 behaves like "unset" and uses the default topN.
+    // An explicit LIMIT 0 returns nothing, a negative LIMIT is rejected, and no LIMIT uses the default.
     let res = col.query_sql("SELECT label FROM test LIMIT 0").unwrap();
-    assert_eq!(res.len(), 3);
-    let res = col.query_sql("SELECT label FROM test LIMIT -1").unwrap();
+    assert!(res.is_empty());
+    assert!(col.query_sql("SELECT label FROM test LIMIT -1").is_err());
+    let res = col.query_sql("SELECT label FROM test").unwrap();
     assert_eq!(res.len(), 3);
 
     // `_finch_score` is a virtual output column (backed by Doc.score).

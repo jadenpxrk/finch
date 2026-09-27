@@ -18,7 +18,7 @@ pub(super) struct DependencyChainResolution {
 
 impl MemoryStore {
     pub(crate) fn append_rule(&self, record: &RuleRecord) -> ZResult<()> {
-        let _mutation_guard = self.lock_state_mutation()?;
+        let _mutation_guard = self.lock_state_mutation();
         #[cfg(not(test))]
         self.validate_evidence_references(
             &record.scope,
@@ -46,6 +46,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<RuleRecord>> {
+        let _state_guard = self.lock_state_read();
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -84,6 +85,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<RepairableTriggerSlot>> {
+        let _state_guard = self.lock_state_read();
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -140,6 +142,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<RuleRecord>> {
+        let _state_guard = self.lock_state_read();
         let trigger_subject_key = canonical_slot_part(trigger_subject);
         let trigger_predicate_key = canonical_slot_part(trigger_predicate);
         if limit == 0 {
@@ -179,6 +182,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<RuleRecord>> {
+        let _state_guard = self.lock_state_read();
         if limit == 0 {
             return Ok(Vec::new());
         }
