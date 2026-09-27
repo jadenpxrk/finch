@@ -194,7 +194,7 @@ impl Collection {
 
 impl Drop for Collection {
     fn drop(&mut self) {
-        // Flush Durability::None redb writes so data survives reopen.
+        // Persist buffered fjall writes so data survives reopen.
         if !self.options.read_only {
             let _ = self.id_map.sync();
             let _ = self.writing_segment.write().sync_invert_indexes();

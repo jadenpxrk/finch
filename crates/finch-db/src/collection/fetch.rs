@@ -9,6 +9,8 @@ use super::Collection;
 
 impl Collection {
     pub fn fetch(&self, pks: Vec<String>) -> ZResult<HashMap<String, Arc<Doc>>> {
+        // Writers publish a key and its doc under the delete store's write lock.
+        let _published = self.delete_store.read();
         let pk_refs: Vec<&str> = pks.iter().map(|s| s.as_str()).collect();
         let doc_ids = self.id_map.multi_get(&pk_refs)?;
 

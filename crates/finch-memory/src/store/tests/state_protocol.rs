@@ -3150,3 +3150,115 @@ fn rules_bound_to_an_alias_surface_reach_the_canonical_slot() {
     assert_eq!(resolved.support_state, AnswerSupportState::Unsupported);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// One claim and one derived rule leave claims, state records and a dependency trace on slots.
+fn store_with_derived_state(name: &str) -> (MemoryStore, MemoryScope) {
+    let store = MemoryStore::create(&temp_dir(name), 3, CollectionOptions::default()).unwrap();
+    let scope = scope();
+    let claim = make_claim(
+        &scope,
+        "claim_decode",
+        "servicio",
+        "responsable",
+        Some("Ana"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    let rule = exact_rule(
+        &scope,
+        "rule_decode",
+        "servicio",
+        "responsable",
+        "contacto",
+        RuleAction::DeriveValue,
+    );
+    store
+        .apply_state_mutation_batch(mutation(
+            &scope,
+            100,
+            vec![claim],
+            Vec::new(),
+            vec![rule],
+            Vec::new(),
+        ))
+        .unwrap();
+    (store, scope)
+}
+
+fn corrupt_stored_row(collection: &Collection, pk: &str) {
+    let stored = collection.fetch(vec![pk.to_string()]).unwrap()[pk].clone();
+    let corrupt = (*stored).clone().set("status", "not_a_status");
+    assert!(collection.upsert(vec![corrupt]).unwrap()[0].is_ok());
+}
+
+#[test]
+fn state_record_scans_fail_on_undecodable_row() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let (store, scope) = store_with_derived_state("state_record_decode_error");
+    let record = store
+        .scan_state_records(&scope, state_scan(10, None))
+        .unwrap()
+        .into_iter()
+        .find(|record| record.slot_id.is_some())
+        .unwrap();
+    let slot_id = record.slot_id.clone().unwrap();
+    let slot_ids = BTreeSet::from([slot_id.clone()]);
+    corrupt_stored_row(&store.state_records, &record.id);
+
+    let temporal = BiTemporalQuery::default();
+    assert!(store
+        .scan_state_records_bitemporal_for_slot_ids(&scope, &slot_ids, 10, temporal)
+        .is_err());
+    assert!(store
+        .slot_state_version_count(&scope, &slot_id, None)
+        .is_err());
+    assert!(store
+        .current_state_records_for_slot_ids(&scope, &slot_ids)
+        .is_err());
+
+    let _ = std::fs::remove_dir_all(&store.path);
+}
+
+#[test]
+fn dependency_trace_scan_fails_on_undecodable_row() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let (store, scope) = store_with_derived_state("dependency_trace_decode_error");
+    let trace = store
+        .scan_dependency_traces(&scope, 10, None)
+        .unwrap()
+        .into_iter()
+        .find(|trace| trace.target_slot_id.is_some())
+        .unwrap();
+    let slot_ids = BTreeSet::from([trace.target_slot_id.clone().unwrap()]);
+    corrupt_stored_row(&store.dependency_traces, &trace.id);
+
+    assert!(store
+        .current_dependency_traces_for_slot_ids(&scope, &slot_ids)
+        .is_err());
+
+    let _ = std::fs::remove_dir_all(&store.path);
+}
+
+#[test]
+fn claim_scans_fail_on_undecodable_row() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let (store, scope) = store_with_derived_state("claim_decode_error");
+    let claim = store
+        .scan_claims(&scope, 10, None)
+        .unwrap()
+        .into_iter()
+        .find(|claim| claim.id == "claim_decode")
+        .unwrap();
+    let slot_ids = BTreeSet::from([claim.slot_id.clone().unwrap()]);
+    let subjects = BTreeSet::from([(claim.subject_entity_id.clone(), "servicio".to_string())]);
+    corrupt_stored_row(&store.claims, &claim.id);
+
+    assert!(store
+        .scan_claim_versions_for_slot_ids(&scope, &slot_ids, 10, None)
+        .is_err());
+    assert!(store
+        .scan_current_claims_for_subjects(&scope, &subjects, 10, None)
+        .is_err());
+
+    let _ = std::fs::remove_dir_all(&store.path);
+}

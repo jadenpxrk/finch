@@ -75,7 +75,9 @@ impl MemoryStore {
         )?;
         let by_id = docs
             .iter()
-            .filter_map(|doc| state_record_from_doc(doc).ok())
+            .map(|doc| state_record_from_doc(doc))
+            .collect::<ZResult<Vec<_>>>()?
+            .into_iter()
             .filter(|record| state_record_visible_at(record, scope, temporal))
             .map(|record| (record.id.clone(), record))
             .collect::<BTreeMap<_, _>>();
@@ -125,7 +127,9 @@ impl MemoryStore {
         )?;
         let by_id = docs
             .iter()
-            .filter_map(|doc| state_record_from_doc(doc).ok())
+            .map(|doc| state_record_from_doc(doc))
+            .collect::<ZResult<Vec<_>>>()?
+            .into_iter()
             .filter(|record| state_record_in_history_at(record, scope, temporal))
             .map(|record| (record.id.clone(), record))
             .collect::<BTreeMap<_, _>>();
@@ -156,7 +160,9 @@ impl MemoryStore {
         )?;
         let by_id = docs
             .iter()
-            .filter_map(|doc| state_record_from_doc(doc).ok())
+            .map(|doc| state_record_from_doc(doc))
+            .collect::<ZResult<Vec<_>>>()?
+            .into_iter()
             .filter(|record| current_state_on_slots(record, scope, slot_ids))
             .map(|record| (record.id.clone(), record))
             .collect::<BTreeMap<_, _>>();
@@ -210,7 +216,7 @@ impl MemoryStore {
         Ok(records)
     }
 
-    pub(super) fn current_dependency_traces_for_slot_ids(
+    pub(crate) fn current_dependency_traces_for_slot_ids(
         &self,
         scope: &MemoryScope,
         slot_ids: &BTreeSet<MemoryId>,
@@ -228,7 +234,9 @@ impl MemoryStore {
         )?;
         let by_id = docs
             .iter()
-            .filter_map(|doc| dependency_trace_from_doc(doc).ok())
+            .map(|doc| dependency_trace_from_doc(doc))
+            .collect::<ZResult<Vec<_>>>()?
+            .into_iter()
             .filter(|record| current_trace_on_slots(record, scope, slot_ids))
             .map(|record| (record.id.clone(), record))
             .collect::<BTreeMap<_, _>>();

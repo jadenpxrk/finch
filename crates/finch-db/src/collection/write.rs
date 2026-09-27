@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use finch_types::{Doc, Operator, Status, ZResult};
+use finch_types::{CollectionSchema, Doc, Operator, Status, ZResult};
 use parking_lot::RwLockWriteGuard;
 use roaring::RoaringTreemap;
 
@@ -17,6 +17,18 @@ use super::Collection;
 
 impl Collection {
     pub fn insert(&self, docs: Vec<Doc>) -> ZResult<Vec<Status>> {
+        self.write_docs(Operator::Insert, docs)
+    }
+
+    pub fn upsert(&self, docs: Vec<Doc>) -> ZResult<Vec<Status>> {
+        self.write_docs(Operator::Upsert, docs)
+    }
+
+    pub fn update(&self, docs: Vec<Doc>) -> ZResult<Vec<Status>> {
+        self.write_docs(Operator::Update, docs)
+    }
+
+    fn write_docs(&self, op: Operator, docs: Vec<Doc>) -> ZResult<Vec<Status>> {
         self.check_not_readonly()?;
         if docs.len() > 1024 {
             return Err(Status::invalid_argument("Too many docs"));
@@ -25,199 +37,101 @@ impl Collection {
         let version = self.cur_version();
 
         let mut results = Vec::with_capacity(docs.len());
-
-        for mut doc in docs {
-            normalize_binary_fields_for_write(&version.schema, &mut doc);
-            if let Err(s) = doc.validate(&version.schema, false) {
+        for doc in docs {
+            if let Err(s) = self.write_doc(op, &version.schema, doc) {
                 results.push(s);
                 continue;
             }
-            if let Err(s) = normalize_vector_fields_for_write(&version.schema, &mut doc) {
-                results.push(s);
-                continue;
-            }
-            if let Ok(Some(_)) = self.id_map.get(&doc.pk) {
-                results.push(Status::already_exists(format!(
-                    "pk '{}' already exists",
-                    doc.pk
-                )));
-                continue;
-            }
-
-            let doc_id = self.allocate_doc_id();
-            doc.doc_id = doc_id;
-            doc.op = Operator::Insert;
-
-            // Write-ahead log before mutating state
-            let wal_entry = WalEntry {
-                op: WalOp::Insert,
-                doc_id,
-                prev_doc_id: None,
-                pk: doc.pk.clone(),
-                doc: Some(doc.clone()),
-            };
-            if let Err(s) = self.wal_append(&wal_entry) {
-                results.push(s);
-                continue;
-            }
-
-            self.id_map.insert(&doc.pk, doc_id)?;
-
-            let mut writing = self.writing_segment.write();
-            writing.insert(doc_id, doc)?;
-
+            results.push(Status::default());
+            let writing = self.writing_segment.read();
             if self.should_rotate_writing(&writing, version.schema.max_doc_count_per_segment) {
                 drop(writing);
                 self.rotate_segment()?;
             }
-
-            results.push(Status::default());
         }
 
         Ok(results)
     }
 
-    pub fn upsert(&self, docs: Vec<Doc>) -> ZResult<Vec<Status>> {
-        self.check_not_readonly()?;
-        if docs.len() > 1024 {
-            return Err(Status::invalid_argument("Too many docs"));
-        }
-        let _guard = self.write_lock.lock();
-        let version = self.cur_version();
-        let max_docs_per_segment = version.schema.max_doc_count_per_segment;
-
-        let mut results = Vec::with_capacity(docs.len());
-
-        for mut doc in docs {
-            normalize_binary_fields_for_write(&version.schema, &mut doc);
-            if let Err(s) = doc.validate(&version.schema, false) {
-                results.push(s);
-                continue;
+    // Everything that can reject the doc runs before the WAL append, so a rejected doc leaves
+    // no trace.
+    fn write_doc(&self, op: Operator, schema: &CollectionSchema, mut doc: Doc) -> ZResult<()> {
+        normalize_binary_fields_for_write(schema, &mut doc);
+        doc.validate(schema, op == Operator::Update)?;
+        let existing_id = self.id_map.get(&doc.pk)?;
+        let (wal_op, prev_doc_id, mut doc) = match (op, existing_id) {
+            (Operator::Insert, None) => (WalOp::Insert, None, doc),
+            (Operator::Insert, Some(_)) => {
+                return Err(Status::already_exists(format!(
+                    "pk '{}' already exists",
+                    doc.pk
+                )));
             }
-            if let Err(s) = normalize_vector_fields_for_write(&version.schema, &mut doc) {
-                results.push(s);
-                continue;
+            (Operator::Upsert, _) => (WalOp::Upsert, existing_id, doc),
+            (Operator::Update, Some(old_id)) => {
+                let merged = self.merge_update(old_id, doc)?;
+                (WalOp::Update, existing_id, merged)
             }
-            let existing_id = self.id_map.get(&doc.pk)?;
-            let (doc_id, prev_doc_id) = if let Some(old_id) = existing_id {
-                (self.allocate_doc_id(), Some(old_id))
-            } else {
-                (self.allocate_doc_id(), None)
-            };
-            doc.doc_id = doc_id;
-            doc.op = Operator::Upsert;
-
-            let wal_entry = WalEntry {
-                op: WalOp::Upsert,
-                doc_id,
-                prev_doc_id,
-                pk: doc.pk.clone(),
-                doc: Some(doc.clone()),
-            };
-            if let Err(s) = self.wal_append(&wal_entry) {
-                results.push(s);
-                continue;
+            (Operator::Update, None) => {
+                return Err(Status::not_found(format!("pk '{}' not found", doc.pk)));
             }
-
-            // Readers hold the delete store across their scan, so tombstone and insert land together.
-            let mut delete_store = self.delete_store.write();
-            if let Some(old_id) = prev_doc_id {
-                delete_store.mark_deleted(old_id);
+            (Operator::Delete, _) => {
+                return Err(Status::internal("delete is not a document write"));
             }
-            self.id_map.insert(&doc.pk, doc_id)?;
+        };
+        normalize_vector_fields_for_write(schema, &mut doc)?;
+        self.writing_segment.read().check_insert(&doc)?;
 
-            let mut writing = self.writing_segment.write();
-            writing.insert(doc_id, doc)?;
-            drop(delete_store);
-            if self.should_rotate_writing(&writing, max_docs_per_segment) {
-                drop(writing);
-                self.rotate_segment()?;
-            }
-
-            results.push(Status::default());
-        }
-
-        Ok(results)
+        let doc_id = self.allocate_doc_id();
+        doc.doc_id = doc_id;
+        doc.op = op;
+        let pk = doc.pk.clone();
+        self.wal_append(&WalEntry {
+            op: wal_op,
+            doc_id,
+            prev_doc_id,
+            pk: pk.clone(),
+            doc: Some(doc.clone()),
+        })?;
+        self.publish_doc(&pk, doc_id, prev_doc_id, doc)
     }
 
-    pub fn update(&self, docs: Vec<Doc>) -> ZResult<Vec<Status>> {
-        self.check_not_readonly()?;
-        if docs.len() > 1024 {
-            return Err(Status::invalid_argument("Too many docs"));
+    // The live doc behind `old_doc_id` with the patch's fields laid over it.
+    fn merge_update(&self, old_doc_id: u64, patch: Doc) -> ZResult<Doc> {
+        if self.delete_store.read().bitmap().contains(old_doc_id) {
+            return Err(Status::not_found(format!("pk '{}' not found", patch.pk)));
         }
-        let _guard = self.write_lock.lock();
-        let version = self.cur_version();
-        let max_docs_per_segment = version.schema.max_doc_count_per_segment;
+        let mut merged = self
+            .fetch_by_ids(&[old_doc_id])?
+            .remove(&old_doc_id)
+            .ok_or_else(|| Status::internal("update failed: existing doc not found"))?;
+        merged.fields.extend(patch.fields);
+        Ok(merged)
+    }
 
-        let mut results = Vec::with_capacity(docs.len());
-
-        for mut doc in docs {
-            normalize_binary_fields_for_write(&version.schema, &mut doc);
-            if let Err(s) = doc.validate(&version.schema, true) {
-                results.push(s);
-                continue;
+    // Readers resolve keys and scan while holding the delete store, so the key, the doc and the
+    // tombstone on the replaced version appear together. A failed segment insert restores the key.
+    fn publish_doc(
+        &self,
+        pk: &str,
+        doc_id: u64,
+        prev_doc_id: Option<u64>,
+        doc: Doc,
+    ) -> ZResult<()> {
+        let mut delete_store = self.delete_store.write();
+        self.id_map.insert(pk, doc_id)?;
+        let inserted = self.writing_segment.write().insert(doc_id, doc);
+        if let Err(e) = inserted {
+            match prev_doc_id {
+                Some(old_id) => self.id_map.insert(pk, old_id)?,
+                None => self.id_map.delete(pk)?,
             }
-            let old_doc_id = match self.id_map.get(&doc.pk)? {
-                None => {
-                    results.push(Status::not_found(format!("pk '{}' not found", doc.pk)));
-                    continue;
-                }
-                Some(id) => id,
-            };
-            let delete_bitmap = self.delete_store.read().bitmap();
-            if delete_bitmap.contains(old_doc_id) {
-                results.push(Status::not_found(format!("pk '{}' not found", doc.pk)));
-                continue;
-            }
-
-            // Fetch existing doc and merge patch fields.
-            let old_doc = self
-                .fetch_by_ids(&[old_doc_id])?
-                .remove(&old_doc_id)
-                .ok_or_else(|| Status::internal("update failed: existing doc not found"))?;
-
-            let mut merged = old_doc;
-            for (k, v) in doc.fields.iter() {
-                merged.fields.insert(k.clone(), v.clone());
-            }
-
-            let new_doc_id = self.allocate_doc_id();
-            merged.doc_id = new_doc_id;
-            merged.op = Operator::Update;
-            if let Err(s) = normalize_vector_fields_for_write(&version.schema, &mut merged) {
-                results.push(s);
-                continue;
-            }
-
-            let wal_entry = WalEntry {
-                op: WalOp::Update,
-                doc_id: new_doc_id,
-                prev_doc_id: Some(old_doc_id),
-                pk: doc.pk.clone(),
-                doc: Some(merged.clone()),
-            };
-            if let Err(s) = self.wal_append(&wal_entry) {
-                results.push(s);
-                continue;
-            }
-
-            // Apply tombstone + PK remap before writing the new doc, keeping a
-            // consistent lock order with query paths (delete_store -> writing_segment).
-            let mut delete_store = self.delete_store.write();
-            delete_store.mark_deleted(old_doc_id);
-            self.id_map.insert(&doc.pk, new_doc_id)?;
-            let mut writing = self.writing_segment.write();
-            writing.insert(new_doc_id, merged)?;
-            drop(delete_store);
-            if self.should_rotate_writing(&writing, max_docs_per_segment) {
-                drop(writing);
-                self.rotate_segment()?;
-            }
-
-            results.push(Status::default());
+            return Err(e);
         }
-
-        Ok(results)
+        if let Some(old_id) = prev_doc_id {
+            delete_store.mark_deleted(old_id);
+        }
+        Ok(())
     }
 
     pub fn delete(&self, pks: Vec<String>) -> ZResult<Vec<Status>> {

@@ -59,6 +59,21 @@ fn is_array_type(dt: DataType) -> bool {
     array_element_type(dt).is_some()
 }
 
+fn array_items(value: &Value) -> Option<Vec<Value>> {
+    Some(match value {
+        Value::ArrayBinary(items) => items.iter().cloned().map(Value::Bytes).collect(),
+        Value::ArrayString(items) => items.iter().cloned().map(Value::String).collect(),
+        Value::ArrayBool(items) => items.iter().copied().map(Value::Bool).collect(),
+        Value::ArrayI32(items) => items.iter().copied().map(Value::I32).collect(),
+        Value::ArrayI64(items) => items.iter().copied().map(Value::I64).collect(),
+        Value::ArrayU32(items) => items.iter().copied().map(Value::U32).collect(),
+        Value::ArrayU64(items) => items.iter().copied().map(Value::U64).collect(),
+        Value::ArrayF32(items) => items.iter().copied().map(Value::F32).collect(),
+        Value::ArrayF64(items) => items.iter().copied().map(Value::F64).collect(),
+        _ => return None,
+    })
+}
+
 /// Encode a field value to a byte key for the KV store.
 /// Key format:
 ///   [field_name_len:2 little-endian][field_name_bytes][namespace:1]
@@ -309,19 +324,26 @@ impl InvertIndex {
     // ── Public API ───────────────────────────────────────────────────────
 
     pub fn insert(&self, doc_id: u64, value: &Value) -> ZResult<()> {
-        if is_array_type(self.data_type) {
-            self.insert_array(doc_id, value)
-        } else {
-            self.insert_scalar(doc_id, value)
+        for key in self.keys_for(doc_id, value)? {
+            self.put_kv(&key, b"")?;
         }
+        Ok(())
     }
 
     pub fn delete(&self, doc_id: u64, value: &Value) -> ZResult<()> {
-        if is_array_type(self.data_type) {
-            self.delete_array(doc_id, value)
-        } else {
-            self.delete_scalar(doc_id, value)
+        // `insert` writes nothing for a value it cannot encode, so there is nothing to remove.
+        let Ok(keys) = self.keys_for(doc_id, value) else {
+            return Ok(());
+        };
+        for key in keys {
+            self.del_kv(&key)?;
         }
+        Ok(())
+    }
+
+    /// Fails when `insert` would reject `value` itself; writes nothing.
+    pub fn check_value(&self, value: &Value) -> ZResult<()> {
+        self.keys_for(0, value).map(drop)
     }
 
     pub fn insert_null_marker(&self, doc_id: u64) -> ZResult<()> {
@@ -331,8 +353,7 @@ impl InvertIndex {
 
     pub fn delete_null_marker(&self, doc_id: u64) -> ZResult<()> {
         let key = encode_marker_key(&self.field_name, NS_NULL, doc_id);
-        let _ = self.del_kv(&key);
-        Ok(())
+        self.del_kv(&key)
     }
 
     pub fn insert_nonnull_marker(&self, doc_id: u64) -> ZResult<()> {
@@ -342,11 +363,36 @@ impl InvertIndex {
 
     pub fn delete_nonnull_marker(&self, doc_id: u64) -> ZResult<()> {
         let key = encode_marker_key(&self.field_name, NS_NONNULL, doc_id);
-        let _ = self.del_kv(&key);
-        Ok(())
+        self.del_kv(&key)
     }
 
-    fn insert_scalar(&self, doc_id: u64, value: &Value) -> ZResult<()> {
+    // Every key `insert` writes for `value`, built in full so a value that fails writes nothing.
+    fn keys_for(&self, doc_id: u64, value: &Value) -> ZResult<Vec<Vec<u8>>> {
+        let mut keys = Vec::new();
+        if !is_array_type(self.data_type) {
+            self.push_term_keys(doc_id, value, &mut keys)?;
+            return Ok(keys);
+        }
+        let items = array_items(value).ok_or_else(|| {
+            Status::invalid_argument("invert index: array field stored with non-array value")
+        })?;
+        let len = Value::U32(items.len() as u32);
+        let len_key = encode_full_key(
+            &self.field_name,
+            NS_ARRAY_LEN,
+            DataType::Uint32,
+            &len,
+            doc_id,
+        )
+        .ok_or_else(|| Status::invalid_argument("invert index: failed to encode array length"))?;
+        keys.push(len_key);
+        for item in &items {
+            self.push_term_keys(doc_id, item, &mut keys)?;
+        }
+        Ok(keys)
+    }
+
+    fn push_term_keys(&self, doc_id: u64, value: &Value, keys: &mut Vec<Vec<u8>>) -> ZResult<()> {
         let key = encode_full_key(
             &self.field_name,
             NS_TERMS,
@@ -361,200 +407,24 @@ impl InvertIndex {
                 value.type_name()
             ))
         })?;
-        self.put_kv(&key, b"")?;
+        keys.push(key);
 
         // Optional reversed-term index for suffix search.
-        if self.enable_extended_wildcard && self.index_value_type == DataType::String {
-            let Value::String(s) = value else {
-                return Ok(());
-            };
-            let rev: String = s.chars().rev().collect();
-            let rev_val = Value::String(rev);
-            if let Some(rev_key) = encode_full_key(
-                &self.field_name,
-                NS_REVERSED_TERMS,
-                self.index_value_type,
-                &rev_val,
-                doc_id,
-            ) {
-                let _ = self.put_kv(&rev_key, b"");
-            }
+        let Value::String(s) = value else {
+            return Ok(());
+        };
+        if !self.enable_extended_wildcard {
+            return Ok(());
         }
-
-        Ok(())
-    }
-
-    fn delete_scalar(&self, doc_id: u64, value: &Value) -> ZResult<()> {
-        if let Some(key) = encode_full_key(
+        let rev_val = Value::String(s.chars().rev().collect());
+        if let Some(rev_key) = encode_full_key(
             &self.field_name,
-            NS_TERMS,
+            NS_REVERSED_TERMS,
             self.index_value_type,
-            value,
+            &rev_val,
             doc_id,
         ) {
-            self.del_kv(&key)?;
-        }
-
-        if self.enable_extended_wildcard && self.index_value_type == DataType::String {
-            if let Value::String(s) = value {
-                let rev: String = s.chars().rev().collect();
-                let rev_val = Value::String(rev);
-                if let Some(rev_key) = encode_full_key(
-                    &self.field_name,
-                    NS_REVERSED_TERMS,
-                    self.index_value_type,
-                    &rev_val,
-                    doc_id,
-                ) {
-                    let _ = self.del_kv(&rev_key);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn insert_array_len(&self, doc_id: u64, len: u32) -> ZResult<()> {
-        let v = Value::U32(len);
-        let key = encode_full_key(&self.field_name, NS_ARRAY_LEN, DataType::Uint32, &v, doc_id)
-            .ok_or_else(|| {
-                Status::invalid_argument("invert index: failed to encode array length")
-            })?;
-        self.put_kv(&key, b"")
-    }
-
-    fn delete_array_len(&self, doc_id: u64, len: u32) -> ZResult<()> {
-        let v = Value::U32(len);
-        if let Some(key) =
-            encode_full_key(&self.field_name, NS_ARRAY_LEN, DataType::Uint32, &v, doc_id)
-        {
-            let _ = self.del_kv(&key);
-        }
-        Ok(())
-    }
-
-    fn insert_array(&self, doc_id: u64, value: &Value) -> ZResult<()> {
-        match value {
-            Value::ArrayBinary(items) => {
-                self.insert_array_len(doc_id, items.len() as u32)?;
-                for b in items {
-                    self.insert_scalar(doc_id, &Value::Bytes(b.clone()))?;
-                }
-            }
-            Value::ArrayString(items) => {
-                self.insert_array_len(doc_id, items.len() as u32)?;
-                for s in items {
-                    self.insert_scalar(doc_id, &Value::String(s.clone()))?;
-                }
-            }
-            Value::ArrayBool(items) => {
-                self.insert_array_len(doc_id, items.len() as u32)?;
-                for b in items {
-                    self.insert_scalar(doc_id, &Value::Bool(*b))?;
-                }
-            }
-            Value::ArrayI32(items) => {
-                self.insert_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    self.insert_scalar(doc_id, &Value::I32(*x))?;
-                }
-            }
-            Value::ArrayI64(items) => {
-                self.insert_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    self.insert_scalar(doc_id, &Value::I64(*x))?;
-                }
-            }
-            Value::ArrayU32(items) => {
-                self.insert_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    self.insert_scalar(doc_id, &Value::U32(*x))?;
-                }
-            }
-            Value::ArrayU64(items) => {
-                self.insert_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    self.insert_scalar(doc_id, &Value::U64(*x))?;
-                }
-            }
-            Value::ArrayF32(items) => {
-                self.insert_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    self.insert_scalar(doc_id, &Value::F32(*x))?;
-                }
-            }
-            Value::ArrayF64(items) => {
-                self.insert_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    self.insert_scalar(doc_id, &Value::F64(*x))?;
-                }
-            }
-            _ => {
-                return Err(Status::invalid_argument(
-                    "invert index: array field stored with non-array value",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn delete_array(&self, doc_id: u64, value: &Value) -> ZResult<()> {
-        match value {
-            Value::ArrayBinary(items) => {
-                self.delete_array_len(doc_id, items.len() as u32)?;
-                for b in items {
-                    let _ = self.delete_scalar(doc_id, &Value::Bytes(b.clone()));
-                }
-            }
-            Value::ArrayString(items) => {
-                self.delete_array_len(doc_id, items.len() as u32)?;
-                for s in items {
-                    let _ = self.delete_scalar(doc_id, &Value::String(s.clone()));
-                }
-            }
-            Value::ArrayBool(items) => {
-                self.delete_array_len(doc_id, items.len() as u32)?;
-                for b in items {
-                    let _ = self.delete_scalar(doc_id, &Value::Bool(*b));
-                }
-            }
-            Value::ArrayI32(items) => {
-                self.delete_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    let _ = self.delete_scalar(doc_id, &Value::I32(*x));
-                }
-            }
-            Value::ArrayI64(items) => {
-                self.delete_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    let _ = self.delete_scalar(doc_id, &Value::I64(*x));
-                }
-            }
-            Value::ArrayU32(items) => {
-                self.delete_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    let _ = self.delete_scalar(doc_id, &Value::U32(*x));
-                }
-            }
-            Value::ArrayU64(items) => {
-                self.delete_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    let _ = self.delete_scalar(doc_id, &Value::U64(*x));
-                }
-            }
-            Value::ArrayF32(items) => {
-                self.delete_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    let _ = self.delete_scalar(doc_id, &Value::F32(*x));
-                }
-            }
-            Value::ArrayF64(items) => {
-                self.delete_array_len(doc_id, items.len() as u32)?;
-                for x in items {
-                    let _ = self.delete_scalar(doc_id, &Value::F64(*x));
-                }
-            }
-            _ => {}
+            keys.push(rev_key);
         }
         Ok(())
     }

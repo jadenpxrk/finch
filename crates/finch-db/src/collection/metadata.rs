@@ -139,7 +139,7 @@ impl Collection {
 
     pub fn destroy(self) -> ZResult<()> {
         let path = self.path.clone();
-        // Drop self first to release all file handles (redb, lock file, etc.)
+        // Drop self first to release all file handles (fjall, lock file, etc.)
         drop(self);
         fs::remove_dir_all(&path).map_err(|e| Status::io_error(e.to_string()))
     }

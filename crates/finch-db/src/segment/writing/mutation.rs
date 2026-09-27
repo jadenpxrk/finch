@@ -1,42 +1,36 @@
 use super::*;
 
 impl WritingSegment {
+    /// Fails where `insert` would reject a value of `doc`, so a caller can refuse the doc
+    /// before logging it.
+    pub fn check_insert(&self, doc: &Doc) -> ZResult<()> {
+        // Sorted so the reported field does not depend on hash order.
+        let mut indexed: Vec<_> = self.invert_indexes.iter().collect();
+        indexed.sort_by_key(|(field_name, _)| *field_name);
+        for (field_name, idx) in indexed {
+            if let Some(val) = doc.fields.get(field_name).filter(|v| !v.is_null()) {
+                idx.check_value(val)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn insert(&mut self, doc_id: u64, mut doc: Doc) -> ZResult<()> {
         doc.doc_id = doc_id;
 
-        // WAL idempotency: if the same doc_id is replayed, make
-        // the insert effectively idempotent by removing prior index entries.
-        let old_doc: Option<Doc> = {
-            let pos_guard = self.doc_positions.read();
-            match pos_guard.get(&doc_id).copied() {
-                None => None,
-                Some(pos) => {
-                    let docs_guard = self.docs.read();
-                    docs_guard.get(pos).map(|(_, d)| d.clone())
-                }
-            }
-        };
-
-        if let Some(old) = &old_doc {
-            self.remove_invert_entries(old);
+        // WAL replay can repeat a doc_id; drop the earlier copy's index entries first.
+        if let Some(old) = self.get_doc(doc_id) {
+            self.remove_invert_entries(&old)?;
         }
 
+        if let Err(e) = self.index_doc(&doc) {
+            self.remove_vectors(doc_id);
+            self.remove_invert_entries(&doc)?;
+            return Err(e);
+        }
+
+        // The row goes in after the indexes so a failed insert never leaves one behind.
         self.forward_store.insert(doc_id, &doc)?;
-
-        // Update invert indexes
-        for (field_name, idx) in &self.invert_indexes {
-            match doc.fields.get(field_name) {
-                Some(val) if !val.is_null() => {
-                    idx.insert_nonnull_marker(doc_id)?;
-                    idx.insert(doc_id, val)?;
-                }
-                _ => {
-                    idx.insert_null_marker(doc_id)?;
-                }
-            };
-        }
-
-        self.add_vectors(doc_id, &doc);
 
         // Track range
         self.min_doc_id.fetch_min(doc_id, Ordering::Relaxed);
@@ -46,35 +40,51 @@ impl WritingSegment {
         Ok(())
     }
 
-    fn remove_invert_entries(&self, old: &Doc) {
+    fn index_doc(&mut self, doc: &Doc) -> ZResult<()> {
+        for (field_name, idx) in &self.invert_indexes {
+            match doc.fields.get(field_name) {
+                Some(val) if !val.is_null() => {
+                    idx.insert_nonnull_marker(doc.doc_id)?;
+                    idx.insert(doc.doc_id, val)?;
+                }
+                _ => {
+                    idx.insert_null_marker(doc.doc_id)?;
+                }
+            };
+        }
+        self.add_vectors(doc.doc_id, doc)
+    }
+
+    fn remove_invert_entries(&self, old: &Doc) -> ZResult<()> {
         for (field_name, idx) in &self.invert_indexes {
             match old.fields.get(field_name) {
                 Some(v) if !v.is_null() => {
-                    let _ = idx.delete(old.doc_id, v);
-                    let _ = idx.delete_nonnull_marker(old.doc_id);
+                    idx.delete(old.doc_id, v)?;
+                    idx.delete_nonnull_marker(old.doc_id)?;
                 }
                 _ => {
-                    let _ = idx.delete_null_marker(old.doc_id);
+                    idx.delete_null_marker(old.doc_id)?;
                 }
             }
         }
+        Ok(())
     }
 
     // Writing segments keep flat in-memory vector stores.
-    fn add_vectors(&mut self, doc_id: u64, doc: &Doc) {
+    fn add_vectors(&mut self, doc_id: u64, doc: &Doc) -> ZResult<()> {
         for (field, idx) in self.dense_indexes.iter_mut() {
             if let Some(v) = doc.get_vec_f32(field) {
-                let _ = idx.add(doc_id, v);
+                idx.add(doc_id, v)?;
             }
         }
         for (field, idx) in self.binary32_indexes.iter_mut() {
             if let Some(v) = doc.get_vec_u32(field) {
-                let _ = idx.add(doc_id, v);
+                idx.add(doc_id, v)?;
             }
         }
         for (field, idx) in self.binary64_indexes.iter_mut() {
             if let Some(v) = doc.get_vec_u64(field) {
-                let _ = idx.add(doc_id, v);
+                idx.add(doc_id, v)?;
             }
         }
         for (field, idx) in self.sparse_indexes.iter_mut() {
@@ -82,8 +92,24 @@ impl WritingSegment {
                 doc.get_sparse_f32(field).filter(|(i, _)| !i.is_empty())
             {
                 let sv = SparseVector::new(indices.to_vec(), values.to_vec());
-                let _ = idx.add(doc_id, &sv);
+                idx.add(doc_id, &sv)?;
             }
+        }
+        Ok(())
+    }
+
+    fn remove_vectors(&mut self, doc_id: u64) {
+        for idx in self.dense_indexes.values_mut() {
+            idx.remove(doc_id);
+        }
+        for idx in self.binary32_indexes.values_mut() {
+            idx.remove(doc_id);
+        }
+        for idx in self.binary64_indexes.values_mut() {
+            idx.remove(doc_id);
+        }
+        for idx in self.sparse_indexes.values_mut() {
+            idx.remove(doc_id);
         }
     }
 
@@ -110,21 +136,8 @@ impl WritingSegment {
     pub fn upsert(&mut self, doc_id: u64, doc: Doc, old_doc: Option<Doc>) -> ZResult<()> {
         // Remove old invert index entries
         if let Some(old) = old_doc {
-            self.remove_invert_entries(&old);
-
-            // Remove old vector entries (writing segment keeps flat vector stores in memory).
-            for idx in self.dense_indexes.values_mut() {
-                idx.remove(doc_id);
-            }
-            for idx in self.binary32_indexes.values_mut() {
-                idx.remove(doc_id);
-            }
-            for idx in self.binary64_indexes.values_mut() {
-                idx.remove(doc_id);
-            }
-            for idx in self.sparse_indexes.values_mut() {
-                idx.remove(doc_id);
-            }
+            self.remove_invert_entries(&old)?;
+            self.remove_vectors(doc_id);
         }
         self.insert(doc_id, doc)
     }

@@ -1085,7 +1085,9 @@ impl MemoryStore {
         })?;
         let by_id = docs
             .iter()
-            .filter_map(|doc| claim_from_doc(doc).ok())
+            .map(|doc| claim_from_doc(doc))
+            .collect::<ZResult<Vec<_>>>()?
+            .into_iter()
             .filter(|claim| {
                 let on_slot = claim
                     .slot_id
@@ -1129,7 +1131,9 @@ impl MemoryStore {
         )?;
         let by_id = docs
             .iter()
-            .filter_map(|doc| claim_from_doc(doc).ok())
+            .map(|doc| claim_from_doc(doc))
+            .collect::<ZResult<Vec<_>>>()?
+            .into_iter()
             .filter(|claim| {
                 claim.scope.matches_filter(scope)
                     && claim_has_subject(claim, subjects)

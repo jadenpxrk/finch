@@ -27,10 +27,12 @@ impl Collection {
             ));
         }
 
-        let doc = self
-            .fetch(vec![pk.clone()])?
-            .remove(&pk)
-            .ok_or_else(|| Status::invalid_argument("query validate failed: id not found"))?;
+        // The query already holds the delete store, so `fetch` would lock it a second time.
+        let doc = match self.id_map.get(&pk)? {
+            Some(doc_id) => self.fetch_by_ids(&[doc_id])?.remove(&doc_id),
+            None => None,
+        }
+        .ok_or_else(|| Status::invalid_argument("query validate failed: id not found"))?;
 
         let field_schema = schema.get_field(&field).ok_or_else(|| {
             Status::invalid_argument(format!(
