@@ -31,8 +31,10 @@ impl Collection {
             &delete_store.bitmap(),
             usize::MAX,
         )?;
+        // Held through materialization so a concurrent column rename cannot split schema and data.
+        let docs = self.materialize_filter_only_results(&matched_ids, &query, &output_selection);
         drop(delete_store);
-        self.materialize_filter_only_results(&matched_ids, &query, &output_selection)
+        docs
     }
 
     fn collect_filter_only_doc_ids(

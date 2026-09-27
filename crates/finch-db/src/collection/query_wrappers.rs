@@ -29,7 +29,8 @@ impl Collection {
     /// `SELECT <fields|*> FROM <table> [WHERE <expr>] [ORDER BY ...] [LIMIT n]`
     ///
     /// Notes:
-    /// - `ORDER BY` is applied to the returned result set (after vector recall, if any).
+    /// - `ORDER BY` without a vector condition sorts every matching row before `LIMIT`;
+    ///   with one, it orders the vector recall result set.
     /// - Vector search is supported via a single vector condition in WHERE:
     ///   `<vector_field> = [1,2,3]` (or `[[1,2,3]]`), which must not be under an `OR` ancestor.
     ///   Multi-row matrix literals (e.g. `[[...],[...]]`) are interpreted as a single
@@ -37,7 +38,11 @@ impl Collection {
     pub fn query_sql(&self, sql: &str) -> ZResult<Vec<Arc<Doc>>> {
         let version = self.cur_version();
         let (query, projection) = SqlQueryPlan::prepare(sql, &version.schema)?.into_parts();
-        let docs = self.query(query)?;
+        let docs = if projection.sorts_all_matches() {
+            self.scan_filter_only(query)?
+        } else {
+            self.query(query)?
+        };
 
         if projection.needs_projection() {
             let row_locator = self.row_locator();

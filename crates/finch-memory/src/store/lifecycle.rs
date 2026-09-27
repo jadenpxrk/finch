@@ -532,9 +532,10 @@ pub(super) fn claim_matches_selector(claim: &ClaimRecord, selector: &str) -> boo
 }
 
 pub(super) fn resolve_current_claims(claims: Vec<ClaimRecord>, limit: usize) -> Vec<ClaimRecord> {
-    let mut by_key = BTreeMap::<String, ClaimRecord>::new();
+    // Exact scope is part of the key: one scope's newer claim must not hide another scope's.
+    let mut by_key = BTreeMap::<(String, MemoryScope), ClaimRecord>::new();
     for claim in claims {
-        let key = claim_projection_key(&claim);
+        let key = (claim_projection_key(&claim), claim.scope.clone());
         by_key
             .entry(key)
             .and_modify(|current| {

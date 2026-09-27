@@ -285,15 +285,16 @@ pub fn create_manual_claim(input: ManualClaimInput) -> ClaimRecord {
             .collect::<Vec<_>>(),
     );
     let id = input.id.unwrap_or_else(|| {
-        stable_memory_id(
-            "claim",
-            &[
-                input.scope.space_id.as_str(),
-                input.claim_text.as_str(),
-                &input.observed_at_ms.to_string(),
-                &source_hash,
-            ],
-        )
+        let observed_at_ms = input.observed_at_ms.to_string();
+        let scope_hash = narrower_scope_hash(&input.scope);
+        let mut parts = vec![
+            input.scope.space_id.as_str(),
+            input.claim_text.as_str(),
+            &observed_at_ms,
+            &source_hash,
+        ];
+        parts.extend(scope_hash.as_deref());
+        stable_memory_id("claim", &parts)
     });
     ClaimRecord {
         id,

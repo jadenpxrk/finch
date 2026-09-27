@@ -16,6 +16,7 @@ use crate::system_projection::{resolve_row_id, SystemColumnOutputs};
 use crate::vector_literal::{
     parse_vector_literal_f32, parse_vector_literal_u32, parse_vector_literal_u64,
 };
+use crate::vector_normalization::has_query_vector_payload;
 
 const DEFAULT_SQL_TOPN: usize = 20;
 
@@ -59,7 +60,7 @@ impl SqlQueryPlan {
             });
 
         let order_by = prepare_order_by(schema, &select)?;
-        let projection = SqlProjection::prepare(schema, &select, order_by)?;
+        let mut projection = SqlProjection::prepare(schema, &select, order_by)?;
 
         let mut query = VectorQuery {
             topk,
@@ -78,6 +79,9 @@ impl SqlQueryPlan {
         };
 
         apply_vector_condition(schema, vector_cond, &mut query)?;
+        if !projection.order_by.is_empty() && !has_query_vector_payload(&query) {
+            projection.limit_after_sort = Some(topk);
+        }
 
         Ok(Self { query, projection })
     }
@@ -181,6 +185,8 @@ pub(crate) struct SqlProjection {
     system_outputs: SystemColumnOutputs,
     expose_doc_id_member: bool,
     order_by: Vec<(OrderByField, bool)>,
+    /// Set when a scalar ORDER BY must see every matching row before LIMIT applies.
+    limit_after_sort: Option<usize>,
 }
 
 impl SqlProjection {
@@ -230,7 +236,12 @@ impl SqlProjection {
             system_outputs,
             expose_doc_id_member,
             order_by: order_by.keys,
+            limit_after_sort: None,
         })
+    }
+
+    pub(crate) fn sorts_all_matches(&self) -> bool {
+        self.limit_after_sort.is_some()
     }
 
     pub(crate) fn needs_projection(&self) -> bool {
@@ -266,6 +277,9 @@ impl SqlProjection {
                 self.cmp_order_keys(left_keys, right_keys)
                     .then_with(|| left_doc.pk.cmp(&right_doc.pk))
             });
+        }
+        if let Some(limit) = self.limit_after_sort {
+            out.truncate(limit);
         }
 
         Ok(out.into_iter().map(|(_, doc)| doc).collect())

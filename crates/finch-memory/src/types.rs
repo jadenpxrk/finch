@@ -6,7 +6,7 @@ use crate::state::BiTemporalQuery;
 /// Caller-owned ID. Use UUIDv7/ULID or another sortable unique string.
 pub type MemoryId = String;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct MemoryScope {
     pub space_id: String,
     pub tenant_id: Option<String>,

@@ -344,6 +344,8 @@ impl Collection {
         rewritten: Option<RewrittenSegments>,
         new_writing: WritingSegment,
     ) -> ZResult<()> {
+        // Readers hold this lock, so they never pair the new schema with the old segments.
+        let _published = self.delete_store.write();
         self.commit_manifest_with_prepared(
             new_version,
             (new_writing, rewritten),
