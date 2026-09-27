@@ -1,0 +1,22 @@
+[package]
+name = "finch-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+finch-types.workspace = true
+half.workspace = true
+thiserror.workspace = true
+rayon.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+byteorder.workspace = true
+tracing.workspace = true
+memmap2.workspace = true
+
+[features]
+default = []
+simd = []
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+# no extra deps needed; std::arch is built-in

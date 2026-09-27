@@ -1,0 +1,12 @@
+{
+  "name": "@finch/finch",
+  "version": "0.1.0",
+  "description": "Node.js bindings for finch vector database",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "cargo-cp-artifact -nc index.node -- cargo build --message-format=json-render-diagnostics",
+    "build-release": "cargo-cp-artifact -nc index.node -- cargo build --message-format=json-render-diagnostics --release"
+  },
+  "license": "Apache-2.0"
+}
