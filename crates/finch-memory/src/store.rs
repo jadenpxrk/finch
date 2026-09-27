@@ -1227,8 +1227,27 @@ fn sql_or_eq_list<'a>(field: &str, items: impl Iterator<Item = &'a str>) -> Stri
 }
 
 // The filter dialect escapes quotes with a backslash and rejects SQL quote doubling.
+// Backslashes that reach a quote or the end of the literal are read in pairs by the filter parser.
 fn sql_escape(value: &str) -> String {
-    value.replace('\'', "\\'")
+    let mut out = String::with_capacity(value.len());
+    let mut run = 0;
+    for c in value.chars() {
+        match c {
+            '\\' => run += 1,
+            '\'' => {
+                out.push_str(&"\\".repeat(2 * run + 1));
+                out.push('\'');
+                run = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(run));
+                out.push(c);
+                run = 0;
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(2 * run));
+    out
 }
 
 fn required_doc_string(doc: &Doc, field: &str) -> ZResult<String> {

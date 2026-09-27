@@ -369,6 +369,12 @@ impl BoundExpr {
             }
             BoundExpr::Div(a, b) => {
                 let (x, y) = pair(a, b)?;
+                // Exact integer quotients stay integers so values beyond 2^53 are not rounded.
+                if let (Num::Int(x), Num::Int(y)) = (x, y) {
+                    if x.checked_rem(y) == Some(0) {
+                        return Some(Num::Int(x / y));
+                    }
+                }
                 let y = y.as_f64();
                 if y == 0.0 {
                     return None;

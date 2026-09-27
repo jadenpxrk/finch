@@ -433,6 +433,23 @@ impl EscapeRewriter<'_> {
         next_is(self.chars, i, want)
     }
 
+    /// A backslash run that reaches `quote` reads in pairs like the lexer, so a literal can end in a backslash.
+    fn step_backslash_run_before_quote(&mut self, i: usize, quote: char) -> Option<usize> {
+        let end = scan_while(self.chars, i, |c| c == '\\');
+        let run = end - i;
+        if run < 2 || self.chars.get(end) != Some(&quote) {
+            return None;
+        }
+        if run.is_multiple_of(2) {
+            self.out.push_str(&"\\\\".repeat(run / 2));
+            return Some(end);
+        }
+        // One extra backslash because string conversion folds `\'` and `\"` into the bare quote.
+        self.out.push_str(&"\\\\".repeat(run / 2 + 1));
+        self.out.push_str(if quote == '\'' { "''" } else { "\"" });
+        Some(end + 1)
+    }
+
     fn step_normal(&mut self, i: usize) -> usize {
         let c = self.chars[i];
         if c == '\'' {
@@ -452,6 +469,9 @@ impl EscapeRewriter<'_> {
     fn step_single(&mut self, i: usize) -> usize {
         let c = self.chars[i];
         if c == '\\' {
+            if let Some(next) = self.step_backslash_run_before_quote(i, '\'') {
+                return next;
+            }
             if self.next_is(i, '\'') {
                 self.out.push_str("''");
                 return i + 2;
@@ -483,6 +503,9 @@ impl EscapeRewriter<'_> {
     fn step_double_to_single(&mut self, i: usize) -> usize {
         let c = self.chars[i];
         if c == '\\' {
+            if let Some(next) = self.step_backslash_run_before_quote(i, '"') {
+                return next;
+            }
             if self.next_is(i, '"') {
                 self.out.push('"');
                 return i + 2;

@@ -234,15 +234,16 @@ pub fn add_correction(input: CorrectionInput, created_at_ms: i64) -> CorrectionR
             .collect::<Vec<_>>(),
     );
     let id = input.id.unwrap_or_else(|| {
-        stable_memory_id(
-            "corr",
-            &[
-                input.scope.space_id.as_str(),
-                input.target_type.as_str(),
-                &target_hash,
-                &created_at_ms.to_string(),
-            ],
-        )
+        let created_at = created_at_ms.to_string();
+        let mut parts = vec![
+            input.scope.space_id.as_str(),
+            input.target_type.as_str(),
+            &target_hash,
+            &created_at,
+        ];
+        // Appended only when set so corrections without a selector keep their existing IDs.
+        parts.extend(input.target_selector.as_deref());
+        stable_memory_id("corr", &parts)
     });
     CorrectionRecord {
         id,

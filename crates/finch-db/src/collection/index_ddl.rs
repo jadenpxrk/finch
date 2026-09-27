@@ -267,6 +267,8 @@ impl Collection {
 
         let version = self.cur_version();
         let new_version = index_schema_version(&version, field, params.clone(), is_invert);
+        // An empty collection has no segment builder to reject a mismatched index kind.
+        new_version.schema.validate()?;
         let (old_paths, new_paths) = if is_invert {
             (Vec::new(), Vec::new())
         } else {

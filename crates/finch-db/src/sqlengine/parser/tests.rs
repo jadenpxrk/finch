@@ -351,6 +351,24 @@ fn test_parse_string_backslash_quote_escape_matches_reference() {
 }
 
 #[test]
+fn test_parse_string_backslash_run_before_quote_reads_in_pairs() {
+    let cases = [
+        (r"name = 'a\\'", r"a\"),
+        (r#"name = "a\\""#, r"a\"),
+        (r"name = 'a\\\\\'b'", r"a\\'b"),
+        (r"name = 'a\\\'b'", r"a\'b"),
+        (r"name = 'a\\b'", r"a\\b"),
+    ];
+    for (sql, want) in cases {
+        let expr = parse_filter(sql).unwrap();
+        assert!(
+            matches!(&expr, FilterExpr::Compare { value: Value::String(s), .. } if s == want),
+            "{sql} parsed as {expr:?}"
+        );
+    }
+}
+
+#[test]
 fn test_parse_string_sql_standard_quote_doubling_is_rejected() {
     // only backslash escapes are supported inside strings.
     // SQL-standard quote doubling (e.g. 'it''s') is not accepted by the lexer.

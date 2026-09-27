@@ -61,6 +61,27 @@ fn state_scan(limit: usize, at_ms: Option<i64>) -> StateRecordScan {
 }
 
 #[test]
+fn sql_escape_round_trips_backslashes_and_quotes_through_the_filter_parser() {
+    for value in [
+        r"C:\notes\",
+        r"a\b",
+        r"a\\b",
+        r"it's",
+        r"a\'b",
+        r"a\\'b",
+        r"\",
+        r"\\",
+    ] {
+        let sql = format!("project_id = '{}'", sql_escape(value));
+        let expr = finch_db::sqlengine::parse_filter(&sql).unwrap();
+        assert!(
+            matches!(&expr, finch_db::sqlengine::FilterExpr::Compare { value: Value::String(s), .. } if s == value),
+            "{sql} parsed as {expr:?}"
+        );
+    }
+}
+
+#[test]
 fn shared_state_requires_a_non_assistant_source() {
     assert_eq!(
         crate::shared_state_evidence_role([ActorKind::Assistant]),
@@ -181,6 +202,7 @@ mod review_round_5;
 mod review_round_6;
 mod review_round_7;
 mod review_round_8;
+mod review_round_9;
 mod rule_projection;
 mod rules;
 mod state_protocol;
