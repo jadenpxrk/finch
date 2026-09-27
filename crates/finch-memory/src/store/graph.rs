@@ -157,6 +157,7 @@ impl MemoryStore {
                 && interval_holds_at(alias.valid_from_ms, alias.valid_to_ms, at_ms)
         });
         aliases.sort_by(|a, b| a.id.cmp(&b.id));
+        aliases.truncate(limit);
         Ok(aliases)
     }
 

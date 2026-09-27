@@ -545,3 +545,61 @@ fn generated_edge_ids_stay_distinct_between_tenants() {
     }
     let _ = std::fs::remove_dir_all(&store.path);
 }
+
+#[test]
+fn slot_alias_scan_applies_its_limit() {
+    // The public slot-alias read returned every alias in scope, whatever limit the caller asked for.
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("slot_alias_scan_limit");
+    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let scope = scope();
+    for (tag, predicate) in [("owner", "billing owner"), ("lead", "billing lead")] {
+        let target = make_claim(
+            &scope,
+            &format!("claim_target_{tag}"),
+            "project",
+            "billing contact",
+            Some("Alice"),
+            10,
+            (ClaimKind::Fact, ClaimPolarity::Affirmative),
+        );
+        let evidence = make_claim(
+            &scope,
+            &format!("claim_evidence_{tag}"),
+            "schema",
+            "equivalence",
+            Some(&format!("{predicate} = billing contact")),
+            11,
+            (ClaimKind::Fact, ClaimPolarity::Affirmative),
+        );
+        store.append_claim(&target, None).unwrap();
+        store.append_claim(&evidence, None).unwrap();
+        store
+            .add_slot_alias(
+                SlotAliasInput {
+                    id: None,
+                    scope: scope.clone(),
+                    visibility: Visibility::Private,
+                    policy_tags: Vec::new(),
+                    alias_subject: "project".to_string(),
+                    alias_predicate: predicate.to_string(),
+                    canonical_slot_id: None,
+                    target_claim_id: Some(target.id),
+                    source_claim_ids: vec![evidence.id],
+                    valid_from_ms: Some(11),
+                    valid_to_ms: None,
+                },
+                11,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        store.scan_slot_aliases(&scope, 10, Some(20)).unwrap().len(),
+        2
+    );
+    assert_eq!(
+        store.scan_slot_aliases(&scope, 1, Some(20)).unwrap().len(),
+        1
+    );
+    let _ = std::fs::remove_dir_all(&store.path);
+}
