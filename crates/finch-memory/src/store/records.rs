@@ -133,12 +133,23 @@ impl MemoryStore {
         Ok(profile)
     }
 
+    /// Merges into any stored entity with the same id under the mutation lock, so concurrent
+    /// additions cannot overwrite each other's provenance.
     pub(crate) fn append_entity(
         &self,
         record: &EntityRecord,
         embedding: Option<&[f32]>,
-    ) -> ZResult<()> {
+    ) -> ZResult<EntityRecord> {
         let _mutation_guard = self.lock_state_mutation();
+        let mut record = record.clone();
+        if let Some(mut existing) = self
+            .entities_by_ids(&record.scope, std::slice::from_ref(&record.id))?
+            .into_iter()
+            .next()
+        {
+            record.canonical_name = std::mem::take(&mut existing.canonical_name);
+            record.absorb_provenance(existing);
+        }
         #[cfg(not(test))]
         if !record.aliases.is_empty() && record.source_claim_ids.is_empty() {
             return Err(Status::invalid_argument(
@@ -157,15 +168,15 @@ impl MemoryStore {
                 "entity source claims must exist in the entity scope",
             ));
         }
-        self.ensure_entity_ids_owned_by_scope(std::slice::from_ref(record))?;
+        self.ensure_entity_ids_owned_by_scope(std::slice::from_ref(&record))?;
         upsert_many(
             &self.entities,
-            vec![entity_doc(record, embedding).map_err(json_error)?],
+            vec![entity_doc(&record, embedding).map_err(json_error)?],
         )?;
-        self.upsert_entity_aliases(std::slice::from_ref(record), system_time_ms())?;
+        self.upsert_entity_aliases(std::slice::from_ref(&record), system_time_ms())?;
         self.rebind_rules_for_scope(&record.scope, None)?;
         self.refresh_state_projection(&record.scope, None)?;
-        Ok(())
+        Ok(record)
     }
 
     pub fn add_entity(
@@ -173,17 +184,7 @@ impl MemoryStore {
         input: EntityInput,
         embedding: Option<&[f32]>,
     ) -> ZResult<EntityRecord> {
-        let mut entity = create_entity(input);
-        if let Some(mut existing) = self
-            .entities_by_ids(&entity.scope, std::slice::from_ref(&entity.id))?
-            .into_iter()
-            .next()
-        {
-            entity.canonical_name = std::mem::take(&mut existing.canonical_name);
-            entity.absorb_provenance(existing);
-        }
-        self.append_entity(&entity, embedding)?;
-        Ok(entity)
+        self.append_entity(&create_entity(input), embedding)
     }
 
     pub(crate) fn append_edge(&self, record: &EdgeRecord) -> ZResult<()> {

@@ -7,7 +7,7 @@ use finch_types::{Status, ZResult};
 
 #[derive(Debug, Clone)]
 pub enum Expr {
-    Number(f64),
+    Number(Num),
     Column(String),
     Neg(Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
@@ -19,7 +19,7 @@ pub enum Expr {
 #[derive(Debug, Clone)]
 enum Token {
     Ident(String),
-    Number(f64),
+    Number(Num),
     Plus,
     Minus,
     Star,
@@ -47,13 +47,7 @@ fn tokenize(s: &str) -> ZResult<Vec<Token>> {
         if c.is_ascii_digit() {
             i = scan_number_end(&chars, start);
             let text: String = chars[start..i].iter().collect();
-            let v = text.parse::<f64>().map_err(|_| {
-                Status::invalid_argument(format!(
-                    "invalid numeric literal in expression: '{}'",
-                    text
-                ))
-            })?;
-            out.push(Token::Number(v));
+            out.push(Token::Number(number_literal(&text)?));
         } else if c.is_ascii_alphabetic() || c == '_' {
             // DDL arithmetic expression identifiers do not accept '-'.
             i = scan_digits_or(&chars, start + 1, |c| c.is_ascii_alphabetic() || c == '_');
@@ -66,6 +60,16 @@ fn tokenize(s: &str) -> ZResult<Vec<Token>> {
         }
     }
     Ok(out)
+}
+
+// Digit-only literals parse as integers so values beyond 2^53 are not rounded through f64.
+fn number_literal(text: &str) -> ZResult<Num> {
+    if let Ok(v) = text.parse::<i128>() {
+        return Ok(Num::Int(v));
+    }
+    text.parse::<f64>().map(Num::literal).map_err(|_| {
+        Status::invalid_argument(format!("invalid numeric literal in expression: '{}'", text))
+    })
 }
 
 fn symbol_token(c: char) -> Option<Token> {
@@ -212,7 +216,7 @@ pub fn parse_expression(s: &str) -> ZResult<Expr> {
 
 #[derive(Debug, Clone)]
 pub enum BoundExpr {
-    Number(f64),
+    Number(Num),
     Column { index: usize, dtype: ArrowType },
     Neg(Box<BoundExpr>),
     Add(Box<BoundExpr>, Box<BoundExpr>),
@@ -345,7 +349,7 @@ impl BoundExpr {
     pub fn eval(&self, batch: &RecordBatch, row: usize) -> Option<Num> {
         let pair = |a: &BoundExpr, b: &BoundExpr| Some((a.eval(batch, row)?, b.eval(batch, row)?));
         match self {
-            BoundExpr::Number(v) => Some(Num::literal(*v)),
+            BoundExpr::Number(v) => Some(*v),
             BoundExpr::Column { index, dtype } => {
                 let col = batch.column(*index);
                 numeric_value(col.as_ref(), row, dtype)
@@ -389,7 +393,7 @@ mod tests {
     #[test]
     fn test_parse_expression_accepts_unary_plus() {
         let e = parse_expression("+123").unwrap();
-        assert!(matches!(e, Expr::Number(v) if (v - 123.0).abs() < 1e-12));
+        assert!(matches!(e, Expr::Number(Num::Int(123))));
     }
 
     #[test]
