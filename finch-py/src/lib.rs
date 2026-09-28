@@ -33,14 +33,22 @@ impl From<pyo3::DowncastError<'_, '_>> for BindingError {
 
 pub(crate) type PyResult<T> = Result<T, BindingError>;
 
+/// The raised exception carries the finch status code as its `code` attribute.
 pub(crate) fn to_py_err(e: finch_types::Status) -> BindingError {
     use pyo3::exceptions::{PyOSError, PyPermissionError, PyRuntimeError, PyValueError};
-    BindingError(match e.code {
+    let err = match e.code {
         finch_types::StatusCode::InvalidArgument => PyValueError::new_err(e.to_string()),
         finch_types::StatusCode::PermissionDenied => PyPermissionError::new_err(e.to_string()),
         finch_types::StatusCode::IoError => PyOSError::new_err(e.to_string()),
         _ => PyRuntimeError::new_err(e.to_string()),
-    })
+    };
+    let code = types::PyStatusCode::from(e.code);
+    Python::with_gil(
+        |py| match err.value_bound(py).setattr("code", code.into_py(py)) {
+            Ok(()) => BindingError(err),
+            Err(set_err) => BindingError(set_err),
+        },
+    )
 }
 
 mod collection;
@@ -195,18 +203,23 @@ fn add_collection_api(m: &Bound<'_, PyModule>) -> pyo3::PyResult<()> {
 #[pyfunction(name = "create_and_open")]
 #[pyo3(signature = (path, schema, options=None))]
 fn create_and_open(
+    py: Python<'_>,
     path: &str,
     schema: &PyCollectionSchema,
     options: Option<&PyCollectionOption>,
 ) -> PyResult<PyCollection> {
-    collection::create_and_open_impl(path, schema, options)
+    collection::create_and_open_impl(py, path, schema, options)
 }
 
 /// Open an existing collection
 #[pyfunction(name = "open")]
 #[pyo3(signature = (path, option))]
-fn open_collection(path: &str, option: &PyCollectionOption) -> PyResult<PyCollection> {
-    collection::open_impl(path, option)
+fn open_collection(
+    py: Python<'_>,
+    path: &str,
+    option: &PyCollectionOption,
+) -> PyResult<PyCollection> {
+    collection::open_impl(py, path, option)
 }
 
 /// Initialize Finch global config (reference parity). This is best called once

@@ -32,6 +32,18 @@ from .schema import CollectionSchema, CollectionStats, FieldSchema
 __all__ = ["Collection"]
 
 
+def _write(call, items: list, is_single: bool) -> list[Status]:
+    """Runs a batch write; a collection-level error raises, except for a single item."""
+    try:
+        return call(items)
+    except Exception as e:
+        # Reference parity: a single-item write reports the error as that item's status.
+        code = getattr(e, "code", None)
+        if not is_single or code is None:
+            raise
+        return [Status(code, str(e))]
+
+
 class Collection:
     def __init__(self, obj: _CoreCollection):
         self._obj = obj
@@ -275,7 +287,7 @@ class Collection:
         is_single = isinstance(docs, Doc)
         doc_list = [docs] if is_single else docs
         core_docs = [convert_to_core_doc(doc, self.schema) for doc in doc_list]
-        results = self._obj.insert(core_docs)
+        results = _write(self._obj.insert, core_docs, is_single)
         if is_single and results and not results[0].ok() and results[0].code() == StatusCode.INVALID_ARGUMENT:
             raise ValueError(results[0].message())
         return results[0] if is_single else results
@@ -310,14 +322,14 @@ class Collection:
         if full_idxs:
             full_docs = [doc_list[i] for i in full_idxs]
             full_core = [convert_to_core_doc(d, self.schema) for d in full_docs]
-            full_res = self._obj.upsert(full_core)
+            full_res = _write(self._obj.upsert, full_core, is_single)
             for j, i in enumerate(full_idxs):
                 results[i] = full_res[j]
 
         if patch_idxs:
             patch_docs = [doc_list[i] for i in patch_idxs]
             patch_core = [convert_to_core_doc(d, self.schema) for d in patch_docs]
-            patch_res = self._obj.update(patch_core)
+            patch_res = _write(self._obj.update, patch_core, is_single)
             for j, i in enumerate(patch_idxs):
                 results[i] = patch_res[j]
 
@@ -329,7 +341,7 @@ class Collection:
         is_single = isinstance(docs, Doc)
         doc_list = [docs] if is_single else docs
         core_docs = [convert_to_core_doc(doc, self.schema) for doc in doc_list]
-        results = self._obj.update(core_docs)
+        results = _write(self._obj.update, core_docs, is_single)
         if is_single and results and not results[0].ok() and results[0].code() == StatusCode.INVALID_ARGUMENT:
             raise ValueError(results[0].message())
         return results[0] if is_single else results
@@ -337,7 +349,7 @@ class Collection:
     def delete(self, ids: Union[str, list[str]]) -> Union[Status, list[Status]]:
         is_single = isinstance(ids, str)
         id_list = [ids] if is_single else ids
-        results = self._obj.delete(id_list)
+        results = _write(self._obj.delete, id_list, is_single)
         return results[0] if is_single else results
 
     def delete_by_filter(self, filter: str) -> None:

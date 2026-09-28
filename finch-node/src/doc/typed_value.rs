@@ -50,15 +50,15 @@ pub(super) fn json_to_typed_value(v: Json, dt: D) -> Result<V> {
         | D::VectorFp64
         | D::VectorInt4
         | D::VectorInt8
-        | D::VectorInt16
-        | D::VectorBool
-        | D::VectorInt32
-        | D::VectorInt64
-        | D::VectorUint32
-        | D::VectorUint64 => {
+        | D::VectorInt16 => {
             const EXPECTED: &str = "vector (number array)";
             Ok(V::VecF32(json_array(v, EXPECTED, |it| {
                 json_f32(&it, EXPECTED)
+            })?))
+        }
+        D::VectorBool | D::VectorInt32 | D::VectorInt64 | D::VectorUint32 | D::VectorUint64 => {
+            Ok(V::VecF32(json_array(v, "vector (integer array)", |it| {
+                json_exact_int_f32(&it, dt)
             })?))
         }
         D::SparseFp16 | D::SparseFp32 => json_to_sparse(v),
@@ -389,6 +389,26 @@ fn json_i32(it: &Json) -> Result<i32> {
         return Err(napi::Error::from_reason("i32 out of range"));
     }
     Ok(x as i32)
+}
+
+// These vectors are stored as f32, which holds an integer exactly only up to 2^24 in magnitude.
+fn json_exact_int_f32(it: &Json, dt: D) -> Result<f32> {
+    const MAX_EXACT: i64 = 1 << 24;
+    let (min, max) = match dt {
+        D::VectorBool => (0, 1),
+        D::VectorUint32 | D::VectorUint64 => (0, MAX_EXACT),
+        _ => (-MAX_EXACT, MAX_EXACT),
+    };
+    let x = match it {
+        Json::Bool(b) if dt == D::VectorBool => Some(i64::from(*b)),
+        _ => num_i64(it),
+    };
+    match x {
+        Some(x) if (min..=max).contains(&x) => Ok(x as f32),
+        _ => Err(napi::Error::from_reason(format!(
+            "invalid value: {dt:?} element {it} must be an integer in [{min}, {max}], the range stored exactly"
+        ))),
+    }
 }
 
 fn json_f32(it: &Json, expected: &str) -> Result<f32> {

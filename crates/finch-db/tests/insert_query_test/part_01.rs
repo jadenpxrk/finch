@@ -445,9 +445,13 @@ fn test_vectorquery_output_fields_support_system_columns() {
 fn test_sql_accepts_keyword_field_names_and_scalar_aliases() {
     let path = temp_dir("sql_keyword_ident_alias");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
-        .with_field(FieldSchema::new("or", DataType::Int64))
-        .with_field(FieldSchema::new("label", DataType::String));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        )
+        .with_field(FieldSchema::new("or", DataType::Int64).nullable())
+        .with_field(FieldSchema::new("label", DataType::String).nullable());
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let statuses = col
@@ -546,9 +550,13 @@ fn test_sql_and_filter_accept_leading_digit_and_dash_identifiers() {
     // `1collection` and `1-dash_score_field` in filters.
     let path = temp_dir("sql_leading_digit_dash_ident");
     let schema = CollectionSchema::new("1collection")
-        .with_field(FieldSchema::new("name", DataType::Uint32))
-        .with_field(FieldSchema::new("1-dash_score_field", DataType::String))
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(2));
+        .with_field(FieldSchema::new("name", DataType::Uint32).nullable())
+        .with_field(FieldSchema::new("1-dash_score_field", DataType::String).nullable())
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(2),
+        );
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let statuses = col
@@ -602,9 +610,13 @@ fn test_sql_and_filter_accept_leading_digit_and_dash_identifiers() {
 fn test_sql_order_by_sorts_and_does_not_leak_hidden_fetch_fields() {
     let path = temp_dir("sql_order_by");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
-        .with_field(FieldSchema::new("n", DataType::Int64))
-        .with_field(FieldSchema::new("label", DataType::String));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        )
+        .with_field(FieldSchema::new("n", DataType::Int64).nullable())
+        .with_field(FieldSchema::new("label", DataType::String).nullable());
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let statuses = col

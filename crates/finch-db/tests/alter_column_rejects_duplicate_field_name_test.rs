@@ -10,7 +10,7 @@ fn test_alter_column_rejects_duplicate_name() {
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
     col.add_column(
-        FieldSchema::new("x", DataType::Int32),
+        FieldSchema::new("x", DataType::Int32).nullable(),
         AddColumnOptions::default(),
     )
     .unwrap();

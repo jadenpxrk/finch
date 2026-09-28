@@ -6,10 +6,19 @@ fn test_filter_only_query_like_semantics_match_reference() {
 
     let path = temp_dir("filter_only_like");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("name", DataType::String).not_null())
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(
+            FieldSchema::new("name", DataType::String)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_name", DataType::String)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams {
                     enable_range_optimization: false,
@@ -18,6 +27,7 @@ fn test_filter_only_query_like_semantics_match_reference() {
         )
         .with_field(
             FieldSchema::new("extended_invert_name", DataType::String)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams {
                     enable_range_optimization: false,
@@ -258,9 +268,13 @@ fn test_filter_only_query_like_semantics_match_reference() {
 fn test_query_filter_unsupported_sql_constructs_are_syntax_errors() {
     let path = temp_dir("filter_unsupported_sql_constructs");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("name", DataType::String))
-        .with_field(FieldSchema::new("age", DataType::Int32));
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(FieldSchema::new("name", DataType::String).nullable())
+        .with_field(FieldSchema::new("age", DataType::Int32).nullable());
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
@@ -312,14 +326,18 @@ fn test_query_filter_unsupported_sql_constructs_are_syntax_errors() {
 fn test_filter_only_query_contain_all_semantics_match_reference() {
     let path = temp_dir("filter_only_contain_all");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("str_array", DataType::ArrayString))
-        .with_field(FieldSchema::new("i32_array", DataType::ArrayInt32))
-        .with_field(FieldSchema::new("i64_array", DataType::ArrayInt64))
-        .with_field(FieldSchema::new("u32_array", DataType::ArrayUint32))
-        .with_field(FieldSchema::new("u64_array", DataType::ArrayUint64))
-        .with_field(FieldSchema::new("fp32_array", DataType::ArrayFp32))
-        .with_field(FieldSchema::new("fp64_array", DataType::ArrayFp64));
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(FieldSchema::new("str_array", DataType::ArrayString).nullable())
+        .with_field(FieldSchema::new("i32_array", DataType::ArrayInt32).nullable())
+        .with_field(FieldSchema::new("i64_array", DataType::ArrayInt64).nullable())
+        .with_field(FieldSchema::new("u32_array", DataType::ArrayUint32).nullable())
+        .with_field(FieldSchema::new("u64_array", DataType::ArrayUint64).nullable())
+        .with_field(FieldSchema::new("fp32_array", DataType::ArrayFp32).nullable())
+        .with_field(FieldSchema::new("fp64_array", DataType::ArrayFp64).nullable());
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
@@ -464,8 +482,12 @@ fn test_filter_numeric_literals_are_normalized_no_f64_rounding() {
     let path = temp_dir("filter_normalize_u64");
 
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("x", DataType::Uint64));
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(FieldSchema::new("x", DataType::Uint64).nullable());
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
     // Values around 2^53 to catch precision loss when comparing via f64.
@@ -506,10 +528,19 @@ fn test_filter_only_query_is_null_semantics_match_reference() {
 
     let path = temp_dir("filter_only_is_null");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("age", DataType::Int32).not_null())
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(
+            FieldSchema::new("age", DataType::Int32)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("optional_age", DataType::Int32)
+                .nullable()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         );
 
@@ -576,9 +607,21 @@ fn test_filter_only_query_is_null_semantics_match_reference() {
 fn test_filter_only_query_str_in_and_not_in_semantics_match_reference() {
     let path = temp_dir("filter_only_str_in_not_in");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("id", DataType::Int64).not_null())
-        .with_field(FieldSchema::new("name", DataType::String).not_null());
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(
+            FieldSchema::new("id", DataType::Int64)
+                .nullable()
+                .not_null(),
+        )
+        .with_field(
+            FieldSchema::new("name", DataType::String)
+                .nullable()
+                .not_null(),
+        );
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
@@ -642,10 +685,19 @@ fn test_filter_only_query_str_in_and_not_in_semantics_match_reference() {
 fn test_filter_only_query_invert_str_in_and_not_in_semantics_match_reference() {
     let path = temp_dir("filter_only_invert_str_in_not_in");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("id", DataType::Int64).not_null())
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(
+            FieldSchema::new("id", DataType::Int64)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_name", DataType::String)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams {
                     enable_range_optimization: false,
@@ -714,8 +766,16 @@ fn test_filter_only_query_invert_str_in_and_not_in_semantics_match_reference() {
 fn test_filter_only_query_double_quoted_strings_work() {
     let path = temp_dir("filter_only_double_quote");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("name", DataType::String).not_null());
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(
+            FieldSchema::new("name", DataType::String)
+                .nullable()
+                .not_null(),
+        );
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 

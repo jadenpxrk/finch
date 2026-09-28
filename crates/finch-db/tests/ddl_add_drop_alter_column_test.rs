@@ -17,7 +17,7 @@ fn test_add_column() {
 
     // add_column supports basic numeric scalar types (nullable by default).
     col.add_column(
-        FieldSchema::new("num", DataType::Int32),
+        FieldSchema::new("num", DataType::Int32).nullable(),
         AddColumnOptions::default(),
     )
     .unwrap();
@@ -35,7 +35,7 @@ fn test_add_column() {
 
     // Adding the same field again should fail
     let err = col.add_column(
-        FieldSchema::new("num", DataType::Int32),
+        FieldSchema::new("num", DataType::Int32).nullable(),
         AddColumnOptions::default(),
     );
     assert!(err.is_err());
@@ -48,9 +48,13 @@ fn test_add_column() {
 fn test_add_column_with_expression_backfills_values_and_persists() {
     let path = temp_dir("add_col_expr");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
-        .with_field(FieldSchema::new("a", DataType::Int32))
-        .with_field(FieldSchema::new("b", DataType::Int32));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        )
+        .with_field(FieldSchema::new("a", DataType::Int32).nullable())
+        .with_field(FieldSchema::new("b", DataType::Int32).nullable());
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
@@ -73,7 +77,7 @@ fn test_add_column_with_expression_backfills_values_and_persists() {
     );
 
     col.add_column_with_expression(
-        FieldSchema::new("c", DataType::Int32),
+        FieldSchema::new("c", DataType::Int32).nullable(),
         Some("a + b * 2"),
         AddColumnOptions::default(),
     )
@@ -100,7 +104,7 @@ fn test_add_column_not_null_requires_expression() {
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
     let result = col.add_column_with_expression(
-        FieldSchema::new("x", DataType::Int32).not_null(),
+        FieldSchema::new("x", DataType::Int32).nullable().not_null(),
         None,
         AddColumnOptions::default(),
     );
@@ -120,7 +124,7 @@ fn test_drop_column() {
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
     col.add_column(
-        FieldSchema::new("x", DataType::Int32),
+        FieldSchema::new("x", DataType::Int32).nullable(),
         AddColumnOptions::default(),
     )
     .unwrap();
@@ -145,7 +149,7 @@ fn test_alter_column_rename() {
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
     col.add_column(
-        FieldSchema::new("x", DataType::Int32),
+        FieldSchema::new("x", DataType::Int32).nullable(),
         AddColumnOptions::default(),
     )
     .unwrap();
@@ -177,7 +181,7 @@ fn test_add_column_manifest_failure_keeps_old_schema_and_segments() {
 
     std::fs::create_dir(path.join("manifest.tmp")).unwrap();
     let result = col.add_column(
-        FieldSchema::new("x", DataType::Int32),
+        FieldSchema::new("x", DataType::Int32).nullable(),
         AddColumnOptions::default(),
     );
     assert!(result.is_err(), "manifest commit failure must fail DDL");
@@ -205,8 +209,12 @@ fn test_add_column_manifest_failure_keeps_old_schema_and_segments() {
 fn test_alter_column_manifest_failure_keeps_old_schema_and_segments() {
     let path = temp_dir("alter_col_manifest_failure");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
-        .with_field(FieldSchema::new("score", DataType::Int32));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        )
+        .with_field(FieldSchema::new("score", DataType::Int32).nullable());
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
     col.insert(vec![Doc::new("d1")
@@ -248,9 +256,14 @@ fn test_alter_column_manifest_failure_keeps_old_schema_and_segments() {
 fn test_add_and_alter_invert_indexed_numeric_columns_reopen() {
     let path = temp_dir("ddl_invert_reopen");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        )
         .with_field(
             FieldSchema::new("score", DataType::Int64)
+                .nullable()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         );
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
@@ -268,6 +281,7 @@ fn test_add_and_alter_invert_indexed_numeric_columns_reopen() {
 
     col.add_column_with_expression(
         FieldSchema::new("bonus", DataType::Int64)
+            .nullable()
             .with_index(IndexParams::Invert(InvertIndexParams::default())),
         Some("score + 10"),
         AddColumnOptions::default(),
@@ -290,7 +304,9 @@ fn test_add_and_alter_invert_indexed_numeric_columns_reopen() {
 #[test]
 fn test_alter_column_rename_rebuilds_empty_vector_indexes() {
     let dense = |params: Option<IndexParams>| {
-        let field = FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4);
+        let field = FieldSchema::new("emb", DataType::VectorFp32)
+            .nullable()
+            .with_dimension(4);
         let query = VectorQuery::new("emb", vec![1.0, 0.0, 0.0, 0.0], 5);
         (params.map_or(field.clone(), |p| field.with_index(p)), query)
     };
@@ -299,7 +315,9 @@ fn test_alter_column_rename_rebuilds_empty_vector_indexes() {
         query.sparse_indices = vec![0];
         query.sparse_values = vec![1.0];
         (
-            FieldSchema::new("emb", DataType::SparseFp32).with_index(params),
+            FieldSchema::new("emb", DataType::SparseFp32)
+                .nullable()
+                .with_index(params),
             query,
         )
     };
@@ -323,7 +341,7 @@ fn test_alter_column_rename_rebuilds_empty_vector_indexes() {
         let path = temp_dir("alter_empty_vec");
         let schema = CollectionSchema::new("test")
             .with_field(vector_field.clone())
-            .with_field(FieldSchema::new("weight", DataType::Float64));
+            .with_field(FieldSchema::new("weight", DataType::Float64).nullable());
         let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
         col.insert(vec![Doc::new("1").set("weight", 80.5f64)])
             .unwrap();

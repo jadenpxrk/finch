@@ -1,13 +1,11 @@
 use crate::doc::{docobject_to_doc, DocObject, GroupResultObject, VectorQueryOptions};
 use crate::schema::FieldSchemaOptions;
+use crate::{finch_err, BlockingTask};
 use finch_db::Collection as RustCollection;
+use finch_types::ZResult;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::sync::Arc;
-
-fn to_napi_err(e: finch_types::Status) -> napi::Error {
-    napi::Error::from_reason(e.to_string())
-}
 
 fn parse_file_format(s: &str) -> Result<finch_types::FileFormat> {
     let v = s.trim().to_ascii_lowercase();
@@ -91,6 +89,26 @@ impl Collection {
             .as_ref()
             .ok_or_else(|| napi::Error::from_reason("Collection is closed/destroyed"))
     }
+
+    /// Runs `work` off the JS thread; the returned promise settles with its result.
+    fn spawn<T: ToNapiValue + TypeName + Send + 'static>(
+        &self,
+        work: impl FnOnce(&RustCollection) -> ZResult<T> + Send + 'static,
+    ) -> Result<AsyncTask<BlockingTask<T>>> {
+        let inner = self.inner_arc()?.clone();
+        Ok(BlockingTask::spawn(move || work(&inner)))
+    }
+
+    fn to_docs(&self, docs: Vec<DocObject>) -> Result<Vec<finch_types::Doc>> {
+        let schema = self.inner_arc()?.schema_info();
+        docs.into_iter()
+            .map(|d| docobject_to_doc(d, &schema))
+            .collect()
+    }
+}
+
+fn statuses(results: Vec<finch_types::Status>) -> Vec<StatusObject> {
+    results.into_iter().map(StatusObject::from).collect()
 }
 
 #[napi]
@@ -98,61 +116,54 @@ impl Collection {
     // ── DML ───────────────────────────────────────────────────────────────────
 
     #[napi]
-    pub fn insert(&self, docs: Vec<DocObject>) -> Result<Vec<StatusObject>> {
-        let schema = self.inner_arc()?.schema_info();
-        let rust_docs: std::result::Result<Vec<_>, _> = docs
-            .into_iter()
-            .map(|d| docobject_to_doc(d, &schema))
-            .collect();
-        let rust_docs = rust_docs?;
-        let results = self.inner_arc()?.insert(rust_docs).map_err(to_napi_err)?;
-        Ok(results.into_iter().map(StatusObject::from).collect())
+    pub fn insert(
+        &self,
+        docs: Vec<DocObject>,
+    ) -> Result<AsyncTask<BlockingTask<Vec<StatusObject>>>> {
+        let docs = self.to_docs(docs)?;
+        self.spawn(move |c| c.insert(docs).map(statuses))
     }
 
     #[napi]
-    pub fn upsert(&self, docs: Vec<DocObject>) -> Result<Vec<StatusObject>> {
-        let schema = self.inner_arc()?.schema_info();
-        let rust_docs: std::result::Result<Vec<_>, _> = docs
-            .into_iter()
-            .map(|d| docobject_to_doc(d, &schema))
-            .collect();
-        let rust_docs = rust_docs?;
-        let results = self.inner_arc()?.upsert(rust_docs).map_err(to_napi_err)?;
-        Ok(results.into_iter().map(StatusObject::from).collect())
+    pub fn upsert(
+        &self,
+        docs: Vec<DocObject>,
+    ) -> Result<AsyncTask<BlockingTask<Vec<StatusObject>>>> {
+        let docs = self.to_docs(docs)?;
+        self.spawn(move |c| c.upsert(docs).map(statuses))
     }
 
     #[napi]
-    pub fn update(&self, docs: Vec<DocObject>) -> Result<Vec<StatusObject>> {
-        let schema = self.inner_arc()?.schema_info();
-        let rust_docs: std::result::Result<Vec<_>, _> = docs
-            .into_iter()
-            .map(|d| docobject_to_doc(d, &schema))
-            .collect();
-        let rust_docs = rust_docs?;
-        let results = self.inner_arc()?.update(rust_docs).map_err(to_napi_err)?;
-        Ok(results.into_iter().map(StatusObject::from).collect())
+    pub fn update(
+        &self,
+        docs: Vec<DocObject>,
+    ) -> Result<AsyncTask<BlockingTask<Vec<StatusObject>>>> {
+        let docs = self.to_docs(docs)?;
+        self.spawn(move |c| c.update(docs).map(statuses))
     }
 
     #[napi]
-    pub fn delete(&self, pks: Vec<String>) -> Result<Vec<StatusObject>> {
-        let results = self.inner_arc()?.delete(pks).map_err(to_napi_err)?;
-        Ok(results.into_iter().map(StatusObject::from).collect())
+    pub fn delete(&self, pks: Vec<String>) -> Result<AsyncTask<BlockingTask<Vec<StatusObject>>>> {
+        self.spawn(move |c| c.delete(pks).map(statuses))
     }
 
     #[napi]
-    pub fn delete_by_filter(&self, filter: String) -> Result<StatusObject> {
-        self.inner_arc()?
-            .delete_by_filter(&filter)
-            .map(StatusObject::from)
-            .map_err(to_napi_err)
+    pub fn delete_by_filter(
+        &self,
+        filter: String,
+    ) -> Result<AsyncTask<BlockingTask<StatusObject>>> {
+        self.spawn(move |c| c.delete_by_filter(&filter).map(StatusObject::from))
     }
 
     // ── DQL ───────────────────────────────────────────────────────────────────
 
     #[napi]
-    pub fn query(&self, opts: VectorQueryOptions) -> Result<Vec<DocObject>> {
+    pub fn query(&self, env: Env, opts: VectorQueryOptions) -> Result<Vec<DocObject>> {
         let query = finch_types::VectorQuery::try_from(opts)?;
-        let results = self.inner_arc()?.query(query).map_err(to_napi_err)?;
+        let results = self
+            .inner_arc()?
+            .query(query)
+            .map_err(|e| finch_err(&env, e))?;
         Ok(results
             .into_iter()
             .map(|doc| DocObject::from((*doc).clone()))
@@ -160,8 +171,11 @@ impl Collection {
     }
 
     #[napi]
-    pub fn query_sql(&self, sql: String) -> Result<Vec<DocObject>> {
-        let results = self.inner_arc()?.query_sql(&sql).map_err(to_napi_err)?;
+    pub fn query_sql(&self, env: Env, sql: String) -> Result<Vec<DocObject>> {
+        let results = self
+            .inner_arc()?
+            .query_sql(&sql)
+            .map_err(|e| finch_err(&env, e))?;
         Ok(results
             .into_iter()
             .map(|doc| DocObject::from((*doc).clone()))
@@ -169,8 +183,15 @@ impl Collection {
     }
 
     #[napi]
-    pub fn fetch(&self, pks: Vec<String>) -> Result<std::collections::HashMap<String, DocObject>> {
-        let results = self.inner_arc()?.fetch(pks).map_err(to_napi_err)?;
+    pub fn fetch(
+        &self,
+        env: Env,
+        pks: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, DocObject>> {
+        let results = self
+            .inner_arc()?
+            .fetch(pks)
+            .map_err(|e| finch_err(&env, e))?;
         Ok(results
             .into_iter()
             .map(|(pk, doc)| (pk, DocObject::from((*doc).clone())))
@@ -180,6 +201,7 @@ impl Collection {
     #[napi]
     pub fn group_by_query(
         &self,
+        env: Env,
         opts: VectorQueryOptions,
         group_by_field: String,
         group_count: u32,
@@ -192,7 +214,10 @@ impl Collection {
             group_count: group_count as usize,
             group_topk: group_topk as usize,
         };
-        let results = self.inner_arc()?.group_by_query(gbq).map_err(to_napi_err)?;
+        let results = self
+            .inner_arc()?
+            .group_by_query(gbq)
+            .map_err(|e| finch_err(&env, e))?;
         Ok(results.into_iter().map(GroupResultObject::from).collect())
     }
 
@@ -205,26 +230,21 @@ impl Collection {
         field_opts: FieldSchemaOptions,
         rebuild: Option<bool>,
         concurrency: Option<u32>,
-    ) -> Result<()> {
+    ) -> Result<AsyncTask<BlockingTask<()>>> {
         let field_schema = finch_types::FieldSchema::try_from(field_opts)?;
         let params = field_schema.index_params.ok_or_else(|| {
             napi::Error::from_reason("FieldSchemaOptions must carry an index param variant")
         })?;
-        self.inner_arc()?
-            .create_index(
-                &field,
-                params,
-                finch_types::CreateIndexOptions {
-                    rebuild: rebuild.unwrap_or(false),
-                    concurrency: concurrency.map(|n| n as usize),
-                },
-            )
-            .map_err(to_napi_err)
+        let options = finch_types::CreateIndexOptions {
+            rebuild: rebuild.unwrap_or(false),
+            concurrency: concurrency.map(|n| n as usize),
+        };
+        self.spawn(move |c| c.create_index(&field, params, options))
     }
 
     #[napi]
-    pub fn drop_index(&self, field: String) -> Result<()> {
-        self.inner_arc()?.drop_index(&field).map_err(to_napi_err)
+    pub fn drop_index(&self, field: String) -> Result<AsyncTask<BlockingTask<()>>> {
+        self.spawn(move |c| c.drop_index(&field))
     }
 
     #[napi]
@@ -234,23 +254,20 @@ impl Collection {
         rebuild_index: Option<bool>,
         concurrency: Option<u32>,
         expression: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<AsyncTask<BlockingTask<()>>> {
         let field_schema = finch_types::FieldSchema::try_from(field_opts)?;
-        self.inner_arc()?
-            .add_column_with_expression(
-                field_schema,
-                expression.as_deref(),
-                finch_types::AddColumnOptions {
-                    rebuild_index: rebuild_index.unwrap_or(false),
-                    concurrency: concurrency.map(|n| n as usize),
-                },
-            )
-            .map_err(to_napi_err)
+        let options = finch_types::AddColumnOptions {
+            rebuild_index: rebuild_index.unwrap_or(false),
+            concurrency: concurrency.map(|n| n as usize),
+        };
+        self.spawn(move |c| {
+            c.add_column_with_expression(field_schema, expression.as_deref(), options)
+        })
     }
 
     #[napi]
-    pub fn drop_column(&self, field: String) -> Result<()> {
-        self.inner_arc()?.drop_column(&field).map_err(to_napi_err)
+    pub fn drop_column(&self, field: String) -> Result<AsyncTask<BlockingTask<()>>> {
+        self.spawn(move |c| c.drop_column(&field))
     }
 
     #[napi]
@@ -261,45 +278,41 @@ impl Collection {
         field_schema: Option<FieldSchemaOptions>,
         rebuild_index: Option<bool>,
         concurrency: Option<u32>,
-    ) -> Result<()> {
-        let field_schema = match field_schema {
-            None => None,
-            Some(opts) => Some(finch_types::FieldSchema::try_from(opts)?),
+    ) -> Result<AsyncTask<BlockingTask<()>>> {
+        let field_schema = field_schema
+            .map(finch_types::FieldSchema::try_from)
+            .transpose()?;
+        let options = finch_types::AlterColumnOptions {
+            rebuild_index: rebuild_index.unwrap_or(false),
+            concurrency: concurrency.map(|n| n as usize),
         };
-        self.inner_arc()?
-            .alter_column(
-                &field,
-                rename_to.as_deref(),
-                field_schema,
-                finch_types::AlterColumnOptions {
-                    rebuild_index: rebuild_index.unwrap_or(false),
-                    concurrency: concurrency.map(|n| n as usize),
-                },
-            )
-            .map_err(to_napi_err)
+        self.spawn(move |c| c.alter_column(&field, rename_to.as_deref(), field_schema, options))
     }
 
     // ── Admin ─────────────────────────────────────────────────────────────────
 
     #[napi]
-    pub fn optimize(&self, max_segments: Option<u32>, concurrency: Option<u32>) -> Result<()> {
-        self.inner_arc()?
-            .optimize(finch_types::OptimizeOptions {
-                max_segments: max_segments.map(|n| n as usize),
-                concurrency: concurrency.map(|n| n as usize),
-                ..Default::default()
-            })
-            .map_err(to_napi_err)
+    pub fn optimize(
+        &self,
+        max_segments: Option<u32>,
+        concurrency: Option<u32>,
+    ) -> Result<AsyncTask<BlockingTask<()>>> {
+        let options = finch_types::OptimizeOptions {
+            max_segments: max_segments.map(|n| n as usize),
+            concurrency: concurrency.map(|n| n as usize),
+            ..Default::default()
+        };
+        self.spawn(move |c| c.optimize(options))
     }
 
     #[napi]
-    pub fn flush(&self) -> Result<()> {
-        self.inner_arc()?.flush().map_err(to_napi_err)
+    pub fn flush(&self) -> Result<AsyncTask<BlockingTask<()>>> {
+        self.spawn(|c| c.flush())
     }
 
     #[napi]
-    pub fn stats(&self) -> Result<std::collections::HashMap<String, f64>> {
-        let stats = self.inner_arc()?.stats().map_err(to_napi_err)?;
+    pub fn stats(&self, env: Env) -> Result<std::collections::HashMap<String, f64>> {
+        let stats = self.inner_arc()?.stats().map_err(|e| finch_err(&env, e))?;
         let mut m = std::collections::HashMap::new();
         m.insert("doc_count".to_string(), stats.doc_count as f64);
         m.insert("segment_count".to_string(), stats.segment_count as f64);
@@ -307,8 +320,8 @@ impl Collection {
     }
 
     #[napi(js_name = "statsInfo")]
-    pub fn stats_info(&self) -> Result<serde_json::Value> {
-        let stats = self.inner_arc()?.stats().map_err(to_napi_err)?;
+    pub fn stats_info(&self, env: Env) -> Result<serde_json::Value> {
+        let stats = self.inner_arc()?.stats().map_err(|e| finch_err(&env, e))?;
         serde_json::to_value(&stats).map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
@@ -330,13 +343,13 @@ impl Collection {
     }
 
     #[napi]
-    pub fn destroy(&mut self) -> Result<()> {
+    pub fn destroy(&mut self, env: Env) -> Result<()> {
         let arc = self
             .inner
             .take()
             .ok_or_else(|| napi::Error::from_reason("Collection is closed/destroyed"))?;
         match Arc::try_unwrap(arc) {
-            Ok(col) => col.destroy().map_err(to_napi_err),
+            Ok(col) => col.destroy().map_err(|e| finch_err(&env, e)),
             Err(arc) => {
                 self.inner = Some(arc);
                 Err(napi::Error::from_reason(
@@ -358,7 +371,7 @@ pub fn create_and_open(
     forward_file_format: Option<String>,
     index_storage: Option<String>,
     forward_storage: Option<String>,
-) -> Result<Collection> {
+) -> Result<AsyncTask<BlockingTask<Collection>>> {
     let options = collection_options_from_node_args(
         read_only,
         enable_mmap,
@@ -368,9 +381,11 @@ pub fn create_and_open(
         forward_storage,
     )?;
     let rust_schema = finch_types::CollectionSchema::try_from(schema)?;
-    let col = RustCollection::create_and_open(std::path::Path::new(&path), rust_schema, options)
-        .map_err(to_napi_err)?;
-    Ok(Collection { inner: Some(col) })
+    Ok(BlockingTask::spawn(move || {
+        let col =
+            RustCollection::create_and_open(std::path::Path::new(&path), rust_schema, options)?;
+        Ok(Collection { inner: Some(col) })
+    }))
 }
 
 #[napi(js_name = "open")]
@@ -383,7 +398,7 @@ pub fn open(
     forward_file_format: Option<String>,
     index_storage: Option<String>,
     forward_storage: Option<String>,
-) -> Result<Collection> {
+) -> Result<AsyncTask<BlockingTask<Collection>>> {
     let options = collection_options_from_node_args(
         read_only,
         enable_mmap,
@@ -392,8 +407,10 @@ pub fn open(
         index_storage,
         forward_storage,
     )?;
-    let col = RustCollection::open(std::path::Path::new(&path), options).map_err(to_napi_err)?;
-    Ok(Collection { inner: Some(col) })
+    Ok(BlockingTask::spawn(move || {
+        let col = RustCollection::open(std::path::Path::new(&path), options)?;
+        Ok(Collection { inner: Some(col) })
+    }))
 }
 
 #[napi(object)]
@@ -475,9 +492,9 @@ fn global_config_from_node_options(
 
 #[napi(js_name = "initGlobalConfig")]
 #[cfg(not(test))]
-pub fn init_global_config(opts: Option<GlobalConfigOptions>) -> Result<()> {
+pub fn init_global_config(env: Env, opts: Option<GlobalConfigOptions>) -> Result<()> {
     let cfg = global_config_from_node_options(opts)?;
-    finch_db::initialize_global_config(cfg).map_err(to_napi_err)?;
+    finch_db::initialize_global_config(cfg).map_err(|e| finch_err(&env, e))?;
     Ok(())
 }
 

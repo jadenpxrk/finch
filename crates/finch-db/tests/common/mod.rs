@@ -25,8 +25,12 @@ pub fn temp_dir(name: &str) -> std::path::PathBuf {
 
 pub fn basic_schema(dim: usize) -> CollectionSchema {
     CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(dim))
-        .with_field(FieldSchema::new("label", DataType::String))
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(dim),
+        )
+        .with_field(FieldSchema::new("label", DataType::String).nullable())
 }
 
 pub fn make_doc(pk: &str, vec: Vec<f32>, label: &str) -> Doc {

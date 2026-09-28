@@ -5,8 +5,11 @@ fn test_int8_vector_field_query_returns_stored_vectors() {
     // Mirrors reference's `DenseDataTypeINT8` behavior at Finch's API boundary.
     fn run_case(case_name: &str, index_params: IndexParams) {
         let path = temp_dir(&format!("vector_column_indexer_int8_{case_name}"));
-        let schema = CollectionSchema::new("test")
-            .with_field(FieldSchema::new("emb", DataType::VectorInt8).with_dimension(4));
+        let schema = CollectionSchema::new("test").with_field(
+            FieldSchema::new("emb", DataType::VectorInt8)
+                .nullable()
+                .with_dimension(4),
+        );
 
         let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
@@ -78,8 +81,11 @@ fn test_int8_vector_field_query_returns_stored_vectors() {
 fn test_sparse_vector_field_query_returns_stored_vectors() {
     fn run_case(case_name: &str, index_params: IndexParams) {
         let path = temp_dir(&format!("vector_column_indexer_sparse_{case_name}"));
-        let schema = CollectionSchema::new("test")
-            .with_field(FieldSchema::new("s", DataType::SparseFp32).with_dimension(8));
+        let schema = CollectionSchema::new("test").with_field(
+            FieldSchema::new("s", DataType::SparseFp32)
+                .nullable()
+                .with_dimension(8),
+        );
 
         let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
@@ -168,6 +174,7 @@ fn test_int8_query_vector_f32_inputs_are_cast_to_int8() {
     let path = temp_dir("int8_query_cast");
     let schema = CollectionSchema::new("test").with_field(
         FieldSchema::new("emb", DataType::VectorInt8)
+            .nullable()
             .with_dimension(4)
             .with_index(IndexParams::Flat(FlatIndexParams::new(
                 MetricType::InnerProduct,
@@ -205,6 +212,7 @@ fn test_vector_query_dense_cosine_distance_semantics_match_reference() {
     let path = temp_dir("vector_dense_cosine_score");
     let schema = CollectionSchema::new("test").with_field(
         FieldSchema::new("emb", DataType::VectorFp32)
+            .nullable()
             .with_dimension(2)
             .with_index(IndexParams::Flat(FlatIndexParams::new(MetricType::Cosine))),
     );
@@ -238,28 +246,48 @@ fn test_filter_only_query_forward_and_invert_recall_semantics_match_reference() 
     let path = temp_dir("filter_only_forward_invert_recall");
 
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("id", DataType::Int64).not_null())
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(
+            FieldSchema::new("id", DataType::Int64)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_id", DataType::Int64)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         )
-        .with_field(FieldSchema::new("age", DataType::Int32).not_null())
+        .with_field(
+            FieldSchema::new("age", DataType::Int32)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_age", DataType::Int32)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         )
-        .with_field(FieldSchema::new("name", DataType::String).not_null())
+        .with_field(
+            FieldSchema::new("name", DataType::String)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_name", DataType::String)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         )
-        .with_field(FieldSchema::new("optional_age", DataType::Uint32))
+        .with_field(FieldSchema::new("optional_age", DataType::Uint32).nullable())
         .with_field(
             FieldSchema::new("invert_optional_age", DataType::Uint32)
+                .nullable()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         );
 
@@ -516,9 +544,14 @@ fn test_filter_only_query_forward_and_invert_recall_semantics_match_reference() 
 fn test_optimize_removes_deleted_docs_and_old_segments() {
     let path = temp_dir("optimize_deletes_cleanup");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("id", DataType::Int64).not_null())
+        .with_field(
+            FieldSchema::new("id", DataType::Int64)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
                 .with_dimension(4)
                 .with_index(IndexParams::Flat(FlatIndexParams::new(MetricType::L2))),
         );
@@ -602,9 +635,14 @@ fn test_optimize_removes_deleted_docs_and_old_segments() {
 fn test_optimize_resets_delete_bitmap_and_stats_for_middle_deletes() {
     let path = temp_dir("optimize_delete_reset_middle");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("id", DataType::Int64).not_null())
+        .with_field(
+            FieldSchema::new("id", DataType::Int64)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
                 .with_dimension(4)
                 .with_index(IndexParams::Flat(FlatIndexParams::new(MetricType::L2))),
         );
@@ -712,9 +750,14 @@ fn test_optimize_rebuild_drops_deleted_docs_when_delete_ratio_is_high() {
 
     let path = temp_dir("optimize_rebuild_threshold");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("id", DataType::Int64).not_null())
+        .with_field(
+            FieldSchema::new("id", DataType::Int64)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
                 .with_dimension(4)
                 .with_index(IndexParams::Flat(FlatIndexParams::new(MetricType::L2))),
         );

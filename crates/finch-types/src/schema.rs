@@ -66,7 +66,7 @@ impl FieldSchema {
         FieldSchema {
             name: name.into(),
             data_type,
-            nullable: true,
+            nullable: false,
             dimension: None,
             index_params: None,
         }
@@ -74,6 +74,11 @@ impl FieldSchema {
 
     pub fn not_null(mut self) -> Self {
         self.nullable = false;
+        self
+    }
+
+    pub fn nullable(mut self) -> Self {
+        self.nullable = true;
         self
     }
 
@@ -484,6 +489,13 @@ fn validate_scalar_field_index(field: &FieldSchema) -> ZResult<()> {
 mod tests {
     use super::*;
     use crate::index_params::{FlatIndexParams, IvfIndexParams};
+
+    #[test]
+    fn field_schema_is_not_nullable_unless_marked() {
+        let field = FieldSchema::new("f", DataType::Int64);
+        assert!(!field.nullable);
+        assert!(field.nullable().nullable);
+    }
 
     #[test]
     fn validate_rejects_bad_collection_name() {

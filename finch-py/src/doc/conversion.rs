@@ -1,6 +1,6 @@
 use super::*;
 
-/// Convert Python object to finch Value (best-effort type inference)
+/// Convert Python object to finch Value by inferring the type; `PyDoc.set_field` documents the rules.
 pub fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if obj.is_none() {
         return Ok(Value::Null);
@@ -33,29 +33,8 @@ pub fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(b) = obj.downcast::<PyByteArray>() {
         return Ok(Value::Bytes(b.to_vec()));
     }
-    if let Ok(list) = obj.extract::<Vec<Vec<u8>>>() {
-        return Ok(Value::ArrayBinary(list));
-    }
-    if let Ok(list) = obj.extract::<Vec<String>>() {
-        return Ok(Value::ArrayString(list));
-    }
-    if let Ok(list) = obj.extract::<Vec<bool>>() {
-        return Ok(Value::ArrayBool(list));
-    }
-    if let Ok(list) = obj.extract::<Vec<i64>>() {
-        return Ok(Value::ArrayI64(list));
-    }
-    if let Ok(list) = obj.extract::<Vec<u64>>() {
-        return Ok(Value::ArrayU64(list));
-    }
-    if let Ok(list) = obj.extract::<Vec<i32>>() {
-        return Ok(Value::ArrayI32(list));
-    }
-    if let Ok(list) = obj.extract::<Vec<f32>>() {
-        return Ok(Value::VecF32(list));
-    }
-    if let Ok(list) = obj.extract::<Vec<f64>>() {
-        return Ok(Value::VecF64(list));
+    if let Ok(items) = obj.extract::<Vec<Bound<'_, PyAny>>>() {
+        return py_list_to_value(&items);
     }
     // Sparse vector: dict[int, float] → SparseF32
     if let Ok(dict) = obj.downcast::<PyDict>() {
@@ -68,6 +47,78 @@ pub fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         obj.get_type().name()?
     ))
     .into())
+}
+
+/// Infers an array value from list elements that all share one Python type.
+fn py_list_to_value(items: &[Bound<'_, PyAny>]) -> PyResult<Value> {
+    use pyo3::exceptions::PyValueError;
+    use pyo3::types::{PyBool, PyFloat, PyLong, PyString};
+
+    if items.is_empty() {
+        return Err(PyValueError::new_err(
+            "cannot infer a type for an empty list; use set_any with the field schema",
+        )
+        .into());
+    }
+    let is_int =
+        |x: &Bound<'_, PyAny>| x.is_instance_of::<PyLong>() && !x.is_instance_of::<PyBool>();
+    let all = |pred: &dyn Fn(&Bound<'_, PyAny>) -> bool| items.iter().all(pred);
+
+    if all(&|x| x.is_instance_of::<PyBool>()) {
+        return Ok(Value::ArrayBool(extract_all(items)?));
+    }
+    if all(&|x| x.is_instance_of::<PyString>()) {
+        return Ok(Value::ArrayString(extract_all(items)?));
+    }
+    if all(&|x| x.is_instance_of::<PyBytes>() || x.is_instance_of::<PyByteArray>()) {
+        let bytes = items.iter().map(py_bytes).collect::<PyResult<_>>()?;
+        return Ok(Value::ArrayBinary(bytes));
+    }
+    if all(&is_int) {
+        if let Ok(v) = extract_all::<i64>(items) {
+            return Ok(Value::ArrayI64(v));
+        }
+        if let Ok(v) = extract_all::<u64>(items) {
+            return Ok(Value::ArrayU64(v));
+        }
+        return Err(pyo3::exceptions::PyOverflowError::new_err(
+            "int list does not fit in int64 or uint64",
+        )
+        .into());
+    }
+    if all(&|x| is_int(x) || x.is_instance_of::<PyFloat>()) {
+        return items
+            .iter()
+            .map(py_to_exact_f64)
+            .collect::<PyResult<_>>()
+            .map(Value::VecF64);
+    }
+    Err(PyValueError::new_err(
+        "cannot infer a type for a list that mixes element types; use set_any with the field schema",
+    )
+    .into())
+}
+
+fn extract_all<'py, T: FromPyObject<'py>>(items: &[Bound<'py, PyAny>]) -> PyResult<Vec<T>> {
+    Ok(items
+        .iter()
+        .map(|x| x.extract())
+        .collect::<pyo3::PyResult<_>>()?)
+}
+
+// An int joins a float list only if float64 holds it exactly.
+fn py_to_exact_f64(x: &Bound<'_, PyAny>) -> PyResult<f64> {
+    const MAX_EXACT: i64 = 1 << 53;
+    if x.is_instance_of::<pyo3::types::PyFloat>() {
+        return Ok(x.extract::<f64>()?);
+    }
+    match x.extract::<i64>() {
+        Ok(i) if (-MAX_EXACT..=MAX_EXACT).contains(&i) => Ok(i as f64),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "int {x} in a float list is not exactly representable as float64"
+        ))
+        .into()),
+    }
 }
 
 /// Convert Python object to finch Value using an explicit schema dtype (reference parity).
@@ -138,11 +189,15 @@ fn py_to_int_in_range<T: TryFrom<i64>>(obj: &Bound<'_, PyAny>, type_name: &str) 
 }
 
 fn py_to_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    py_bytes(obj).map(Value::Bytes)
+}
+
+fn py_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     if let Ok(b) = obj.downcast::<PyBytes>() {
-        return Ok(Value::Bytes(b.as_bytes().to_vec()));
+        return Ok(b.as_bytes().to_vec());
     }
     if let Ok(b) = obj.downcast::<PyByteArray>() {
-        return Ok(Value::Bytes(b.to_vec()));
+        return Ok(b.to_vec());
     }
     Err(pyo3::exceptions::PyTypeError::new_err("expected bytes").into())
 }

@@ -66,7 +66,7 @@ class RawMemoryApi {
   }
 
   async call(operation, payload = {}) {
-    const result = this.store[operation](...(payload.args || []));
+    const result = await this.store[operation](...(payload.args || []));
     return typeof result === 'string' ? parse(result) : result;
   }
 }
@@ -94,11 +94,11 @@ class FinchMemory {
   }
 
   static async create({ path, embeddingDim, options }) {
-    return new FinchMemory(native.MemoryStore.create(path, embeddingDim, options));
+    return new FinchMemory(await native.MemoryStore.create(path, embeddingDim, options));
   }
 
   static async open({ path, options }) {
-    return new FinchMemory(native.MemoryStore.open(path, options));
+    return new FinchMemory(await native.MemoryStore.open(path, options));
   }
 
   ingestEpisode(input) {
@@ -120,7 +120,7 @@ class FinchMemory {
       causal_parent_ids: input.causalParentIds ?? [],
       metadata_json: JSON.stringify(input.metadata ?? {}),
     };
-    return Promise.resolve(parse(this.store.ingestEpisodeJson(JSON.stringify(payload), at)));
+    return this.store.ingestEpisodeJson(JSON.stringify(payload), at).then(parse);
   }
 
   ingestArtifact(input) {
@@ -148,7 +148,7 @@ class FinchMemory {
       extracted_text_ref: input.extractedTextRef ?? null,
       metadata_json: JSON.stringify(input.metadata ?? {}),
     };
-    return Promise.resolve(parse(this.store.ingestArtifactTextJson(JSON.stringify(payload), text)));
+    return this.store.ingestArtifactTextJson(JSON.stringify(payload), text).then(parse);
   }
 
   addClaim(input) {
@@ -172,7 +172,7 @@ class FinchMemory {
       valid_from_ms: toMs(input.validFrom),
       valid_to_ms: toMs(input.validTo),
     };
-    return Promise.resolve(parse(this.store.addManualClaimJson(JSON.stringify(payload), input.embedding)));
+    return this.store.addManualClaimJson(JSON.stringify(payload), input.embedding).then(parse);
   }
 
   async listClaims(input) {
@@ -209,7 +209,7 @@ class FinchMemory {
       cascade_policy: input.cascadePolicy ?? null,
       metadata_json: JSON.stringify(input.metadata ?? {}),
     };
-    return Promise.resolve(parse(this.store.addCorrectionJson(JSON.stringify(payload), nowMs())));
+    return this.store.addCorrectionJson(JSON.stringify(payload), nowMs()).then(parse);
   }
 
   tombstone(input) {
@@ -234,7 +234,7 @@ class FinchMemory {
       valid_from_ms: toMs(input.validFrom),
       valid_to_ms: toMs(input.validTo),
     };
-    return Promise.resolve(parse(this.store.addSlotAliasJson(JSON.stringify(payload), nowMs())));
+    return this.store.addSlotAliasJson(JSON.stringify(payload), nowMs()).then(parse);
   }
 
   search(input) {

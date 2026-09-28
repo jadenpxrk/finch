@@ -13,8 +13,11 @@ fn path(name: &str) -> PathBuf {
 }
 
 fn schema() -> CollectionSchema {
-    CollectionSchema::new("review")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
+    CollectionSchema::new("review").with_field(
+        FieldSchema::new("emb", DataType::VectorFp32)
+            .nullable()
+            .with_dimension(4),
+    )
 }
 
 fn doc(pk: &str) -> Doc {
@@ -178,9 +181,17 @@ fn nonfinite_input_cannot_destroy_later_wal_records() {
 fn nonfinite_and_out_of_range_floats_are_rejected() {
     let path = path("float_range");
     let schema = CollectionSchema::new("review")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(2))
-        .with_field(FieldSchema::new("half", DataType::VectorFp16).with_dimension(2))
-        .with_field(FieldSchema::new("score", DataType::Float64));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(2),
+        )
+        .with_field(
+            FieldSchema::new("half", DataType::VectorFp16)
+                .nullable()
+                .with_dimension(2),
+        )
+        .with_field(FieldSchema::new("score", DataType::Float64).nullable());
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let base = |pk: &str| Doc::new(pk).set("emb", vec![1.0f32, 0.0]);
     let statuses = col
@@ -208,8 +219,11 @@ fn nonfinite_and_out_of_range_floats_are_rejected() {
 #[test]
 fn summed_duplicate_sparse_indices_cannot_destroy_later_wal_records() {
     let path = path("sparse_dup_sum");
-    let schema = CollectionSchema::new("review")
-        .with_field(FieldSchema::new("sparse", DataType::SparseFp32).with_dimension(16));
+    let schema = CollectionSchema::new("review").with_field(
+        FieldSchema::new("sparse", DataType::SparseFp32)
+            .nullable()
+            .with_dimension(16),
+    );
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let sparse = |values: Vec<f32>| finch_types::Value::SparseF32 {
         indices: vec![1, 1],

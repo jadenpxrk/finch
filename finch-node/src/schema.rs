@@ -112,13 +112,18 @@ impl TryFrom<CollectionSchemaOptions> for finch_types::CollectionSchema {
             .into_iter()
             .map(finch_types::FieldSchema::try_from)
             .collect::<Result<Vec<_>>>()?;
+        let max_doc_count_per_segment = match opts.max_doc_count_per_segment {
+            None => finch_types::MAX_DOC_COUNT_PER_SEGMENT,
+            Some(n) => u64::try_from(n).map_err(|_| {
+                napi::Error::from_reason(format!(
+                    "maxDocCountPerSegment must be non-negative, got {n}"
+                ))
+            })?,
+        };
         Ok(finch_types::CollectionSchema {
             name: opts.name,
             fields,
-            max_doc_count_per_segment: opts
-                .max_doc_count_per_segment
-                .unwrap_or(finch_types::MAX_DOC_COUNT_PER_SEGMENT as i64)
-                as u64,
+            max_doc_count_per_segment,
         })
     }
 }
@@ -244,5 +249,20 @@ mod tests {
             panic!("expected HNSW index params");
         };
         assert_eq!(params.scaling_factor, params.m);
+    }
+
+    #[test]
+    fn test_negative_max_doc_count_per_segment_is_rejected() {
+        let schema = CollectionSchemaOptions {
+            name: "test".to_string(),
+            fields: Vec::new(),
+            max_doc_count_per_segment: Some(-1),
+        };
+        let err = finch_types::CollectionSchema::try_from(schema).unwrap_err();
+        assert!(
+            err.reason.contains("maxDocCountPerSegment"),
+            "{}",
+            err.reason
+        );
     }
 }

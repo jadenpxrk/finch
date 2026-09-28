@@ -28,13 +28,39 @@ impl PyCollection {
             .ok_or_else(|| PyRuntimeError::new_err("Collection is closed/destroyed").into())
     }
 
-    fn repeat_status(n: usize, s: finch_types::Status) -> Vec<PyStatus> {
-        let mut out = Vec::with_capacity(n);
-        for _ in 0..n {
-            out.push(PyStatus::from(s.clone()));
-        }
-        out
+    /// Runs `op` with the GIL released so other Python threads keep running.
+    fn without_gil<T: Send>(
+        &self,
+        py: Python<'_>,
+        op: impl FnOnce(&Collection) -> finch_types::ZResult<T> + Send,
+    ) -> PyResult<T> {
+        let inner = self.inner_arc()?.clone();
+        py.allow_threads(move || op(&inner)).map_err(to_py_err)
     }
+
+    fn create_index(
+        &self,
+        py: Python<'_>,
+        field: &str,
+        params: finch_types::IndexParams,
+        rebuild: bool,
+        concurrency: Option<usize>,
+        option: Option<&PyIndexOption>,
+    ) -> PyResult<()> {
+        let options = finch_types::CreateIndexOptions {
+            rebuild,
+            concurrency: concurrency.or_else(|| option.and_then(|o| o.as_concurrency_option())),
+        };
+        self.without_gil(py, |c| c.create_index(field, params, options))
+    }
+}
+
+fn statuses(results: Vec<finch_types::Status>) -> Vec<PyStatus> {
+    results.into_iter().map(PyStatus::from).collect()
+}
+
+fn rust_docs(docs: Vec<PyDoc>) -> Vec<finch_types::Doc> {
+    docs.into_iter().map(|d| d.inner).collect()
 }
 
 #[pymethods]
@@ -46,55 +72,35 @@ impl PyCollection {
 
     // ── DML ──────────────────────────────────────────────────────────────────
 
-    fn insert(&self, docs: Vec<PyDoc>) -> PyResult<Vec<PyStatus>> {
-        let n = docs.len();
-        let rust_docs: Vec<finch_types::Doc> = docs.into_iter().map(|d| d.inner).collect();
-        match self.inner_arc()?.insert(rust_docs) {
-            Ok(results) => Ok(results.into_iter().map(PyStatus::from).collect()),
-            Err(s) => Ok(Self::repeat_status(n, s)),
-        }
+    fn insert(&self, py: Python<'_>, docs: Vec<PyDoc>) -> PyResult<Vec<PyStatus>> {
+        let docs = rust_docs(docs);
+        self.without_gil(py, |c| c.insert(docs)).map(statuses)
     }
 
-    fn upsert(&self, docs: Vec<PyDoc>) -> PyResult<Vec<PyStatus>> {
-        let n = docs.len();
-        let rust_docs: Vec<finch_types::Doc> = docs.into_iter().map(|d| d.inner).collect();
-        match self.inner_arc()?.upsert(rust_docs) {
-            Ok(results) => Ok(results.into_iter().map(PyStatus::from).collect()),
-            Err(s) => Ok(Self::repeat_status(n, s)),
-        }
+    fn upsert(&self, py: Python<'_>, docs: Vec<PyDoc>) -> PyResult<Vec<PyStatus>> {
+        let docs = rust_docs(docs);
+        self.without_gil(py, |c| c.upsert(docs)).map(statuses)
     }
 
-    fn update(&self, docs: Vec<PyDoc>) -> PyResult<Vec<PyStatus>> {
-        let n = docs.len();
-        let rust_docs: Vec<finch_types::Doc> = docs.into_iter().map(|d| d.inner).collect();
-        match self.inner_arc()?.update(rust_docs) {
-            Ok(results) => Ok(results.into_iter().map(PyStatus::from).collect()),
-            Err(s) => Ok(Self::repeat_status(n, s)),
-        }
+    fn update(&self, py: Python<'_>, docs: Vec<PyDoc>) -> PyResult<Vec<PyStatus>> {
+        let docs = rust_docs(docs);
+        self.without_gil(py, |c| c.update(docs)).map(statuses)
     }
 
-    fn delete(&self, pks: Vec<String>) -> PyResult<Vec<PyStatus>> {
-        let n = pks.len();
-        match self.inner_arc()?.delete(pks) {
-            Ok(results) => Ok(results.into_iter().map(PyStatus::from).collect()),
-            Err(s) => Ok(Self::repeat_status(n, s)),
-        }
+    fn delete(&self, py: Python<'_>, pks: Vec<String>) -> PyResult<Vec<PyStatus>> {
+        self.without_gil(py, |c| c.delete(pks)).map(statuses)
     }
 
-    fn delete_by_filter(&self, filter: &str) -> PyResult<PyStatus> {
-        let s = self
-            .inner_arc()?
-            .delete_by_filter(filter)
-            .map_err(to_py_err)?;
-        Ok(PyStatus::from(s))
+    fn delete_by_filter(&self, py: Python<'_>, filter: &str) -> PyResult<PyStatus> {
+        self.without_gil(py, |c| c.delete_by_filter(filter))
+            .map(PyStatus::from)
     }
 
     // ── DQL ──────────────────────────────────────────────────────────────────
 
     fn query(&self, py: Python<'_>, query: &PyVectorQuery) -> PyResult<Vec<PyDoc>> {
-        let inner = self.inner_arc()?.clone();
         let q = query.inner.clone();
-        let results = py.allow_threads(|| inner.query(q)).map_err(to_py_err)?;
+        let results = self.without_gil(py, |c| c.query(q))?;
         Ok(results
             .into_iter()
             .map(|doc| PyDoc {
@@ -104,18 +110,12 @@ impl PyCollection {
     }
 
     fn query_ids(&self, py: Python<'_>, query: &PyVectorQuery) -> PyResult<Vec<i64>> {
-        let inner = self.inner_arc()?.clone();
         let q = query.inner.clone();
-        py.allow_threads(|| inner.query_int_ids(q))
-            .map_err(to_py_err)
+        self.without_gil(py, |c| c.query_int_ids(q))
     }
 
     fn query_sql(&self, py: Python<'_>, sql: &str) -> PyResult<Vec<PyDoc>> {
-        let inner = self.inner_arc()?.clone();
-        let sql = sql.to_string();
-        let results = py
-            .allow_threads(|| inner.query_sql(&sql))
-            .map_err(to_py_err)?;
+        let results = self.without_gil(py, |c| c.query_sql(sql))?;
         Ok(results
             .into_iter()
             .map(|doc| PyDoc {
@@ -129,8 +129,7 @@ impl PyCollection {
         py: Python<'_>,
         pks: Vec<String>,
     ) -> PyResult<std::collections::HashMap<String, PyDoc>> {
-        let inner = self.inner_arc()?.clone();
-        let results = py.allow_threads(|| inner.fetch(pks)).map_err(to_py_err)?;
+        let results = self.without_gil(py, |c| c.fetch(pks))?;
         Ok(results
             .into_iter()
             .map(|(pk, doc)| {
@@ -150,16 +149,13 @@ impl PyCollection {
         group_count: usize,
         group_topk: usize,
     ) -> PyResult<Vec<PyGroupResult>> {
-        let inner = self.inner_arc()?.clone();
         let gbq = finch_types::GroupByVectorQuery {
             base: query.inner.clone(),
             group_by_field: group_by_field.to_string(),
             group_count,
             group_topk,
         };
-        let results = py
-            .allow_threads(|| inner.group_by_query(gbq))
-            .map_err(to_py_err)?;
+        let results = self.without_gil(py, |c| c.group_by_query(gbq))?;
         Ok(results
             .into_iter()
             .map(|r| PyGroupResult { inner: r })
@@ -171,189 +167,119 @@ impl PyCollection {
     #[pyo3(signature = (field, params, rebuild=false, concurrency=None, option=None))]
     fn create_hnsw_index(
         &self,
+        py: Python<'_>,
         field: &str,
         params: &PyHnswIndexParam,
         rebuild: bool,
         concurrency: Option<usize>,
         option: Option<&PyIndexOption>,
     ) -> PyResult<()> {
-        let mut effective_concurrency = concurrency;
-        if effective_concurrency.is_none() {
-            effective_concurrency = option.and_then(|o| o.as_concurrency_option());
-        }
-        self.inner_arc()?
-            .create_index(
-                field,
-                finch_types::IndexParams::Hnsw(params.inner.clone()),
-                finch_types::CreateIndexOptions {
-                    rebuild,
-                    concurrency: effective_concurrency,
-                },
-            )
-            .map_err(to_py_err)
+        let params = finch_types::IndexParams::Hnsw(params.inner.clone());
+        self.create_index(py, field, params, rebuild, concurrency, option)
     }
 
     #[pyo3(signature = (field, params, rebuild=false, concurrency=None, option=None))]
     fn create_ivf_index(
         &self,
+        py: Python<'_>,
         field: &str,
         params: &PyIvfIndexParam,
         rebuild: bool,
         concurrency: Option<usize>,
         option: Option<&PyIndexOption>,
     ) -> PyResult<()> {
-        let mut effective_concurrency = concurrency;
-        if effective_concurrency.is_none() {
-            effective_concurrency = option.and_then(|o| o.as_concurrency_option());
-        }
-        self.inner_arc()?
-            .create_index(
-                field,
-                finch_types::IndexParams::Ivf(params.inner.clone()),
-                finch_types::CreateIndexOptions {
-                    rebuild,
-                    concurrency: effective_concurrency,
-                },
-            )
-            .map_err(to_py_err)
+        let params = finch_types::IndexParams::Ivf(params.inner.clone());
+        self.create_index(py, field, params, rebuild, concurrency, option)
     }
 
     #[pyo3(signature = (field, params, rebuild=false, concurrency=None, option=None))]
     fn create_flat_index(
         &self,
+        py: Python<'_>,
         field: &str,
         params: &PyFlatIndexParam,
         rebuild: bool,
         concurrency: Option<usize>,
         option: Option<&PyIndexOption>,
     ) -> PyResult<()> {
-        let mut effective_concurrency = concurrency;
-        if effective_concurrency.is_none() {
-            effective_concurrency = option.and_then(|o| o.as_concurrency_option());
-        }
-        self.inner_arc()?
-            .create_index(
-                field,
-                finch_types::IndexParams::Flat(params.inner.clone()),
-                finch_types::CreateIndexOptions {
-                    rebuild,
-                    concurrency: effective_concurrency,
-                },
-            )
-            .map_err(to_py_err)
+        let params = finch_types::IndexParams::Flat(params.inner.clone());
+        self.create_index(py, field, params, rebuild, concurrency, option)
     }
 
     #[pyo3(signature = (field, params, rebuild=false, concurrency=None, option=None))]
     fn create_hnsw_sparse_index(
         &self,
+        py: Python<'_>,
         field: &str,
         params: &PyHnswIndexParam,
         rebuild: bool,
         concurrency: Option<usize>,
         option: Option<&PyIndexOption>,
     ) -> PyResult<()> {
-        let mut effective_concurrency = concurrency;
-        if effective_concurrency.is_none() {
-            effective_concurrency = option.and_then(|o| o.as_concurrency_option());
-        }
-        self.inner_arc()?
-            .create_index(
-                field,
-                finch_types::IndexParams::HnswSparse(params.inner.clone()),
-                finch_types::CreateIndexOptions {
-                    rebuild,
-                    concurrency: effective_concurrency,
-                },
-            )
-            .map_err(to_py_err)
+        let params = finch_types::IndexParams::HnswSparse(params.inner.clone());
+        self.create_index(py, field, params, rebuild, concurrency, option)
     }
 
     #[pyo3(signature = (field, params, rebuild=false, concurrency=None, option=None))]
     fn create_flat_sparse_index(
         &self,
+        py: Python<'_>,
         field: &str,
         params: &PyFlatIndexParam,
         rebuild: bool,
         concurrency: Option<usize>,
         option: Option<&PyIndexOption>,
     ) -> PyResult<()> {
-        let mut effective_concurrency = concurrency;
-        if effective_concurrency.is_none() {
-            effective_concurrency = option.and_then(|o| o.as_concurrency_option());
-        }
-        self.inner_arc()?
-            .create_index(
-                field,
-                finch_types::IndexParams::FlatSparse(params.inner.clone()),
-                finch_types::CreateIndexOptions {
-                    rebuild,
-                    concurrency: effective_concurrency,
-                },
-            )
-            .map_err(to_py_err)
+        let params = finch_types::IndexParams::FlatSparse(params.inner.clone());
+        self.create_index(py, field, params, rebuild, concurrency, option)
     }
 
     #[pyo3(signature = (field, params, rebuild=false, concurrency=None, option=None))]
     fn create_invert_index(
         &self,
+        py: Python<'_>,
         field: &str,
         params: &PyInvertIndexParam,
         rebuild: bool,
         concurrency: Option<usize>,
         option: Option<&PyIndexOption>,
     ) -> PyResult<()> {
-        let mut effective_concurrency = concurrency;
-        if effective_concurrency.is_none() {
-            effective_concurrency = option.and_then(|o| o.as_concurrency_option());
-        }
-        self.inner_arc()?
-            .create_index(
-                field,
-                finch_types::IndexParams::Invert(params.inner.clone()),
-                finch_types::CreateIndexOptions {
-                    rebuild,
-                    concurrency: effective_concurrency,
-                },
-            )
-            .map_err(to_py_err)
+        let params = finch_types::IndexParams::Invert(params.inner.clone());
+        self.create_index(py, field, params, rebuild, concurrency, option)
     }
 
-    fn drop_index(&self, field: &str) -> PyResult<()> {
-        self.inner_arc()?.drop_index(field).map_err(to_py_err)
+    fn drop_index(&self, py: Python<'_>, field: &str) -> PyResult<()> {
+        self.without_gil(py, |c| c.drop_index(field))
     }
 
     #[pyo3(signature = (field, rebuild_index=false, concurrency=None, option=None, *, expression=None))]
     fn add_column(
         &self,
+        py: Python<'_>,
         field: &PyFieldSchema,
         rebuild_index: bool,
         concurrency: Option<usize>,
         option: Option<&PyAddColumnOption>,
         expression: Option<&str>,
     ) -> PyResult<()> {
-        let mut effective_concurrency = concurrency;
-        if effective_concurrency.is_none() {
-            effective_concurrency = option.and_then(|o| o.as_concurrency_option());
-        }
-        self.inner_arc()?
-            .add_column_with_expression(
-                field.inner.clone(),
-                expression,
-                finch_types::AddColumnOptions {
-                    rebuild_index,
-                    concurrency: effective_concurrency,
-                },
-            )
-            .map_err(to_py_err)
+        let field = field.inner.clone();
+        let options = finch_types::AddColumnOptions {
+            rebuild_index,
+            concurrency: concurrency.or_else(|| option.and_then(|o| o.as_concurrency_option())),
+        };
+        self.without_gil(py, |c| {
+            c.add_column_with_expression(field, expression, options)
+        })
     }
 
-    fn drop_column(&self, field: &str) -> PyResult<()> {
-        self.inner_arc()?.drop_column(field).map_err(to_py_err)
+    fn drop_column(&self, py: Python<'_>, field: &str) -> PyResult<()> {
+        self.without_gil(py, |c| c.drop_column(field))
     }
 
     #[pyo3(signature = (field, rename_to=None, field_schema=None, rebuild_index=false, concurrency=None, option=None))]
     fn alter_column(
         &self,
+        py: Python<'_>,
         field: &str,
         rename_to: Option<&str>,
         field_schema: Option<&PyFieldSchema>,
@@ -361,21 +287,14 @@ impl PyCollection {
         concurrency: Option<usize>,
         option: Option<&PyAlterColumnOption>,
     ) -> PyResult<()> {
-        let mut effective_concurrency = concurrency;
-        if effective_concurrency.is_none() {
-            effective_concurrency = option.and_then(|o| o.as_concurrency_option());
-        }
-        self.inner_arc()?
-            .alter_column(
-                field,
-                rename_to,
-                field_schema.map(|s| s.inner.clone()),
-                finch_types::AlterColumnOptions {
-                    rebuild_index,
-                    concurrency: effective_concurrency,
-                },
-            )
-            .map_err(to_py_err)
+        let field_schema = field_schema.map(|s| s.inner.clone());
+        let options = finch_types::AlterColumnOptions {
+            rebuild_index,
+            concurrency: concurrency.or_else(|| option.and_then(|o| o.as_concurrency_option())),
+        };
+        self.without_gil(py, |c| {
+            c.alter_column(field, rename_to, field_schema, options)
+        })
     }
 
     // ── Admin ─────────────────────────────────────────────────────────────────
@@ -383,25 +302,21 @@ impl PyCollection {
     #[pyo3(signature = (max_segments=None, concurrency=None, option=None))]
     fn optimize(
         &self,
+        py: Python<'_>,
         max_segments: Option<usize>,
         concurrency: Option<usize>,
         option: Option<&PyOptimizeOption>,
     ) -> PyResult<()> {
-        let mut effective_concurrency = concurrency;
-        if effective_concurrency.is_none() {
-            effective_concurrency = option.and_then(|o| o.as_concurrency_option());
-        }
-        self.inner_arc()?
-            .optimize(finch_types::OptimizeOptions {
-                max_segments,
-                concurrency: effective_concurrency,
-                ..Default::default()
-            })
-            .map_err(to_py_err)
+        let options = finch_types::OptimizeOptions {
+            max_segments,
+            concurrency: concurrency.or_else(|| option.and_then(|o| o.as_concurrency_option())),
+            ..Default::default()
+        };
+        self.without_gil(py, |c| c.optimize(options))
     }
 
-    fn flush(&self) -> PyResult<()> {
-        self.inner_arc()?.flush().map_err(to_py_err)
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        self.without_gil(py, |c| c.flush())
     }
 
     fn close(&mut self) -> PyResult<()> {
@@ -456,13 +371,13 @@ impl PyCollection {
         self.schema()
     }
 
-    fn destroy(&mut self) -> PyResult<()> {
+    fn destroy(&mut self, py: Python<'_>) -> PyResult<()> {
         let arc = self
             .inner
             .take()
             .ok_or_else(|| PyRuntimeError::new_err("Collection is closed/destroyed"))?;
         match Arc::try_unwrap(arc) {
-            Ok(col) => col.destroy().map_err(to_py_err),
+            Ok(col) => py.allow_threads(|| col.destroy()).map_err(to_py_err),
             Err(arc) => {
                 self.inner = Some(arc);
                 Err(PyRuntimeError::new_err(
@@ -492,8 +407,7 @@ impl PyCollection {
 
     fn __setstate__(&mut self, state: &Bound<'_, PyAny>) -> PyResult<()> {
         let (path, opts): (String, PyCollectionOption) = state.extract()?;
-        let collection = Collection::open(Path::new(&path), opts.inner).map_err(to_py_err)?;
-        self.inner = Some(collection);
+        *self = open_impl(state.py(), &path, &opts)?;
         Ok(())
     }
 
@@ -506,20 +420,30 @@ impl PyCollection {
 }
 
 pub fn create_and_open_impl(
+    py: Python<'_>,
     path: &str,
     schema: &PyCollectionSchema,
     options: Option<&PyCollectionOption>,
 ) -> PyResult<PyCollection> {
     let opts = options.map(|o| o.inner.clone()).unwrap_or_default();
-    let collection = Collection::create_and_open(Path::new(path), schema.inner.clone(), opts)
+    let schema = schema.inner.clone();
+    let collection = py
+        .allow_threads(|| Collection::create_and_open(Path::new(path), schema, opts))
         .map_err(to_py_err)?;
     Ok(PyCollection {
         inner: Some(collection),
     })
 }
 
-pub fn open_impl(path: &str, option: &PyCollectionOption) -> PyResult<PyCollection> {
-    let collection = Collection::open(Path::new(path), option.inner.clone()).map_err(to_py_err)?;
+pub fn open_impl(
+    py: Python<'_>,
+    path: &str,
+    option: &PyCollectionOption,
+) -> PyResult<PyCollection> {
+    let opts = option.inner.clone();
+    let collection = py
+        .allow_threads(|| Collection::open(Path::new(path), opts))
+        .map_err(to_py_err)?;
     Ok(PyCollection {
         inner: Some(collection),
     })

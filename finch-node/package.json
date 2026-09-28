@@ -6,7 +6,8 @@
   "types": "index.d.ts",
   "scripts": {
     "build": "cargo-cp-artifact -nc index.node -- cargo build --message-format=json-render-diagnostics",
-    "build-release": "cargo-cp-artifact -nc index.node -- cargo build --message-format=json-render-diagnostics --release"
+    "build-release": "cargo-cp-artifact -nc index.node -- cargo build --message-format=json-render-diagnostics --release",
+    "test": "node --test"
   },
   "license": "Apache-2.0"
 }

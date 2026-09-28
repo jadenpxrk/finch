@@ -4,39 +4,65 @@ use super::*;
 fn test_filter_only_query_recall_base_scalar_semantics_match_reference() {
     let path = temp_dir("filter_only_recall_base");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("id", DataType::Int64).not_null())
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(
+            FieldSchema::new("id", DataType::Int64)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_id", DataType::Int64)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         )
-        .with_field(FieldSchema::new("bool", DataType::Bool).not_null())
+        .with_field(
+            FieldSchema::new("bool", DataType::Bool)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_bool", DataType::Bool)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         )
-        .with_field(FieldSchema::new("bool_array", DataType::ArrayBool).not_null())
+        .with_field(
+            FieldSchema::new("bool_array", DataType::ArrayBool)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_bool_array", DataType::ArrayBool)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         )
-        .with_field(FieldSchema::new("name", DataType::String).not_null())
+        .with_field(
+            FieldSchema::new("name", DataType::String)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_name", DataType::String)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         )
-        .with_field(FieldSchema::new("optional_age", DataType::Uint32))
+        .with_field(FieldSchema::new("optional_age", DataType::Uint32).nullable())
         .with_field(
             FieldSchema::new("invert_optional_age", DataType::Uint32)
+                .nullable()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         )
-        .with_field(FieldSchema::new("category_set", DataType::ArrayInt32))
+        .with_field(FieldSchema::new("category_set", DataType::ArrayInt32).nullable())
         .with_field(
             FieldSchema::new("invert_category_set", DataType::ArrayInt32)
+                .nullable()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         );
 
@@ -272,14 +298,20 @@ fn test_filter_only_query_recall_base_scalar_semantics_match_reference() {
 fn test_vector_query_recall_base_dense_semantics_match_reference() {
     let path = temp_dir("vector_recall_base_dense");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("id", DataType::Int64).not_null())
+        .with_field(
+            FieldSchema::new("id", DataType::Int64)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("invert_id", DataType::Int64)
+                .nullable()
                 .not_null()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         )
         .with_field(
             FieldSchema::new("dense", DataType::VectorFp32)
+                .nullable()
                 .with_dimension(4)
                 .with_index(IndexParams::Flat(FlatIndexParams::new(MetricType::L2))),
         );
@@ -385,9 +417,14 @@ fn test_vector_query_recall_base_dense_semantics_match_reference() {
 fn test_vector_query_recall_base_sparse_semantics_match_reference() {
     let path = temp_dir("vector_recall_base_sparse");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("id", DataType::Int64).not_null())
+        .with_field(
+            FieldSchema::new("id", DataType::Int64)
+                .nullable()
+                .not_null(),
+        )
         .with_field(
             FieldSchema::new("sparse", DataType::SparseFp32)
+                .nullable()
                 .with_dimension(100)
                 .with_index(IndexParams::FlatSparse(FlatIndexParams::new(
                     MetricType::InnerProduct,
@@ -461,6 +498,7 @@ fn test_vector_query_dense_inner_product_score_semantics_match_reference() {
     let path = temp_dir("vector_dense_ip_score");
     let schema = CollectionSchema::new("test").with_field(
         FieldSchema::new("emb", DataType::VectorFp32)
+            .nullable()
             .with_dimension(2)
             .with_index(IndexParams::Flat(FlatIndexParams::new(
                 MetricType::InnerProduct,
@@ -496,6 +534,7 @@ fn test_vector_query_dense_mips_l2_distance_semantics_match_reference() {
         let path = temp_dir(&format!("vector_dense_mips_l2_{case_name}"));
         let schema = CollectionSchema::new("test").with_field(
             FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
                 .with_dimension(2)
                 .with_index(IndexParams::Flat(
                     FlatIndexParams::new(MetricType::MipsL2).with_quantize(quantize),
@@ -571,8 +610,11 @@ fn test_query_ip_scores_upsert_replacement_and_include_vector_across_indexes() {
     // - `include_vector` round-trips the stored vector values.
     fn run_case(case_name: &str, index_params: IndexParams) {
         let path = temp_dir(&format!("vector_column_indexer_{case_name}"));
-        let schema = CollectionSchema::new("test")
-            .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4));
+        let schema = CollectionSchema::new("test").with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        );
 
         let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
@@ -690,8 +732,11 @@ fn test_fp16_vector_field_query_returns_stored_vectors() {
     // Mirrors reference's `DenseDataTypeFP16` behavior (fp16 storage + fetch/search).
     fn run_case(case_name: &str, index_params: IndexParams) {
         let path = temp_dir(&format!("vector_column_indexer_fp16_{case_name}"));
-        let schema = CollectionSchema::new("test")
-            .with_field(FieldSchema::new("emb", DataType::VectorFp16).with_dimension(4));
+        let schema = CollectionSchema::new("test").with_field(
+            FieldSchema::new("emb", DataType::VectorFp16)
+                .nullable()
+                .with_dimension(4),
+        );
 
         let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 

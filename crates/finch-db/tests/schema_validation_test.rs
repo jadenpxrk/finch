@@ -6,8 +6,11 @@ use common::*;
 #[test]
 fn test_schema_validation_empty_name() {
     let path = temp_dir("schema_val");
-    let schema = CollectionSchema::new("")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4));
+    let schema = CollectionSchema::new("").with_field(
+        FieldSchema::new("emb", DataType::VectorFp32)
+            .nullable()
+            .with_dimension(4),
+    );
     assert!(Collection::create_and_open(&path, schema, CollectionOptions::default()).is_err());
 }
 
@@ -15,8 +18,8 @@ fn test_schema_validation_empty_name() {
 fn test_schema_validation_vector_no_dim() {
     let path = temp_dir("schema_dim");
     // Vector field without dimension should fail validation
-    let schema =
-        CollectionSchema::new("test").with_field(FieldSchema::new("emb", DataType::VectorFp32)); // no dimension
+    let schema = CollectionSchema::new("test")
+        .with_field(FieldSchema::new("emb", DataType::VectorFp32).nullable()); // no dimension
     assert!(Collection::create_and_open(&path, schema, CollectionOptions::default()).is_err());
 }
 
@@ -25,8 +28,12 @@ fn test_query_contain_empty_list_semantics_match_reference() {
     let path = temp_dir("contain_empty_list_semantics");
 
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
-        .with_field(FieldSchema::new("tags", DataType::ArrayString));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        )
+        .with_field(FieldSchema::new("tags", DataType::ArrayString).nullable());
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let statuses = col
@@ -95,11 +102,13 @@ fn test_invert_index_tracks_null_and_nonnull_for_is_null_filters() {
     let schema = CollectionSchema::new("test")
         .with_field(
             FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
                 .with_dimension(4)
                 .with_index(IndexParams::Hnsw(HnswIndexParams::new(MetricType::L2))),
         )
         .with_field(
             FieldSchema::new("tag", DataType::String)
+                .nullable()
                 .with_index(IndexParams::Invert(InvertIndexParams::default())),
         );
 
@@ -188,8 +197,12 @@ fn test_query_eq_or_rewrites_to_in_and_ne_or_rewrites_to_not_in() {
     let path = temp_dir("rewrite_eq_or_ne_or");
 
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
-        .with_field(FieldSchema::new("age", DataType::Int64));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        )
+        .with_field(FieldSchema::new("age", DataType::Int64).nullable());
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let statuses = col
@@ -241,8 +254,12 @@ fn test_create_invert_index_builds_null_markers_for_is_null_pushdown() {
     let path = temp_dir("create_invert_null_markers");
 
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
-        .with_field(FieldSchema::new("tag", DataType::String));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        )
+        .with_field(FieldSchema::new("tag", DataType::String).nullable());
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let statuses = col
@@ -298,7 +315,11 @@ fn test_schema_default_max_docs_matches_compat_default() {
 fn test_schema_validation_rejects_too_small_segment_limit() {
     let path = temp_dir("schema_small_seg");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(4))
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(4),
+        )
         .with_max_docs_per_segment(MAX_DOC_COUNT_PER_SEGMENT_MIN_THRESHOLD - 1);
     assert!(Collection::create_and_open(&path, schema, CollectionOptions::default()).is_err());
 }
@@ -308,10 +329,14 @@ fn test_sql_filter_allows_keyword_field_names() {
     let path = temp_dir("keyword_fields_filter");
 
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("dummy_vec", DataType::VectorFp32).with_dimension(1))
-        .with_field(FieldSchema::new("and", DataType::Int64))
-        .with_field(FieldSchema::new("or", DataType::String))
-        .with_field(FieldSchema::new("select", DataType::Int64));
+        .with_field(
+            FieldSchema::new("dummy_vec", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(1),
+        )
+        .with_field(FieldSchema::new("and", DataType::Int64).nullable())
+        .with_field(FieldSchema::new("or", DataType::String).nullable())
+        .with_field(FieldSchema::new("select", DataType::Int64).nullable());
 
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let statuses = col
@@ -353,8 +378,11 @@ fn test_sql_filter_allows_keyword_field_names() {
 #[test]
 fn test_small_scalar_fields_reject_mismatched_value_variants() {
     let path = temp_dir("small_scalar_variants");
-    let mut schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(2));
+    let mut schema = CollectionSchema::new("test").with_field(
+        FieldSchema::new("emb", DataType::VectorFp32)
+            .nullable()
+            .with_dimension(2),
+    );
     let cases = [
         ("i8", DataType::Int8, Value::I8(7), Value::I64(7)),
         ("i16", DataType::Int16, Value::I16(7), Value::I64(7)),
@@ -368,7 +396,7 @@ fn test_small_scalar_fields_reject_mismatched_value_variants() {
         ),
     ];
     for (name, data_type, _, _) in &cases {
-        schema = schema.with_field(FieldSchema::new(*name, *data_type));
+        schema = schema.with_field(FieldSchema::new(*name, *data_type).nullable());
     }
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let doc = |pk: &str, name: &str, value: &Value| {

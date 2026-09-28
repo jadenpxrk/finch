@@ -18,8 +18,16 @@ fn pks(docs: &[Arc<Doc>]) -> Vec<String> {
 fn nul_in_indexed_string_is_rejected_before_the_wal() {
     let path = temp_dir("nul_indexed_string");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(2))
-        .with_field(FieldSchema::new("label", DataType::String).with_index(invert(false)));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(2),
+        )
+        .with_field(
+            FieldSchema::new("label", DataType::String)
+                .nullable()
+                .with_index(invert(false)),
+        );
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
 
     let doc = Doc::new("bad")
@@ -40,8 +48,16 @@ fn nul_in_indexed_string_is_rejected_before_the_wal() {
 fn replaying_a_wal_record_the_index_rejects_fails_open_naming_the_field() {
     let path = temp_dir("nul_indexed_string_replay");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(2))
-        .with_field(FieldSchema::new("label", DataType::String).with_index(invert(false)));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(2),
+        )
+        .with_field(
+            FieldSchema::new("label", DataType::String)
+                .nullable()
+                .with_index(invert(false)),
+        );
     drop(Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap());
 
     // A legacy JSONL WAL is plain text, so a damaged record can be written by hand.
@@ -62,8 +78,16 @@ fn replaying_a_wal_record_the_index_rejects_fails_open_naming_the_field() {
 fn binary_range_collection(name: &str) -> (std::path::PathBuf, Arc<Collection>) {
     let path = temp_dir(name);
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(2))
-        .with_field(FieldSchema::new("payload", DataType::Binary).with_index(invert(true)));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(2),
+        )
+        .with_field(
+            FieldSchema::new("payload", DataType::Binary)
+                .nullable()
+                .with_index(invert(true)),
+        );
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let docs = [
         ("short", b"000".as_slice()),
@@ -107,7 +131,7 @@ fn dropped_column_is_not_materialized() {
     let col =
         Collection::create_and_open(&path, basic_schema(2), CollectionOptions::default()).unwrap();
     col.add_column(
-        FieldSchema::new("x", DataType::Int32),
+        FieldSchema::new("x", DataType::Int32).nullable(),
         AddColumnOptions::default(),
     )
     .unwrap();
@@ -132,8 +156,12 @@ fn dropped_column_is_not_materialized() {
 fn group_by_widens_candidates_until_groups_are_filled() {
     let path = temp_dir("group_by_widens");
     let schema = CollectionSchema::new("test")
-        .with_field(FieldSchema::new("emb", DataType::VectorFp32).with_dimension(2))
-        .with_field(FieldSchema::new("category", DataType::String));
+        .with_field(
+            FieldSchema::new("emb", DataType::VectorFp32)
+                .nullable()
+                .with_dimension(2),
+        )
+        .with_field(FieldSchema::new("category", DataType::String).nullable());
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let mut docs: Vec<Doc> = (0..4)
         .map(|i| {

@@ -26,6 +26,7 @@ export interface InvertIndexParams {
 export interface FieldSchemaOptions {
   name: string
   dataType: number
+  /** Defaults to false, as in Rust and Python. */
   nullable?: boolean
   dimension?: number
   hnswIndex?: HnswIndexParams
@@ -87,6 +88,11 @@ export interface StatusObject {
   ok: boolean
   code: number
   message: string
+}
+
+/** Errors from finch operations carry the numeric finch status code, as in `StatusObject.code`. */
+export interface FinchError extends Error {
+  code: number
 }
 
 export interface MemoryStoreOptions {
@@ -342,19 +348,20 @@ export declare class FinchMemory {
 }
 
 export declare class MemoryStore {
-  static create(path: string, embeddingDim: number, options?: MemoryStoreOptions): MemoryStore
-  static open(path: string, options?: MemoryStoreOptions): MemoryStore
+  static create(path: string, embeddingDim: number, options?: MemoryStoreOptions): Promise<MemoryStore>
+  static open(path: string, options?: MemoryStoreOptions): Promise<MemoryStore>
+  applyStateMutationBatchJson(batchJson: string): Promise<string>
   /** JSON of `AnswerReadyStateJsonRequest`. */
   projectAnswerReadyStateJson(requestJson: string): string
-  ingestEpisodeJson(inputJson: string, ingestedAtMs: number, chunkOptionsJson?: string): string
-  appendArtifactJson(recordJson: string): string
-  ingestArtifactTextJson(recordJson: string, text: string, chunkOptionsJson?: string): string
-  addCorrectionJson(inputJson: string, createdAtMs: number): string
-  addManualClaimJson(inputJson: string, embedding?: number[]): string
-  addProfileJson(inputJson: string): string
-  addEntityJson(inputJson: string, embedding?: number[]): string
-  addEdgeJson(inputJson: string): string
-  addSlotAliasJson(inputJson: string, recordedAtMs: number): string
+  ingestEpisodeJson(inputJson: string, ingestedAtMs: number, chunkOptionsJson?: string): Promise<string>
+  appendArtifactJson(recordJson: string): Promise<string>
+  ingestArtifactTextJson(recordJson: string, text: string, chunkOptionsJson?: string): Promise<string>
+  addCorrectionJson(inputJson: string, createdAtMs: number): Promise<string>
+  addManualClaimJson(inputJson: string, embedding?: number[]): Promise<string>
+  addProfileJson(inputJson: string): Promise<string>
+  addEntityJson(inputJson: string, embedding?: number[]): Promise<string>
+  addEdgeJson(inputJson: string): Promise<string>
+  addSlotAliasJson(inputJson: string, recordedAtMs: number): Promise<string>
   scanSlotAliasesJson(scopeJson: string, limit: number, atMs?: number): string
   querySpansJson(
     scopeJson: string,
@@ -427,11 +434,11 @@ export declare class MemoryStore {
 }
 
 export declare class Collection {
-  insert(docs: DocObject[]): StatusObject[]
-  upsert(docs: DocObject[]): StatusObject[]
-  update(docs: DocObject[]): StatusObject[]
-  delete(pks: string[]): StatusObject[]
-  deleteByFilter(filter: string): StatusObject
+  insert(docs: DocObject[]): Promise<StatusObject[]>
+  upsert(docs: DocObject[]): Promise<StatusObject[]>
+  update(docs: DocObject[]): Promise<StatusObject[]>
+  delete(pks: string[]): Promise<StatusObject[]>
+  deleteByFilter(filter: string): Promise<StatusObject>
 	  query(opts: VectorQueryOptions): DocObject[]
 	  /**
 	   * Execute a SQL SELECT query (Finch extension).
@@ -453,23 +460,24 @@ export declare class Collection {
     fieldOpts: FieldSchemaOptions,
     rebuild?: boolean,
     concurrency?: number
-  ): void
-  dropIndex(field: string): void
+  ): Promise<void>
+  dropIndex(field: string): Promise<void>
   addColumn(
     fieldOpts: FieldSchemaOptions,
     rebuildIndex?: boolean,
     concurrency?: number,
     expression?: string
-  ): void
-  dropColumn(field: string): void
+  ): Promise<void>
+  dropColumn(field: string): Promise<void>
   alterColumn(
     field: string,
     renameTo?: string,
+    fieldSchema?: FieldSchemaOptions,
     rebuildIndex?: boolean,
     concurrency?: number
-  ): void
-  optimize(maxSegments?: number, concurrency?: number): void
-	flush(): void
+  ): Promise<void>
+  optimize(maxSegments?: number, concurrency?: number): Promise<void>
+	flush(): Promise<void>
 	stats(): Record<string, number>
 	schemaInfo(): any
 	path(): string
@@ -483,14 +491,14 @@ export declare function createAndOpen(
   readOnly?: boolean,
   enableMmap?: boolean,
   maxBufferSize?: number
-): Collection
+): Promise<Collection>
 
 export declare function open(
   path: string,
   readOnly?: boolean,
   enableMmap?: boolean,
   maxBufferSize?: number
-): Collection
+): Promise<Collection>
 
 export interface GlobalConfigOptions {
   memoryLimitBytes?: number

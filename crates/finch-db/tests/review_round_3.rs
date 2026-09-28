@@ -5,7 +5,8 @@ use common::*;
 fn or_of_inequalities_is_rewritten_as_not_in() {
     // Every non-null value satisfies at least one inequality, so all three rows must match.
     let path = temp_dir("round_3_inequality_or");
-    let schema = CollectionSchema::new("test").with_field(FieldSchema::new("n", DataType::Int64));
+    let schema =
+        CollectionSchema::new("test").with_field(FieldSchema::new("n", DataType::Int64).nullable());
     let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
     let statuses = col
         .insert(vec![

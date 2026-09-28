@@ -20,19 +20,19 @@ pub const SLOTS_COLLECTION: &str = "memory_slots";
 pub const SLOT_ALIASES_COLLECTION: &str = "memory_slot_aliases";
 
 fn string_field(name: &str) -> FieldSchema {
-    FieldSchema::new(name, DataType::String)
+    FieldSchema::new(name, DataType::String).nullable()
 }
 
 fn i64_field(name: &str) -> FieldSchema {
-    FieldSchema::new(name, DataType::Int64)
+    FieldSchema::new(name, DataType::Int64).nullable()
 }
 
 fn f32_field(name: &str) -> FieldSchema {
-    FieldSchema::new(name, DataType::Float32)
+    FieldSchema::new(name, DataType::Float32).nullable()
 }
 
 fn array_string_field(name: &str) -> FieldSchema {
-    FieldSchema::new(name, DataType::ArrayString)
+    FieldSchema::new(name, DataType::ArrayString).nullable()
 }
 
 fn vector_field(name: &str, dim: usize) -> FieldSchema {
@@ -41,6 +41,7 @@ fn vector_field(name: &str, dim: usize) -> FieldSchema {
 
 fn vector_field_with_hnsw(name: &str, dim: usize, params: HnswIndexParams) -> FieldSchema {
     FieldSchema::new(name, DataType::VectorFp32)
+        .nullable()
         .with_dimension(dim)
         .with_index(IndexParams::Hnsw(params))
 }

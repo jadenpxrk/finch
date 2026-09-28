@@ -287,6 +287,13 @@ impl PyDoc {
         self.inner.fields.contains_key(name)
     }
 
+    /// Sets a field without a schema, inferring its type from the Python value.
+    ///
+    /// None is null; bool, int (int64, else uint64), float, str, and bytes map to their scalar
+    /// types; dict[int, float] is a sparse fp32 vector. A list must be non-empty and holds one
+    /// kind: bools, strs, bytes, ints (array int64, else array uint64), or floats mixed with ints,
+    /// which becomes a float64 vector and rejects any int beyond 2**53. Use `set_any` to target
+    /// another type, such as a float32 vector.
     fn set_field(&mut self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let v = py_to_value(value)?;
         self.inner.fields.insert(name.to_string(), v);

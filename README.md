@@ -56,6 +56,10 @@ let hits = col.query(VectorQuery::new("emb", vec![1.0, 0.0, 0.0, 0.0], 1))?;
 assert_eq!(hits[0].pk, "d1");
 ```
 
+A field is required by default: `FieldSchema::new` in Rust, `FieldSchema` in Python, and
+`FieldSchemaOptions.nullable` in Node all default to not nullable. Call `.nullable()` in Rust or
+pass `nullable=True` to let a document omit the field or store null in it.
+
 Run the tests:
 
 ```bash

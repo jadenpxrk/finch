@@ -25,7 +25,8 @@ pub(crate) fn docobject_to_doc(
                 "doc validate failed: field[{k}] does not exist in collection's schema"
             )));
         };
-        let val = json_to_typed_value(v, fs.data_type)?;
+        let val = json_to_typed_value(v, fs.data_type)
+            .map_err(|e| napi::Error::new(e.status, format!("field[{k}]: {}", e.reason)))?;
         doc.fields.insert(k, val);
     }
     Ok(doc)
@@ -334,6 +335,36 @@ mod tests {
                 )]),
             };
             assert!(docobject_to_doc(obj, &schema).is_err(), "{field}");
+        }
+    }
+
+    #[test]
+    fn test_integer_vector_rejects_values_f32_cannot_hold_and_names_the_field() {
+        let schema = finch_types::CollectionSchema::new("test").with_field(
+            finch_types::FieldSchema::new("ids", finch_types::DataType::VectorInt32)
+                .with_dimension(2),
+        );
+        let convert = |values: serde_json::Value| {
+            docobject_to_doc(
+                DocObject {
+                    pk: "d0".to_string(),
+                    score: None,
+                    fields: HashMap::from([("ids".to_string(), values)]),
+                },
+                &schema,
+            )
+        };
+
+        let doc = convert(serde_json::json!([16_777_216, -3])).expect("exact values convert");
+        assert!(
+            matches!(doc.fields.get("ids"), Some(finch_types::Value::VecF32(v)) if v == &vec![16_777_216.0, -3.0])
+        );
+        for bad in [
+            serde_json::json!([16_777_217, 1]),
+            serde_json::json!([1.5, 1]),
+        ] {
+            let err = convert(bad).expect_err("inexact value must be rejected");
+            assert!(err.reason.contains("field[ids]"), "{}", err.reason);
         }
     }
 }
