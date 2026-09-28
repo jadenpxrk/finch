@@ -16,9 +16,9 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
-      # Avoid binding builds in CI by default (pyo3/napi toolchain deps).
-      - name: Test core crates
-        run: cargo test -p finch-types -p finch-core -p finch-storage -p finch-db --all-targets
+      # The bindings build in their own jobs.
+      - name: Test Rust crates
+        run: cargo test -p finch-types -p finch-proto -p finch-core -p finch-storage -p finch-db -p finch-memory --all-targets
 
   clippy:
     runs-on: ubuntu-latest
@@ -68,47 +68,3 @@ jobs:
 
       - name: Python smoke tests
         run: .venv/bin/python -m unittest discover -s finch-py/python/tests -p "test_*.py" -v
-
-  vectordbbench-conformance:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # Finch's VectorDBBench integration is validated against a pinned upstream
-      # revision for deterministic CI. Update the ref intentionally (and ideally
-      # along with parity fixes) to avoid surprise upstream breakages.
-      - name: Checkout VectorDBBench
-        uses: actions/checkout@v4
-        with:
-          repository: zilliztech/VectorDBBench
-          ref: f35f648c81da3e25de530675bd8133fa8159f777
-          path: VectorDBBench
-          fetch-depth: 1
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.93.1
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Create venv + install test deps
-        run: |
-          rm -rf .venv
-          python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip maturin numpy
-
-      - name: Build/install finch Python extension
-        working-directory: finch-py
-        run: ../.venv/bin/maturin develop -q
-
-      - name: Install minimal VectorDBBench deps
-        run: .venv/bin/python -m pip install "pydantic<2"
-
-      - name: VectorDBBench conformance (finch)
-        working-directory: VectorDBBench
-        run: ../.venv/bin/python -m unittest discover -s tests -p "test_finch_*conformance.py" -v

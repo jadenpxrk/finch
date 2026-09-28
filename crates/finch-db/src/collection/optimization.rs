@@ -408,7 +408,7 @@ impl Collection {
     }
 
     // Avoid reusing the currently-open writing segment id. Reusing it causes
-    // redb invert-index lock conflicts during optimize.
+    // fjall invert-index lock conflicts during optimize.
     fn output_segment_ids(&self, version: &Version) -> OutputSegmentIds {
         let active_writing = self.writing_segment.read().id;
         let reserved: HashSet<u32> = version

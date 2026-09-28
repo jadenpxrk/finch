@@ -80,9 +80,8 @@ python -m unittest tests.test_finch_conformance -q
 These tests check the Finch client and its SQL filter handling for flat, HNSW, and IVF
 indexes. They need no other database.
 
-The `vectordbbench-conformance` job in `.github/workflows/ci.yml` runs these tests against
-VectorDBBench commit `f35f648c81da3e25de530675bd8133fa8159f777`. If a newer VectorDBBench
-passes locally, update that commit in the workflow.
+These tests are not part of the upstream VectorDBBench repository, and this repository's CI
+does not run them.
 
 ## Parity tests
 

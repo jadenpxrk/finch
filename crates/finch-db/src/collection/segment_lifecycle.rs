@@ -119,7 +119,7 @@ impl Collection {
         if writing.doc_count() == 0 {
             return Ok(None);
         }
-        // Flush Durability::None redb writes to disk before persisting.
+        // Flush Durability::None fjall writes to disk before persisting.
         writing.sync_invert_indexes()?;
         let meta = writing.dump(&self.path, effective_forward_file_format(&self.options))?;
 
@@ -270,7 +270,7 @@ impl Collection {
         let writing_id = {
             let mut writing = self.writing_segment.write();
             let id = next_id.unwrap_or(writing.id);
-            // Avoid holding multiple writable redb-backed invert indexes at
+            // Avoid holding multiple writable fjall-backed invert indexes at
             // once (old writing segment + replacement writing segment).
             writing.drop_invert_indexes();
             id

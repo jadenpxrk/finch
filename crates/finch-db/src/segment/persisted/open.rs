@@ -53,8 +53,8 @@ impl PersistedSegment {
     /// Open a persisted segment without opening any invert indexes.
     ///
     /// This is used during flush/index-build paths to avoid attempting to open
-    /// redb-backed invert indexes while the same segment is still the active
-    /// writing segment (redb file locks would conflict).
+    /// fjall-backed invert indexes while the same segment is still the active
+    /// writing segment (fjall file locks would conflict).
     pub fn open_forward_only(meta: &WrittenSegmentMeta) -> ZResult<Self> {
         Self::open_forward_only_with_mmap(meta, true)
     }

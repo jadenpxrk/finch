@@ -554,7 +554,7 @@ impl Collection {
         }
 
         // Create writing segment. For read-only opens, keep it in-memory only
-        // (no invert-index redb handles) to avoid writer locks.
+        // (no invert-index fjall handles) to avoid writer locks.
         if options.read_only {
             ensure_no_pending_wal(path, writing_seg_id)?;
         }

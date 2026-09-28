@@ -55,10 +55,10 @@ impl WritingSegment {
         Ok(())
     }
 
-    /// Drop (close) all redb-backed invert index handles for this writing segment.
+    /// Drop (close) all fjall-backed invert index handles for this writing segment.
     ///
     /// This is used during flush/DDL paths to avoid having multiple writable
-    /// redb instances open concurrently (which can fail under sandboxed
+    /// fjall instances open concurrently (which can fail under sandboxed
     /// environments with strict file-lock limits).
     pub(crate) fn drop_invert_indexes(&mut self) {
         self.invert_indexes.clear();

@@ -206,7 +206,8 @@ A state record is one version of what a slot held, with the claims, corrections,
 produced it. A dependency trace records which rule derived a state record from which claim.
 
 Every record carries a scope: a space, and optional tenant, user, agent, project, and thread ids.
-Every read and write filters on the scope, so one store can hold many users without mixing them.
+Every read and write filters on the scope, so one store can hold many users. A read at a scope
+also returns the records of narrower scopes. A write changes records of its own scope only.
 
 ## 9. Ingest
 
@@ -294,14 +295,16 @@ flowchart TD
 Finch never edits a stored claim in place. A correction is its own record. It names its target
 by claim ids or by slot. It carries the time it takes effect and who asked for it. A retract
 ends the claim's validity at that time. A replace also writes a new claim with the new value. A
-restore brings a retracted claim back. A forget removes the claim from every read. Any rule that
-depends on the affected slot fires again, so a derived value falls with its source.
+restore brings a retracted claim back. A forget ends the claim in every current read and packs
+it as a tombstone. The stored row stays. Any rule that depends on the affected slot fires again,
+so a derived value falls with its source.
 
-A correction, like a claim write, changes several collections in one batch. Before the batch
-changes anything, Finch writes the prior version of every record it will touch to a journal
-file in the store directory. When the batch completes, Finch deletes the journal. If the process dies
-in between, the next open finds the journal, restores every prior version, and deletes it. A
-read therefore sees the whole batch or none of it.
+The batch write API changes several collections in one batch. Before the batch changes
+anything, Finch writes the prior version of every record it will touch to a journal file in the
+store directory. When the batch completes, Finch deletes the journal. If the process dies in
+between, the next open finds the journal, restores every prior version, and deletes it. A read
+therefore sees the whole batch or none of it. A single claim write or correction outside the
+batch API updates its collections in several steps without the journal.
 
 ## 13. The memory read path
 
@@ -352,7 +355,7 @@ tombstone. With the same records and the same hits, the packer writes the same c
 - With the same records and search hits, the memory layer packs the same context.
 - One process at a time can open a collection for writing.
 - Every read and write of the memory layer stays inside its scope.
-- A claim write or a correction takes effect as one batch, or not at all.
+- A batch write takes effect as one batch, or not at all.
 - A claim, a correction, and a rule never change after Finch stores them. A new record
   supersedes an old one.
 - A read at a past valid time or a past transaction time returns the versions that held then.
