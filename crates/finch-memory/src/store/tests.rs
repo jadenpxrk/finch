@@ -400,6 +400,7 @@ mod review_round_7;
 mod review_round_8;
 mod review_round_9;
 mod rule_projection;
+mod rule_time;
 mod rules;
 mod scope_keys;
 mod state_protocol;

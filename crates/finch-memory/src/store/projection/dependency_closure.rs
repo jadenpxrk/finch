@@ -180,7 +180,7 @@ impl MemoryStore {
         persisted_outcomes: Vec<RuleResolutionOutcome>,
         projection: &mut AnswerReadyStateProjection,
     ) -> ZResult<()> {
-        let applications = self.read_time_rule_applications(projection)?;
+        let applications = self.read_time_rule_applications(projection, at_ms)?;
         self.add_applied_rules(scope, at_ms, &applications, &mut projection.rules)?;
         let completion = self.complete_target_dependency_chains(
             &projection.rules,
@@ -217,19 +217,26 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Rule applications a read-time re-evaluation of the projection's claims produces, limited
-    /// to the dependency rules when the read has any.
+    /// Rule applications a read-time re-evaluation of the projection's claims produces at the
+    /// read's time, limited to the dependency rules when the read has any.
     fn read_time_rule_applications(
         &self,
         projection: &AnswerReadyStateProjection,
+        at_ms: Option<i64>,
     ) -> ZResult<Vec<ResolvedRuleApplication>> {
         let known_ids = projection
             .claims
             .iter()
             .map(|claim| claim.id.clone())
             .collect::<BTreeSet<_>>();
-        let mut applications =
-            self.resolve_rules_for_changed_claims(&projection.claims, &known_ids, MAX_RULE_HOPS)?;
+        // A read with no valid time reads the present, so only rules in force now fire.
+        let evaluated_at_ms = at_ms.unwrap_or_else(system_time_ms);
+        let mut applications = self.resolve_rules_for_changed_claims_at(
+            &projection.claims,
+            &known_ids,
+            MAX_RULE_HOPS,
+            Some(evaluated_at_ms),
+        )?;
         if !projection.rules.is_empty() {
             let relevant_rule_ids = projection
                 .rules
