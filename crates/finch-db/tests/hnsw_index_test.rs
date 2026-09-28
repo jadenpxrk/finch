@@ -30,6 +30,7 @@ fn test_hnsw_index_search() {
             metric: MetricType::L2,
             quantize: Default::default(),
             build_concurrency: None,
+            build_tuning: Default::default(),
         }),
         CreateIndexOptions::default(),
     )
@@ -122,4 +123,56 @@ fn test_hnsw_rebuild_with_failed_manifest_commit_keeps_old_index() {
     drop(col);
     std::fs::remove_dir_all(&path).ok();
     assert_eq!(m, 32);
+}
+
+#[test]
+fn hnsw_query_fills_topk_after_most_documents_are_deleted() {
+    let path = temp_dir("hnsw_mostly_deleted");
+    let params = HnswIndexParams::new(MetricType::L2)
+        .with_m(16)
+        .with_ef_construction(200);
+    let schema = CollectionSchema::new("test").with_field(
+        FieldSchema::new("emb", DataType::VectorFp32)
+            .with_dimension(8)
+            .with_index(IndexParams::Hnsw(params)),
+    );
+    let col = Collection::create_and_open(&path, schema, CollectionOptions::default()).unwrap();
+    let vector = |i: u32| -> Vec<f32> {
+        (0..8u32)
+            .map(|j| (i.wrapping_mul(2_654_435_761) ^ j.wrapping_mul(40_503)) % 1000)
+            .map(|x| x as f32 / 1000.0)
+            .collect()
+    };
+    let docs: Vec<Doc> = (0..300)
+        .map(|i| Doc::new(format!("d{i}")).set("emb", vector(i)))
+        .collect();
+    col.insert(docs).unwrap();
+    col.optimize(OptimizeOptions::default()).unwrap();
+    let deleted: Vec<String> = (0..300)
+        .filter(|i| i % 5 < 3)
+        .map(|i| format!("d{i}"))
+        .collect();
+    col.delete(deleted).unwrap();
+
+    let query = |params: QueryParams| {
+        let hits = col
+            .query(VectorQuery::new("emb", vector(7), 10).with_params(params))
+            .unwrap();
+        hits.iter().map(|doc| doc.pk.clone()).collect::<Vec<_>>()
+    };
+    let hnsw = query(QueryParams {
+        ef: Some(10),
+        hnsw_upper_ef: Some(4),
+        hnsw_l0_seeds: Some(1),
+        ..Default::default()
+    });
+    let exact = query(QueryParams {
+        is_linear: Some(true),
+        ..Default::default()
+    });
+    assert_eq!(exact.len(), 10);
+    assert_eq!(hnsw, exact);
+
+    drop(col);
+    std::fs::remove_dir_all(&path).ok();
 }

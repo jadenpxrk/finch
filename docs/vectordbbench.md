@@ -58,16 +58,20 @@ collection directory.
 ## HNSW build speed
 
 HNSW neighbor selection during a build compares vectors on a prefix of their dimensions. By
-default the prefix is the full dimension. Setting `FINCH_HNSW_HEURISTIC_DIM` to a smaller
-number shortens the prefix. A shorter prefix makes builds of high-dimensional vectors faster,
-for example vectors with 1,536 dimensions. A shorter prefix can also lower recall. Search
-always uses full vectors.
+default the prefix is the full dimension. Setting `build_tuning.heuristic_dim` in the field's
+`HnswIndexParams` to a smaller number shortens the prefix. A shorter prefix makes builds of
+high-dimensional vectors faster, for example vectors with 1,536 dimensions. A shorter prefix
+can also lower recall. Search always uses full vectors.
 
-```bash
-export FINCH_HNSW_HEURISTIC_DIM=64
+```rust
+let mut params = HnswIndexParams::new(MetricType::Cosine);
+params.build_tuning.heuristic_dim = Some(64);
 ```
 
-Finch reads the variable each time it creates an HNSW builder.
+The collection manifest and the index file both record the setting, so every process that
+opens the collection builds and searches the same way. Finch no longer reads
+`FINCH_HNSW_HEURISTIC_DIM` or any other `FINCH_HNSW_*` environment variable. The Python and
+Node.js bindings do not expose `build_tuning` yet.
 
 ## Conformance tests
 

@@ -84,10 +84,22 @@ message BaseIndexParams {
   QuantizeType quantize_type = 2;
 };
 
+// Absent from HnswIndexParams when every field has its default.
+message HnswBuildTuning {
+  optional uint32 heuristic_dim = 1;
+  bool simple_neighbor_select = 2;
+  bool keep_pruned_connections = 3;
+  optional uint32 l0_refine_candidate_cap = 4;
+  bool l0_repair = 5;
+  float prune_alpha = 6;
+  bool qdrant_backlink = 7;
+};
+
 message HnswIndexParams {
   BaseIndexParams base = 1;
   int32 m = 2;
   int32 ef_construction = 3;
+  HnswBuildTuning build_tuning = 4;
 };
 
 message FlatIndexParams {

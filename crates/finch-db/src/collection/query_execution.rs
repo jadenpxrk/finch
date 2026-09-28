@@ -8,7 +8,7 @@ use finch_types::{CollectionSchema, Doc, MetricType, Status, VectorQuery, ZResul
 use crate::profile::QueryProfile;
 use crate::query_filter::prepare_filter_expr;
 use crate::query_output::QueryOutputSelection;
-use crate::segment::persisted::{AnnSearch, PersistedSegment};
+use crate::segment::persisted::{AnnSearch, IndexQueryParams, PersistedSegment};
 use crate::segment::writing::WritingSegment;
 use crate::sqlengine::executor::DocFilterEvaluator;
 use crate::sqlengine::parser::FilterExpr;
@@ -20,7 +20,7 @@ use super::{Collection, MAX_OUTPUT_FIELDS, MAX_QUERY_TOPK};
 
 struct SegmentSearch<'a> {
     segment_topk: usize,
-    ef_or_nprobe: Option<u32>,
+    index_params: IndexQueryParams,
     is_linear: bool,
     filter_expr: Option<&'a FilterExpr>,
     delete_bitmap: &'a Arc<roaring::RoaringTreemap>,
@@ -31,7 +31,7 @@ impl<'a> SegmentSearch<'a> {
     fn ann(&self) -> AnnSearch<'a> {
         AnnSearch {
             topk: self.segment_topk,
-            ef_or_nprobe: self.ef_or_nprobe,
+            index_params: self.index_params,
             force_linear: self.is_linear,
             delete_bitmap: self.delete_bitmap.clone(),
             filter_expr: self.filter_expr,
@@ -68,7 +68,7 @@ impl ResultRefinement {
 
 // Per-query search knobs derived from `QueryParams` and the resolved vector field.
 struct VectorSearchParams {
-    ef_or_nprobe: Option<u32>,
+    index_params: IndexQueryParams,
     bf_pks: Option<Vec<String>>,
     is_linear: bool,
     refinement: ResultRefinement,
@@ -83,7 +83,7 @@ impl VectorSearchParams {
         // Refinement is only meaningful for indexed dense f32-family vectors.
         let use_refiner = use_refiner_requested && !is_binary && !vector_field.is_sparse;
         Self {
-            ef_or_nprobe: params.ef.or(params.n_probe),
+            index_params: IndexQueryParams::from(params),
             bf_pks,
             is_linear: params.effective_is_linear(),
             refinement: ResultRefinement {
@@ -627,7 +627,7 @@ impl Collection {
             params.bf_pks.as_deref(),
             &SegmentSearch {
                 segment_topk: params.refinement.segment_topk(),
-                ef_or_nprobe: params.ef_or_nprobe,
+                index_params: params.index_params,
                 is_linear: params.is_linear,
                 filter_expr: prepared.filter_expr,
                 delete_bitmap: prepared.delete_bitmap,

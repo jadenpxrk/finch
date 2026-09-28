@@ -26,6 +26,30 @@ pub(super) fn aligned_vector_stride_floats(dim: usize) -> usize {
     stride_bytes / 4
 }
 
+/// Level-1 routing points that seed the level-0 beam unless a query overrides it.
+const DEFAULT_L0_SEEDS: usize = 24;
+
+/// Search-time knobs of one HNSW query.
+#[derive(Clone, Copy, Debug)]
+pub struct HnswSearchParams {
+    /// Level-0 beam width; raised to `topk`.
+    pub ef: usize,
+    /// Upper-level beam width; `None` descends greedily.
+    pub upper_ef: Option<usize>,
+    /// Level-1 routing points that seed the level-0 beam; `1` seeds from the single entry.
+    pub l0_seeds: usize,
+}
+
+impl HnswSearchParams {
+    pub fn new(ef: usize) -> Self {
+        HnswSearchParams {
+            ef,
+            upper_ef: None,
+            l0_seeds: DEFAULT_L0_SEEDS,
+        }
+    }
+}
+
 struct UpperLevelIndex {
     node_offsets: Vec<u32>,
     fixed_len: u32,
@@ -201,6 +225,45 @@ fn checked_upper_offsets(raw: &[u8], fixed_len: u32, upper_len: usize) -> ZResul
     Ok(offsets)
 }
 
+/// Rejects an index whose `HNSW_HEADER` disagrees with `params`; version-0 indexes have no header.
+fn check_header(storage: &dyn StorageReader, params: &HnswIndexParams) -> ZResult<()> {
+    if !storage.exists(SEG_HEADER) {
+        return Ok(());
+    }
+    let header = storage.read_segment(SEG_HEADER)?;
+    let Some(rest) = header.as_slice().strip_prefix(&HEADER_MAGIC[..]) else {
+        return Err(Status::io_error("HNSW header magic mismatch"));
+    };
+    let mut cur = Cursor::new(rest);
+    let version = read_u32(&mut cur)?;
+    if version == 0 || version > HEADER_VERSION {
+        return Err(Status::io_error(format!(
+            "unsupported HNSW index format version {version}"
+        )));
+    }
+    let metric = read_u32(&mut cur)?;
+    if metric != params.metric as u32 {
+        return Err(Status::invalid_argument(format!(
+            "HNSW metric mismatch: index was built with metric id {metric}, params ask for {:?}",
+            params.metric
+        )));
+    }
+    Ok(())
+}
+
+/// Rejects links past the last node; the upper-level descent reads their vectors unchecked.
+fn check_upper_neighbor_ids(levels: &[UpperLevelIndex], upper: &[u8], count: usize) -> ZResult<()> {
+    for level in levels {
+        for &off in level.node_offsets.iter().filter(|&&off| off != u32::MAX) {
+            let ids = u32_slice_at(upper, off as usize, level.fixed_len as usize);
+            if ids.iter().any(|&id| id != u32::MAX && id as usize >= count) {
+                return Err(Status::io_error("HNSW upper neighbor id out of range"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Indexes the legacy `[count][ids...]` upper-neighbor layout written before `HNSW_UPPER_INDEX`.
 fn scan_legacy_upper_index(upper: &[u8], m: usize) -> ZResult<Vec<UpperLevelIndex>> {
     let errors = UpperScanErrors {
@@ -225,9 +288,13 @@ fn scan_legacy_upper_index(upper: &[u8], m: usize) -> ZResult<Vec<UpperLevelInde
 
 impl HnswSearcher {
     pub fn load(storage: &dyn StorageReader, params: &HnswIndexParams) -> ZResult<Self> {
+        check_header(storage, params)?;
         let meta = HnswMeta::parse(storage.read_segment(SEG_META)?.as_slice())?;
         meta.check_params(params)?;
         let count = meta.count;
+        if count > 0 && meta.entry_point as usize >= count {
+            return Err(Status::io_error("HNSW entry point out of range"));
+        }
 
         // Load keys
         let keys = segment_array_u64(storage.read_segment(SEG_KEYS)?)?;
@@ -259,6 +326,7 @@ impl HnswSearcher {
         } else {
             scan_legacy_upper_index(upper_bytes.as_slice(), meta.m)?
         };
+        check_upper_neighbor_ids(&upper_index, upper_bytes.as_slice(), count)?;
 
         Ok(HnswSearcher {
             keys,
@@ -626,7 +694,7 @@ impl HnswSearcher {
         &self,
         query: &[f32],
         topk: usize,
-        ef: usize,
+        params: HnswSearchParams,
         filter: Option<&dyn DocFilter>,
     ) -> ZResult<Vec<(u64, f32)>> {
         if self.count == 0 {
@@ -634,37 +702,50 @@ impl HnswSearcher {
         }
         check_query_dim(query.len(), self.dim)?;
 
-        let ef = ef.max(topk);
         HNSW_SEARCH_SCRATCH.with(|scratch_cell| -> ZResult<Vec<(u64, f32)>> {
             let mut scratch = scratch_cell.borrow_mut();
-            if filter.is_some() {
-                scratch.topk_heap.reset(topk);
-            }
-
-            let result = if self.metric_type == MetricType::Cosine && self.cosine_normalized {
+            if self.metric_type == MetricType::Cosine && self.cosine_normalized {
                 HNSW_QUERY_BUF.with(|buf_cell| {
                     let mut buf = buf_cell.borrow_mut();
                     buf.clear();
                     buf.extend_from_slice(&query[..self.dim]);
                     normalize_l2(&mut buf);
-                    self.run_query(&buf, topk, ef, filter, &mut scratch)
-                })?
+                    self.search_until_filled(&buf, topk, params, filter, &mut scratch)
+                })
             } else {
-                self.run_query(query, topk, ef, filter, &mut scratch)?
-            };
-            if filter.is_some() {
-                return Ok(scratch.topk_heap.drain_sorted());
+                self.search_until_filled(query, topk, params, filter, &mut scratch)
             }
-            Ok(result)
         })
     }
 
-    /// Descends to level 0, searches it, and collects hits; filtered hits go to `topk_heap`.
+    /// Doubles `ef` while the filter leaves fewer than `topk` hits and the beam could still grow.
+    fn search_until_filled(
+        &self,
+        q: &[f32],
+        topk: usize,
+        params: HnswSearchParams,
+        filter: Option<&dyn DocFilter>,
+        scratch: &mut SearchScratch,
+    ) -> ZResult<Vec<(u64, f32)>> {
+        let mut ef = params.ef.max(topk);
+        loop {
+            let hits =
+                self.run_query(q, topk, HnswSearchParams { ef, ..params }, filter, scratch)?;
+            // A beam that did not fill has reached every node the entry can reach.
+            let beam_exhausted = scratch.out.len() < ef;
+            if filter.is_none() || hits.len() >= topk || beam_exhausted || ef >= self.count {
+                return Ok(hits);
+            }
+            ef = ef.saturating_mul(2).min(self.count);
+        }
+    }
+
+    /// Descends to level 0, searches it with `params.ef`, and collects up to `topk` hits.
     fn run_query(
         &self,
         q: &[f32],
         topk: usize,
-        ef: usize,
+        params: HnswSearchParams,
         filter: Option<&dyn DocFilter>,
         scratch: &mut SearchScratch,
     ) -> ZResult<Vec<(u64, f32)>> {
@@ -673,18 +754,24 @@ impl HnswSearcher {
         } else {
             0.0
         };
-        let ep = self.descend_to_level1(q, q2, scratch);
-        self.search_level0(q, q2, ep, ef, scratch);
+        let ep = self.descend_to_level1(q, q2, params.upper_ef, scratch);
+        self.search_level0(q, q2, ep, params, scratch);
         self.collect_hits(topk, filter, scratch)
     }
 
-    /// Greedy (or `FINCH_HNSW_UPPER_EF`-wide beam) descent through the upper levels.
-    fn descend_to_level1(&self, q: &[f32], q2: f32, scratch: &mut SearchScratch) -> u32 {
+    /// Greedy (or `upper_ef`-wide beam) descent through the upper levels.
+    fn descend_to_level1(
+        &self,
+        q: &[f32],
+        q2: f32,
+        upper_ef: Option<usize>,
+        scratch: &mut SearchScratch,
+    ) -> u32 {
         let mut ep = Entry {
             node: self.entry_point,
             dist: self.distance_to_with_query_sq_norm(q, q2, self.entry_point),
         };
-        if let Some(upper_ef) = upper_layer_beam_width() {
+        if let Some(upper_ef) = upper_ef.map(|ef| ef.max(1)) {
             for lv in (1..=self.max_level).rev() {
                 self.beam_search_layer_into(q, q2, ep.node, upper_ef, lv, scratch);
                 if let Some(&(_, node)) = scratch.out.first() {
@@ -738,8 +825,16 @@ impl HnswSearcher {
     }
 
     /// Level-0 beam search seeded with the best level-1 routing points; `ef` is unchanged.
-    fn search_level0(&self, q: &[f32], q2: f32, ep: u32, ef: usize, scratch: &mut SearchScratch) {
-        let l0_seeds = l0_seed_count().min(ef);
+    fn search_level0(
+        &self,
+        q: &[f32],
+        q2: f32,
+        ep: u32,
+        params: HnswSearchParams,
+        scratch: &mut SearchScratch,
+    ) {
+        let ef = params.ef;
+        let l0_seeds = params.l0_seeds.min(ef);
         if l0_seeds <= 1 || self.max_level < 1 {
             self.beam_search_into(q, q2, ep, ef, scratch);
             return;
@@ -765,13 +860,14 @@ impl HnswSearcher {
     ) -> ZResult<Vec<(u64, f32)>> {
         let keys = self.keys.as_slice();
         if let Some(filter) = filter {
+            scratch.topk_heap.reset(topk);
             for (dist, node) in scratch.out.iter().copied() {
                 let key = keys[node as usize];
                 if doc_filter_allows(Some(filter), key)? {
                     scratch.topk_heap.push(dist, key);
                 }
             }
-            return Ok(Vec::new());
+            return Ok(scratch.topk_heap.drain_sorted());
         }
         let mut result = Vec::with_capacity(topk);
         for &(dist, node) in scratch.out.iter().take(topk) {

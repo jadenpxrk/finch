@@ -327,7 +327,7 @@ fn test_brute_force_by_keys_threshold_uses_doc_count_not_doc_id_span() {
         &[0.0, 1.0], // dim mismatch vs index dim=1
         AnnSearch {
             topk: 3,
-            ef_or_nprobe: None,
+            index_params: IndexQueryParams::default(),
             force_linear: false,
             delete_bitmap: Arc::new(roaring::RoaringTreemap::new()),
             filter_expr: Some(&filter),

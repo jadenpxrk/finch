@@ -1,4 +1,4 @@
-use crate::index_params::IndexParams;
+use crate::index_params::{HnswIndexParams, IndexParams};
 use crate::status::{Status, ZResult};
 use crate::system_columns::is_reserved_field_name;
 use crate::types::{DataType, MetricType, QuantizeType};
@@ -311,9 +311,31 @@ fn validate_vector_index_params(
     validate_ivf_inner_product_dtype(field, index_params, metric)
 }
 
+fn validate_hnsw_sizes(field: &FieldSchema, p: &HnswIndexParams) -> ZResult<()> {
+    let t = &p.build_tuning;
+    let problem = if p.m == 0 {
+        "m must be > 0"
+    } else if p.ef_construction == 0 {
+        "ef_construction must be > 0"
+    } else if t.heuristic_dim == Some(0) {
+        "heuristic_dim must be > 0"
+    } else if t.l0_refine_candidate_cap == Some(0) {
+        "l0_refine_candidate_cap must be > 0"
+    } else if !(t.prune_alpha.is_finite() && t.prune_alpha > 0.0) {
+        "prune_alpha must be finite and > 0"
+    } else {
+        return Ok(());
+    };
+    Err(Status::invalid_argument(format!(
+        "schema validate failed: HNSW {problem} (field[{}])",
+        field.name
+    )))
+}
+
 fn validate_index_param_shape(field: &FieldSchema, index_params: &IndexParams) -> ZResult<()> {
     match index_params {
         IndexParams::Hnsw(p) | IndexParams::HnswSparse(p) => {
+            validate_hnsw_sizes(field, p)?;
             // Finch treats `scaling_factor` as a derived parameter and does not
             // persist it in protobuf manifests. Reject overrides to avoid
             // reopen-time mismatches.
@@ -461,7 +483,7 @@ fn validate_scalar_field_index(field: &FieldSchema) -> ZResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index_params::{FlatIndexParams, HnswIndexParams, IvfIndexParams};
+    use crate::index_params::{FlatIndexParams, IvfIndexParams};
 
     #[test]
     fn validate_rejects_bad_collection_name() {
@@ -508,6 +530,28 @@ mod tests {
         );
         let err = schema.validate().unwrap_err();
         assert!(err.message.contains("HNSW scaling_factor must equal m"));
+    }
+
+    #[test]
+    fn validate_rejects_zero_hnsw_sizes() {
+        let validate = |p: HnswIndexParams| {
+            CollectionSchema::new("abc")
+                .with_field(
+                    FieldSchema::new("vec", DataType::VectorFp32)
+                        .with_dimension(8)
+                        .with_index(IndexParams::Hnsw(p)),
+                )
+                .validate()
+        };
+        let err = validate(HnswIndexParams::new(MetricType::L2).with_m(0)).unwrap_err();
+        assert!(err.message.contains("HNSW m must be > 0"));
+        let err =
+            validate(HnswIndexParams::new(MetricType::L2).with_ef_construction(0)).unwrap_err();
+        assert!(err.message.contains("HNSW ef_construction must be > 0"));
+        let mut p = HnswIndexParams::new(MetricType::L2);
+        p.build_tuning.prune_alpha = f32::NAN;
+        assert!(validate(p).is_err());
+        validate(HnswIndexParams::new(MetricType::L2)).unwrap();
     }
 
     #[test]

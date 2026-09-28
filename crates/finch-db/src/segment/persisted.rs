@@ -10,12 +10,12 @@ use finch_core::algorithm::flat::{
     StorageReader as CoreStorageReader,
 };
 use finch_core::algorithm::flat_sparse::{FlatSparseSearcher, SparseVector};
-use finch_core::algorithm::hnsw::HnswSearcher;
+use finch_core::algorithm::hnsw::{HnswSearchParams, HnswSearcher};
 use finch_core::algorithm::hnsw_sparse::HnswSparseSearcher;
 use finch_core::algorithm::ivf::IvfSearcher;
 use finch_core::algorithm::DocFilter;
 use finch_storage::{ForwardStoreOpenOptions, MmapForwardStore};
-use finch_types::{Doc, MetricType, Status, ZResult, SYS_LOCAL_ROW_ID};
+use finch_types::{Doc, MetricType, QueryParams, Status, ZResult, SYS_LOCAL_ROW_ID};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -59,17 +59,23 @@ impl VectorIndex {
         &self,
         query: &[f32],
         topk: usize,
-        ef_or_nprobe: Option<u32>,
+        params: IndexQueryParams,
         filter: Option<&dyn DocFilter>,
     ) -> ZResult<Vec<(u64, f32)>> {
+        let ef_or_nprobe = params.ef_or_nprobe;
         match self {
             VectorIndex::Flat(s) => s.search(query, topk, filter),
             VectorIndex::FlatBinary32(_) | VectorIndex::FlatBinary64(_) => Err(
                 Status::invalid_argument("use search_binary for binary flat indexes"),
             ),
             VectorIndex::Hnsw(s) => {
-                let ef = ef_or_nprobe.unwrap_or(s.default_ef as u32) as usize;
-                s.search(query, topk, ef, filter)
+                let mut hnsw =
+                    HnswSearchParams::new(ef_or_nprobe.unwrap_or(s.default_ef as u32) as usize);
+                hnsw.upper_ef = params.hnsw_upper_ef.map(|ef| ef as usize);
+                if let Some(seeds) = params.hnsw_l0_seeds {
+                    hnsw.l0_seeds = seeds as usize;
+                }
+                s.search(query, topk, hnsw, filter)
             }
             VectorIndex::Ivf(s) => {
                 // default nprobe is 10.
@@ -307,7 +313,9 @@ mod filter;
 mod open;
 mod search;
 
-pub use search::{compute_distance, compute_hamming_u32, compute_hamming_u64, AnnSearch};
+pub use search::{
+    compute_distance, compute_hamming_u32, compute_hamming_u64, AnnSearch, IndexQueryParams,
+};
 
 #[cfg(test)]
 mod tests;

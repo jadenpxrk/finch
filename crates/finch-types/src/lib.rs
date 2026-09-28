@@ -21,7 +21,8 @@ pub use config::GlobalConfigData;
 pub use config::LogLevel;
 pub use doc::{Doc, Value};
 pub use index_params::{
-    FlatIndexParams, HnswIndexParams, IndexParams, InvertIndexParams, IvfIndexParams,
+    FlatIndexParams, HnswBuildTuning, HnswIndexParams, IndexParams, InvertIndexParams,
+    IvfIndexParams,
 };
 pub use query::{
     AddColumnOptions, AlterColumnOptions, CollectionOptions, CollectionStats, CreateIndexOptions,

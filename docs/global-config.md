@@ -60,6 +60,12 @@ Some work runs outside these two pools:
   concurrency.
 - A parallel HNSW build creates a pool sized by the call's concurrency setting.
 
+## HNSW tuning
+
+HNSW build heuristics are not global settings. They live in `HnswIndexParams::build_tuning`
+and are stored with the index. The search-time knobs `hnsw_upper_ef` and `hnsw_l0_seeds` are
+fields of `QueryParams`. Finch reads no `FINCH_HNSW_*` environment variables.
+
 ## Write-ahead log
 
 - `wal_flush_every_docs`: after this many WAL records, Finch flushes its write buffer to the

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use finch_types::HnswBuildTuning;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
@@ -115,6 +116,8 @@ pub struct HnswIndexParams {
     pub scaling_factor: u32,
     pub metric: u32,
     pub quantize: u32,
+    #[serde(default)]
+    pub build_tuning: HnswBuildTuning,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -263,6 +266,8 @@ fn to_pb_field_index(index: &FieldIndexParams) -> pb::IndexParams {
                 base: Some(to_pb_base(p.metric, p.quantize)),
                 m: u32_to_i32_sat(p.m),
                 ef_construction: u32_to_i32_sat(p.ef_construction),
+                build_tuning: (p.build_tuning != HnswBuildTuning::default())
+                    .then(|| to_pb_build_tuning(&p.build_tuning)),
             };
             Some(pb::index_params::Params::Hnsw(h))
         }
@@ -293,6 +298,34 @@ fn to_pb_field_index(index: &FieldIndexParams) -> pb::IndexParams {
     pb::IndexParams { params }
 }
 
+fn to_pb_build_tuning(t: &HnswBuildTuning) -> pb::HnswBuildTuning {
+    pb::HnswBuildTuning {
+        heuristic_dim: t.heuristic_dim.map(usize_to_u32_sat),
+        simple_neighbor_select: t.simple_neighbor_select,
+        keep_pruned_connections: t.keep_pruned_connections,
+        l0_refine_candidate_cap: t.l0_refine_candidate_cap.map(usize_to_u32_sat),
+        l0_repair: t.l0_repair,
+        prune_alpha: t.prune_alpha,
+        qdrant_backlink: t.qdrant_backlink,
+    }
+}
+
+fn from_pb_build_tuning(t: pb::HnswBuildTuning) -> HnswBuildTuning {
+    HnswBuildTuning {
+        heuristic_dim: t.heuristic_dim.map(|v| v as usize),
+        simple_neighbor_select: t.simple_neighbor_select,
+        keep_pruned_connections: t.keep_pruned_connections,
+        l0_refine_candidate_cap: t.l0_refine_candidate_cap.map(|v| v as usize),
+        l0_repair: t.l0_repair,
+        prune_alpha: t.prune_alpha,
+        qdrant_backlink: t.qdrant_backlink,
+    }
+}
+
+fn usize_to_u32_sat(v: usize) -> u32 {
+    u32::try_from(v).unwrap_or(u32::MAX)
+}
+
 fn is_sparse_vector_data_type(dt: u32) -> bool {
     // Keep this local to avoid pulling finch-types into the manifest codec layer.
     // proto/manifest.proto: DT_SPARSE_VECTOR_FP16 = 30, DT_SPARSE_VECTOR_FP32 = 31
@@ -321,6 +354,7 @@ fn from_pb_field_index(index: pb::IndexParams, field_data_type: u32) -> Option<F
                 scaling_factor,
                 metric,
                 quantize,
+                build_tuning: p.build_tuning.map(from_pb_build_tuning).unwrap_or_default(),
             };
             Some(if is_sparse {
                 FieldIndexParams::HnswSparse(v)
@@ -566,6 +600,26 @@ mod pb {
         pub m: i32,
         #[prost(int32, tag = "3")]
         pub ef_construction: i32,
+        #[prost(message, optional, tag = "4")]
+        pub build_tuning: Option<HnswBuildTuning>,
+    }
+
+    #[derive(Clone, PartialEq, Message)]
+    pub struct HnswBuildTuning {
+        #[prost(uint32, optional, tag = "1")]
+        pub heuristic_dim: Option<u32>,
+        #[prost(bool, tag = "2")]
+        pub simple_neighbor_select: bool,
+        #[prost(bool, tag = "3")]
+        pub keep_pruned_connections: bool,
+        #[prost(uint32, optional, tag = "4")]
+        pub l0_refine_candidate_cap: Option<u32>,
+        #[prost(bool, tag = "5")]
+        pub l0_repair: bool,
+        #[prost(float, tag = "6")]
+        pub prune_alpha: f32,
+        #[prost(bool, tag = "7")]
+        pub qdrant_backlink: bool,
     }
 
     #[derive(Clone, PartialEq, Message)]
@@ -775,6 +829,7 @@ mod tests {
                         metric: 2,
                         // proto/manifest.proto QuantizeType: QT_UNDEFINED = 0
                         quantize: 0,
+                        build_tuning: HnswBuildTuning::default(),
                     })),
                 }],
             }),
@@ -799,5 +854,61 @@ mod tests {
         };
         assert_eq!(p.m, 16);
         assert_eq!(p.scaling_factor, 16);
+    }
+
+    fn hnsw_manifest(build_tuning: HnswBuildTuning) -> Manifest {
+        Manifest {
+            version: 1,
+            schema: Some(CollectionSchema {
+                name: "test".to_string(),
+                max_doc_count_per_segment: 1000,
+                fields: vec![FieldSchema {
+                    name: "emb".to_string(),
+                    data_type: 23,
+                    nullable: false,
+                    dimension: 4,
+                    index_params: Some(FieldIndexParams::Hnsw(HnswIndexParams {
+                        m: 16,
+                        ef_construction: 123,
+                        scaling_factor: 16,
+                        metric: 1,
+                        quantize: 0,
+                        build_tuning,
+                    })),
+                }],
+            }),
+            enable_mmap: false,
+            persisted_segment_metas: vec![],
+            writing_segment_meta: None,
+            id_map_path_suffix: 0,
+            delete_snapshot_path_suffix: 0,
+            next_segment_id: 2,
+        }
+    }
+
+    fn decoded_build_tuning(manifest: &Manifest) -> HnswBuildTuning {
+        let data = manifest.encode().expect("protobuf encode should work");
+        let decoded = Manifest::decode(&data).expect("protobuf decode should work");
+        let field = decoded.schema.expect("schema").fields.remove(0);
+        let Some(FieldIndexParams::Hnsw(p)) = field.index_params else {
+            panic!("expected HNSW index params");
+        };
+        p.build_tuning
+    }
+
+    #[test]
+    fn protobuf_round_trips_hnsw_build_tuning() {
+        let tuning = HnswBuildTuning {
+            heuristic_dim: Some(64),
+            simple_neighbor_select: true,
+            keep_pruned_connections: false,
+            l0_refine_candidate_cap: Some(256),
+            l0_repair: false,
+            prune_alpha: 1.2,
+            qdrant_backlink: true,
+        };
+        assert_eq!(decoded_build_tuning(&hnsw_manifest(tuning)), tuning);
+        let default = HnswBuildTuning::default();
+        assert_eq!(decoded_build_tuning(&hnsw_manifest(default)), default);
     }
 }

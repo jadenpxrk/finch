@@ -2,10 +2,28 @@ use super::*;
 
 type DocFetchFn = Arc<dyn Fn(u64) -> ZResult<Option<Doc>> + Send + Sync>;
 
+/// Index knobs a query sets through `QueryParams`; `None` keeps each index's default.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct IndexQueryParams {
+    pub ef_or_nprobe: Option<u32>,
+    pub hnsw_upper_ef: Option<u32>,
+    pub hnsw_l0_seeds: Option<u32>,
+}
+
+impl From<&QueryParams> for IndexQueryParams {
+    fn from(params: &QueryParams) -> Self {
+        IndexQueryParams {
+            ef_or_nprobe: params.ef.or(params.n_probe),
+            hnsw_upper_ef: params.hnsw_upper_ef,
+            hnsw_l0_seeds: params.hnsw_l0_seeds,
+        }
+    }
+}
+
 /// Per-segment ANN search settings.
 pub struct AnnSearch<'a> {
     pub topk: usize,
-    pub ef_or_nprobe: Option<u32>,
+    pub index_params: IndexQueryParams,
     pub force_linear: bool,
     pub delete_bitmap: Arc<roaring::RoaringTreemap>,
     pub filter_expr: Option<&'a FilterExpr>,
@@ -158,7 +176,7 @@ impl PersistedSegment {
     ) -> ZResult<Vec<(u64, f32)>> {
         let AnnSearch {
             topk,
-            ef_or_nprobe,
+            index_params,
             force_linear,
             delete_bitmap,
             filter_expr,
@@ -172,7 +190,7 @@ impl PersistedSegment {
                 self.score_dense_ids(field, query, metric, ids, topk)
             }
             IndexCandidates::Index(filter) => {
-                index.search(query, topk, ef_or_nprobe, filter.as_deref())
+                index.search(query, topk, index_params, filter.as_deref())
             }
         }
     }
@@ -350,7 +368,7 @@ impl PersistedSegment {
     ) -> ZResult<Vec<(u64, f32)>> {
         let AnnSearch {
             topk,
-            ef_or_nprobe,
+            index_params,
             force_linear,
             delete_bitmap,
             filter_expr,
@@ -362,7 +380,7 @@ impl PersistedSegment {
         match self.index_candidates(filter_expr, &delete_bitmap)? {
             IndexCandidates::SmallExact(ids) => self.score_sparse_ids(field, query, &ids, topk),
             IndexCandidates::Index(filter) => {
-                index.search_sparse(query, topk, ef_or_nprobe, filter.as_deref())
+                index.search_sparse(query, topk, index_params.ef_or_nprobe, filter.as_deref())
             }
         }
     }

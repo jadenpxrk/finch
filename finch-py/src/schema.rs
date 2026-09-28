@@ -251,6 +251,7 @@ impl PyHnswIndexParam {
                 metric: metric.into(),
                 quantize: quantize.into(),
                 build_concurrency: None,
+                build_tuning: Default::default(),
             },
         }
     }

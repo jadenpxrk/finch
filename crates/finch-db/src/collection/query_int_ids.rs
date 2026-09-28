@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 use finch_types::{DataType, MetricType, Status, VectorQuery, ZResult};
 use rayon::prelude::*;
 
-use crate::segment::persisted::{AnnSearch, PersistedSegment};
+use crate::segment::persisted::{AnnSearch, IndexQueryParams, PersistedSegment};
 
 use super::Collection;
 
@@ -107,7 +107,7 @@ impl Collection {
         all_results: &mut Vec<(u64, f32)>,
     ) -> ZResult<()> {
         let query = search.query;
-        let ef_or_nprobe = query.query_params.ef.or(query.query_params.n_probe);
+        let index_params = IndexQueryParams::from(&query.query_params);
         let topk = query.topk;
         all_results.reserve(topk.saturating_mul(segs.len().saturating_add(1)));
 
@@ -117,7 +117,7 @@ impl Collection {
                 &query.query_vector,
                 AnnSearch {
                     topk,
-                    ef_or_nprobe,
+                    index_params,
                     force_linear: false,
                     delete_bitmap: search.delete_bitmap.clone(),
                     filter_expr: None,

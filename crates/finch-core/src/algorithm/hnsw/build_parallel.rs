@@ -53,7 +53,7 @@ impl HnswBuilder {
     }
 
     fn finish_build(mut self) -> Self {
-        if l0_repair_enabled() {
+        if self.params.build_tuning.l0_repair {
             self.repair_l0_neighbors();
         }
         self.refine_l0_neighbors();
@@ -66,7 +66,7 @@ impl SharedGraph {
         let n = keys.len();
         let m = params.m;
         let vec_stride_floats = aligned_vector_stride_floats(dim);
-        let heuristic_dim = heuristic_dim_from_env(dim);
+        let heuristic_dim = heuristic_dim(&params.build_tuning, dim);
 
         // Pre-roll random levels for all nodes (deterministic per build).
         let mut levels: Vec<u32> = Vec::with_capacity(n);
@@ -96,6 +96,7 @@ impl SharedGraph {
             dim,
             vec_stride_floats,
             heuristic_dim,
+            tuning: params.build_tuning,
             m,
             ef_construction: params.ef_construction,
             l0_m: m * 2,
@@ -153,7 +154,7 @@ impl SharedGraph {
             })
             .collect();
 
-        let mut builder = HnswBuilder::with_heuristic_dim(self.dim, params, self.heuristic_dim);
+        let mut builder = HnswBuilder::new(self.dim, params);
         builder.vectors = self.vectors;
         builder.keys = self.keys;
         builder.levels = self.levels;

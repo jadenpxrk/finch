@@ -480,6 +480,10 @@ impl FlatSparseSearcher {
         topk: usize,
         filter: Option<&dyn DocFilter>,
     ) -> ZResult<Vec<(u64, f32)>> {
+        // An empty query matches nothing; scoring it would rank every row at distance 0.
+        if query.indices.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut heap = TopkHeap::new(topk);
         let keys = self.rows.keys.as_slice();
         for (i, &key) in keys.iter().enumerate() {
@@ -526,6 +530,23 @@ mod tests {
         let query = SparseVector::new(vec![0, 2], vec![1.0, 1.0]);
         let results = searcher.search(&query, 2, None).unwrap();
         assert_eq!(results[0].0, 1);
+    }
+
+    #[test]
+    fn empty_query_returns_no_hits() {
+        let mut builder = FlatSparseBuilder::new();
+        builder
+            .add(1, SparseVector::new(vec![0, 2], vec![1.0, 1.0]))
+            .unwrap();
+        builder.add(2, SparseVector::new(vec![], vec![])).unwrap();
+        let mut storage = MemoryStorage::new();
+        builder.dump(&mut storage).unwrap();
+
+        let searcher = FlatSparseSearcher::load(&storage).unwrap();
+        let results = searcher
+            .search(&SparseVector::new(vec![], vec![]), 2, None)
+            .unwrap();
+        assert!(results.is_empty(), "{results:?}");
     }
 
     #[test]

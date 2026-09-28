@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use finch_core::{HnswBuilder, HnswSearcher, MemoryStorage};
+use finch_core::{HnswBuilder, HnswSearchParams, HnswSearcher, MemoryStorage};
 use finch_types::{HnswIndexParams, MetricType};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -158,7 +158,9 @@ fn main() {
         let mut recall_sum = 0.0f32;
         for query in queries.chunks_exact(dim) {
             let truth = exact_topk(&vectors, dim, query, topk, metric);
-            let results = searcher.search(query, topk, 128, None).unwrap();
+            let results = searcher
+                .search(query, topk, HnswSearchParams::new(128), None)
+                .unwrap();
             recall_sum += recall_at(&results, &truth);
         }
         let elapsed = t0.elapsed().as_secs_f64();

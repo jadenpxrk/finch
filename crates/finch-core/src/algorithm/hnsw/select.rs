@@ -8,24 +8,7 @@ pub(super) struct VectorView<'a> {
     pub(super) vec_stride_floats: usize,
     pub(super) dim: usize,
     pub(super) heuristic_dim: usize,
-}
-
-impl<'a> VectorView<'a> {
-    pub(super) fn new(
-        metric_type: MetricType,
-        vectors: &'a [f32],
-        vec_stride_floats: usize,
-        dim: usize,
-        heuristic_dim: usize,
-    ) -> Self {
-        VectorView {
-            metric_type,
-            vectors,
-            vec_stride_floats,
-            dim,
-            heuristic_dim,
-        }
-    }
+    pub(super) tuning: HnswBuildTuning,
 }
 
 /// Scratch buffers for pruning a full neighbor slot.
@@ -49,8 +32,8 @@ fn push_first_valid(candidates: &[(f32, u32)], m: usize, out: &mut Vec<u32>) {
 }
 
 /// keepPrunedConnections: the heuristic often leaves slots free in high dimensions.
-fn backfill_pruned(pruned: &[u32], m: usize, out: &mut Vec<u32>) {
-    if !keep_pruned_connections_enabled() || out.len() >= m {
+fn backfill_pruned(keep_pruned: bool, pruned: &[u32], m: usize, out: &mut Vec<u32>) {
+    if !keep_pruned || out.len() >= m {
         return;
     }
     for &cand in pruned {
@@ -77,9 +60,10 @@ pub(super) fn select_neighbors_precomputed_into(
         vec_stride_floats,
         dim,
         heuristic_dim,
+        tuning,
     } = *view;
     out.reserve(m);
-    if simple_neighbor_select_enabled() {
+    if tuning.simple_neighbor_select {
         push_first_valid(candidates, m, out);
         return;
     }
@@ -94,7 +78,7 @@ pub(super) fn select_neighbors_precomputed_into(
         for &s in out.iter() {
             let s_vec = vec_slice_raw(vectors, vec_stride_floats, dim, s);
             let d = hnsw_heuristic_distance(metric_type, heuristic_dim, dim, cand_vec, s_vec);
-            if should_prune_neighbor(d, dist_to_query) {
+            if should_prune_neighbor(tuning.prune_alpha, d, dist_to_query) {
                 ok = false;
                 break;
             }
@@ -108,7 +92,7 @@ pub(super) fn select_neighbors_precomputed_into(
             pruned.push(cand);
         }
     }
-    backfill_pruned(&pruned, m, out);
+    backfill_pruned(tuning.keep_pruned_connections, &pruned, m, out);
 }
 
 /// Like `select_neighbors_precomputed_into`, scoring against `query` with the same dimension prefix.
@@ -125,9 +109,10 @@ pub(super) fn select_neighbors_query_into(
         vec_stride_floats,
         dim,
         heuristic_dim,
+        tuning,
     } = *view;
     out.reserve(m);
-    if simple_neighbor_select_enabled() {
+    if tuning.simple_neighbor_select {
         push_first_valid(candidates, m, out);
         return;
     }
@@ -143,7 +128,7 @@ pub(super) fn select_neighbors_query_into(
         for &s in out.iter() {
             let s_vec = vec_slice_raw(vectors, vec_stride_floats, dim, s);
             let d = hnsw_heuristic_distance(metric_type, heuristic_dim, dim, cand_vec, s_vec);
-            if should_prune_neighbor(d, dist_to_query) {
+            if should_prune_neighbor(tuning.prune_alpha, d, dist_to_query) {
                 ok = false;
                 break;
             }
@@ -157,7 +142,7 @@ pub(super) fn select_neighbors_query_into(
             pruned.push(cand);
         }
     }
-    backfill_pruned(&pruned, m, out);
+    backfill_pruned(tuning.keep_pruned_connections, &pruned, m, out);
 }
 
 /// Links a full slot keeps once `new_item` arrives; `buf.scored` holds its current links.
@@ -168,18 +153,20 @@ pub(super) fn select_backlinks_into(
     buf: BacklinkBuffers<'_>,
 ) {
     buf.selected.clear();
-    if qdrant_backlink_heuristic_enabled() {
+    if view.tuning.qdrant_backlink {
         let VectorView {
             metric_type,
             vectors,
             vec_stride_floats,
             dim,
             heuristic_dim,
+            tuning,
         } = *view;
         select_backlink_preserving_existing_order(
             buf.scored,
             new_item,
             max_m,
+            tuning.prune_alpha,
             buf.selected,
             buf.selected_is_new,
             |a, b| {
@@ -204,6 +191,7 @@ pub(super) fn select_backlinks_into(
 struct BacklinkPicks<'a, F> {
     out: &'a mut Vec<u32>,
     out_is_new: &'a mut Vec<bool>,
+    prune_alpha: f32,
     distance_between: F,
 }
 
@@ -218,7 +206,8 @@ impl<F: FnMut(u32, u32) -> f32> BacklinkPicks<'_, F> {
             if !cand_is_new && !self.out_is_new[idx] {
                 continue;
             }
-            if should_prune_neighbor((self.distance_between)(cand, selected), cand_dist) {
+            let d = (self.distance_between)(cand, selected);
+            if should_prune_neighbor(self.prune_alpha, d, cand_dist) {
                 return;
             }
         }
@@ -231,6 +220,7 @@ fn select_backlink_preserving_existing_order<F>(
     existing: &[(f32, u32)],
     new_item: (f32, u32),
     m: usize,
+    prune_alpha: f32,
     out: &mut Vec<u32>,
     out_is_new: &mut Vec<bool>,
     distance_between: F,
@@ -244,6 +234,7 @@ fn select_backlink_preserving_existing_order<F>(
     let mut picks = BacklinkPicks {
         out,
         out_is_new,
+        prune_alpha,
         distance_between,
     };
 

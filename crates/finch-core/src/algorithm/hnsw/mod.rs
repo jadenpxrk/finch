@@ -11,17 +11,14 @@ use crate::quantizer::{
     quantize_type_from_u32,
 };
 use crate::simd;
-use finch_types::{HnswIndexParams, MetricType, QuantizeType, Status, ZResult};
+use finch_types::{HnswBuildTuning, HnswIndexParams, MetricType, QuantizeType, Status, ZResult};
 use parking_lot::Mutex;
 use rand::Rng;
 use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::BinaryHeap;
 use std::io::Cursor;
-use std::sync::{
-    atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
-    OnceLock,
-};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 mod build_parallel;
 mod builder;
@@ -32,8 +29,8 @@ mod select;
 
 pub use builder::HnswBuilder;
 use parallel::*;
-pub use searcher::HnswSearcher;
 use searcher::*;
+pub use searcher::{HnswSearchParams, HnswSearcher};
 use select::*;
 
 // Segment names
@@ -44,6 +41,11 @@ const SEG_UPPER_NEIGHBORS: &str = "HNSW_UPPER_NEIGHBORS";
 const SEG_UPPER_INDEX: &str = "HNSW_UPPER_INDEX";
 const SEG_META: &str = "HNSW_META";
 const SEG_LEVELS: &str = "HNSW_LEVELS";
+const SEG_HEADER: &str = "HNSW_HEADER";
+
+// Indexes without `HNSW_HEADER` are format version 0.
+const HEADER_MAGIC: [u8; 8] = *b"FINCHHNS";
+const HEADER_VERSION: u32 = 1;
 
 #[inline]
 fn random_level_with_scaling<R: Rng + ?Sized>(rng: &mut R, scaling_factor: usize) -> usize {
@@ -60,90 +62,18 @@ fn random_level_with_scaling<R: Rng + ?Sized>(rng: &mut R, scaling_factor: usize
 }
 
 /// Dimension prefix for neighbor-selection distances; keeps high-dim builds cheap, search exact.
-fn heuristic_dim_from_env(dim: usize) -> usize {
-    std::env::var("FINCH_HNSW_HEURISTIC_DIM")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(dim)
-        .min(dim)
+fn heuristic_dim(tuning: &HnswBuildTuning, dim: usize) -> usize {
+    tuning.heuristic_dim.unwrap_or(dim).min(dim)
 }
 
 #[inline]
-fn simple_neighbor_select_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("FINCH_HNSW_SIMPLE_SELECT").is_some())
-}
-
-#[inline]
-fn keep_pruned_connections_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("FINCH_HNSW_NO_KEEP_PRUNED").is_none())
-}
-
-#[inline]
-fn l0_refinement_candidate_cap() -> Option<usize> {
-    static CAP: OnceLock<Option<usize>> = OnceLock::new();
-    *CAP.get_or_init(|| {
-        std::env::var("FINCH_HNSW_REFINE_L0")
-            .ok()
-            .map(|value| value.parse::<usize>().unwrap_or(256).max(1))
-    })
-}
-
-#[inline]
-fn l0_repair_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("FINCH_HNSW_NO_REPAIR").is_none())
-}
-
-#[inline]
-fn upper_layer_beam_width() -> Option<usize> {
-    static WIDTH: OnceLock<Option<usize>> = OnceLock::new();
-    *WIDTH.get_or_init(|| {
-        std::env::var("FINCH_HNSW_UPPER_EF")
-            .ok()
-            .map(|value| value.parse::<usize>().unwrap_or(16).max(1))
-    })
-}
-
-#[inline]
-fn prune_alpha() -> f32 {
-    static ALPHA: OnceLock<f32> = OnceLock::new();
-    *ALPHA.get_or_init(|| {
-        std::env::var("FINCH_HNSW_PRUNE_ALPHA")
-            .ok()
-            .and_then(|value| value.parse::<f32>().ok())
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .unwrap_or(1.0)
-    })
-}
-
-#[inline]
-fn should_prune_neighbor(dist_between: f32, dist_to_query: f32) -> bool {
-    dist_between * prune_alpha() < dist_to_query
-}
-
-#[inline]
-fn l0_seed_count() -> usize {
-    static COUNT: OnceLock<usize> = OnceLock::new();
-    *COUNT.get_or_init(|| {
-        std::env::var("FINCH_HNSW_L0_SEEDS")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(24)
-    })
+fn should_prune_neighbor(prune_alpha: f32, dist_between: f32, dist_to_query: f32) -> bool {
+    dist_between * prune_alpha < dist_to_query
 }
 
 const L0_REPAIR_PASSES: usize = 3;
 const L0_REPAIR_CANDIDATE_CAP: usize = 1024;
 const L0_REPAIR_SEARCH_PASSES: usize = 1;
-
-#[inline]
-fn qdrant_backlink_heuristic_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("FINCH_HNSW_QDRANT_BACKLINK").is_some())
-}
 
 #[inline]
 fn hnsw_distance(metric_type: MetricType, a: &[f32], b: &[f32]) -> f32 {

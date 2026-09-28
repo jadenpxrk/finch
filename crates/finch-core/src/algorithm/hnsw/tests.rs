@@ -33,7 +33,9 @@ fn test_hnsw_build_search() {
     builder.dump(&mut storage).unwrap();
 
     let searcher = HnswSearcher::load(&storage, &params).unwrap();
-    let results = searcher.search(&[1.0, 0.0, 0.0, 0.0], 2, 10, None).unwrap();
+    let results = searcher
+        .search(&[1.0, 0.0, 0.0, 0.0], 2, HnswSearchParams::new(10), None)
+        .unwrap();
 
     assert!(!results.is_empty());
     assert_eq!(results[0].0, 1);
@@ -55,7 +57,9 @@ fn test_hnsw_build_search_quantized_fp16() {
     builder.dump(&mut storage).unwrap();
 
     let searcher = HnswSearcher::load(&storage, &params).unwrap();
-    let results = searcher.search(&[1.0, 0.0, 0.0, 0.0], 2, 10, None).unwrap();
+    let results = searcher
+        .search(&[1.0, 0.0, 0.0, 0.0], 2, HnswSearchParams::new(10), None)
+        .unwrap();
 
     assert!(!results.is_empty());
     assert_eq!(results[0].0, 1);
@@ -134,7 +138,9 @@ fn test_build_parallel_basic() {
     builder.dump(&mut storage).unwrap();
 
     let searcher = HnswSearcher::load(&storage, &params).unwrap();
-    let results = searcher.search(&[1.0, 0.0, 0.0, 0.0], 2, 10, None).unwrap();
+    let results = searcher
+        .search(&[1.0, 0.0, 0.0, 0.0], 2, HnswSearchParams::new(10), None)
+        .unwrap();
 
     assert!(!results.is_empty());
     assert_eq!(results[0].0, 1);
@@ -160,7 +166,9 @@ fn test_build_parallel_self_recall() {
     let mut miss = 0;
     for i in 0..n {
         let query = &vectors[i * dim..(i + 1) * dim];
-        let results = searcher.search(query, 1, 100, None).unwrap();
+        let results = searcher
+            .search(query, 1, HnswSearchParams::new(100), None)
+            .unwrap();
         if results.is_empty() || results[0].0 != i as u64 {
             miss += 1;
         }
@@ -225,7 +233,9 @@ fn test_build_parallel_sequential_fallback() {
     builder.dump(&mut storage).unwrap();
 
     let searcher = HnswSearcher::load(&storage, &params).unwrap();
-    let results = searcher.search(&[1.0, 0.0, 0.0, 0.0], 2, 10, None).unwrap();
+    let results = searcher
+        .search(&[1.0, 0.0, 0.0, 0.0], 2, HnswSearchParams::new(10), None)
+        .unwrap();
 
     assert!(!results.is_empty());
     assert_eq!(results[0].0, 1);
@@ -247,7 +257,9 @@ fn test_build_parallel_cosine() {
     builder.dump(&mut storage).unwrap();
 
     let searcher = HnswSearcher::load(&storage, &params).unwrap();
-    let results = searcher.search(&[1.0, 0.0, 0.0, 0.0], 2, 10, None).unwrap();
+    let results = searcher
+        .search(&[1.0, 0.0, 0.0, 0.0], 2, HnswSearchParams::new(10), None)
+        .unwrap();
 
     assert!(!results.is_empty());
     assert_eq!(results[0].0, 1);
@@ -269,8 +281,172 @@ fn test_build_parallel_inner_product() {
     builder.dump(&mut storage).unwrap();
 
     let searcher = HnswSearcher::load(&storage, &params).unwrap();
-    let results = searcher.search(&[1.0, 0.0, 0.0, 0.0], 2, 10, None).unwrap();
+    let results = searcher
+        .search(&[1.0, 0.0, 0.0, 0.0], 2, HnswSearchParams::new(10), None)
+        .unwrap();
 
     assert!(!results.is_empty());
     assert_eq!(results[0].0, 1);
+}
+
+fn build_random_index(params: &HnswIndexParams, n: usize, dim: usize) -> (MemoryStorage, Vec<f32>) {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+    let keys: Vec<u64> = (0..n as u64).collect();
+    let vectors: Vec<f32> = (0..n * dim).map(|_| rng.gen::<f32>()).collect();
+    let builder = HnswBuilder::build_parallel(&keys, &vectors, dim, params.clone(), 1).unwrap();
+    let mut storage = MemoryStorage::new();
+    builder.dump(&mut storage).unwrap();
+    (storage, vectors)
+}
+
+/// Allows keys whose remainder mod 5 is 3 or 4, so 60 percent of keys are rejected.
+struct SixtyPercentDeleted;
+impl DocFilter for SixtyPercentDeleted {
+    fn is_valid(&self, doc_id: u64) -> ZResult<bool> {
+        Ok(doc_id % 5 >= 3)
+    }
+}
+
+#[test]
+fn filtered_search_fills_topk_when_most_documents_are_deleted() {
+    let (n, dim, topk) = (400, 8, 10);
+    let params = HnswIndexParams::new(MetricType::L2)
+        .with_m(16)
+        .with_ef_construction(200);
+    let (storage, vectors) = build_random_index(&params, n, dim);
+    let searcher = HnswSearcher::load(&storage, &params).unwrap();
+
+    for q in 0..5 {
+        let query = &vectors[q * dim..(q + 1) * dim];
+        let hits = searcher
+            .search(
+                query,
+                topk,
+                HnswSearchParams::new(topk),
+                Some(&SixtyPercentDeleted),
+            )
+            .unwrap();
+
+        let mut exact: Vec<(f32, u64)> = (0..n as u64)
+            .filter(|&key| key % 5 >= 3)
+            .map(|key| {
+                let row = &vectors[key as usize * dim..(key as usize + 1) * dim];
+                (simd::l2_f32(query, row), key)
+            })
+            .collect();
+        exact.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let exact_keys: Vec<u64> = exact.iter().take(topk).map(|&(_, key)| key).collect();
+        let hit_keys: Vec<u64> = hits.iter().map(|&(key, _)| key).collect();
+        assert_eq!(hit_keys, exact_keys, "query {q}");
+    }
+}
+
+#[test]
+fn load_rejects_metric_other_than_the_one_built_with() {
+    let cosine = HnswIndexParams::new(MetricType::Cosine);
+    let (storage, _) = build_random_index(&cosine, 20, 4);
+    let Err(err) = HnswSearcher::load(&storage, &HnswIndexParams::new(MetricType::L2)) else {
+        panic!("a Cosine index opened with L2 params must not load");
+    };
+    assert!(err.message.contains("metric mismatch"), "{}", err.message);
+}
+
+#[test]
+fn load_opens_index_written_without_header() {
+    let cosine = HnswIndexParams::new(MetricType::Cosine);
+    let (storage, vectors) = build_random_index(&cosine, 20, 4);
+    let mut legacy = MemoryStorage::new();
+    for name in [
+        SEG_KEYS,
+        SEG_VECTORS,
+        SEG_L0_NEIGHBORS,
+        SEG_UPPER_NEIGHBORS,
+        SEG_UPPER_INDEX,
+        SEG_META,
+        SEG_LEVELS,
+    ] {
+        let bytes = storage.read_segment(name).unwrap();
+        legacy.write_segment(name, bytes.as_slice()).unwrap();
+    }
+    let searcher = HnswSearcher::load(&legacy, &cosine).unwrap();
+    let hits = searcher
+        .search(&vectors[..4], 1, HnswSearchParams::new(10), None)
+        .unwrap();
+    assert_eq!(hits[0].0, 0);
+}
+
+#[test]
+fn load_rejects_out_of_range_entry_point() {
+    let params = HnswIndexParams::new(MetricType::L2);
+    let (mut storage, _) = build_random_index(&params, 20, 4);
+    let mut meta = storage.read_segment(SEG_META).unwrap().as_slice().to_vec();
+    // Entry point follows the u64 count and u64 dim.
+    meta[16..20].copy_from_slice(&1000u32.to_le_bytes());
+    storage.write_segment(SEG_META, &meta).unwrap();
+    let Err(err) = HnswSearcher::load(&storage, &params) else {
+        panic!("an out-of-range entry point must not load");
+    };
+    assert!(err.message.contains("entry point"), "{}", err.message);
+}
+
+#[test]
+fn load_rejects_out_of_range_upper_neighbor() {
+    let params = HnswIndexParams::new(MetricType::L2).with_m(2);
+    let (mut storage, _) = build_random_index(&params, 200, 4);
+    let index = storage
+        .read_segment(SEG_UPPER_INDEX)
+        .unwrap()
+        .as_slice()
+        .to_vec();
+    // Level 1 slot offsets start after `num_levels`, `node_count`, and `fixed_len`.
+    let slot = index[12..]
+        .chunks_exact(4)
+        .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        .find(|&off| off != u32::MAX)
+        .expect("m = 2 puts some nodes on level 1") as usize;
+    let mut upper = storage
+        .read_segment(SEG_UPPER_NEIGHBORS)
+        .unwrap()
+        .as_slice()
+        .to_vec();
+    upper[slot..slot + 4].copy_from_slice(&5000u32.to_le_bytes());
+    storage.write_segment(SEG_UPPER_NEIGHBORS, &upper).unwrap();
+    let Err(err) = HnswSearcher::load(&storage, &params) else {
+        panic!("an out-of-range upper-level link must not load");
+    };
+    assert!(err.message.contains("upper neighbor id"), "{}", err.message);
+}
+
+#[test]
+fn header_records_build_tuning() {
+    let mut params = HnswIndexParams::new(MetricType::InnerProduct);
+    params.build_tuning.heuristic_dim = Some(3);
+    params.build_tuning.qdrant_backlink = true;
+    params.build_tuning.l0_refine_candidate_cap = Some(64);
+    params.build_tuning.prune_alpha = 1.25;
+    let (storage, _) = build_random_index(&params, 20, 4);
+    let header = storage
+        .read_segment(SEG_HEADER)
+        .unwrap()
+        .as_slice()
+        .to_vec();
+    let words: Vec<u32> = header[8..]
+        .chunks_exact(4)
+        .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        .collect();
+    assert_eq!(&header[..8], b"FINCHHNS");
+    // version, metric, heuristic dim, flags (keep pruned, repair, qdrant backlink), refine cap, alpha
+    assert_eq!(
+        words,
+        vec![
+            1,
+            MetricType::InnerProduct as u32,
+            3,
+            0b1110,
+            64,
+            1.25f32.to_bits()
+        ]
+    );
+    HnswSearcher::load(&storage, &params).unwrap();
 }

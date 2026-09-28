@@ -23,6 +23,7 @@ mod builder_pruning_tests {
             metric: MetricType::InnerProduct,
             quantize: QuantizeType::Undefined,
             build_concurrency: None,
+            build_tuning: Default::default(),
         };
         let mut b = HnswSparseBuilder::new(params);
 
@@ -71,6 +72,7 @@ mod builder_pruning_tests {
             metric: MetricType::InnerProduct,
             quantize: QuantizeType::Undefined,
             build_concurrency: None,
+            build_tuning: Default::default(),
         };
         let mut b = HnswSparseBuilder::new(params);
         b.vectors = vec![
@@ -126,11 +128,12 @@ mod build_dump_load_tests {
         let params = HnswIndexParams {
             m: 16,
             ef_construction: 128,
-            // scaling_factor=2 => random_level deterministically hits the cap (all nodes have many levels).
+            // scaling_factor=2 => the most upper levels random_level allows.
             scaling_factor: 2,
             metric: MetricType::InnerProduct,
             quantize: QuantizeType::Undefined,
             build_concurrency: None,
+            build_tuning: Default::default(),
         };
 
         let mut builder = HnswSparseBuilder::new(params.clone());
@@ -147,5 +150,28 @@ mod build_dump_load_tests {
         let out = searcher.search(&q, 5, 256, None).unwrap();
         assert!(!out.is_empty());
         assert_eq!(out[0].0, 10);
+    }
+
+    #[test]
+    fn m_of_one_does_not_put_every_node_on_the_top_level() {
+        let params = HnswIndexParams::new(MetricType::InnerProduct).with_m(1);
+        let mut builder = HnswSparseBuilder::new(params);
+        for i in 0..200u64 {
+            builder.add(i, make_unit_norm_sparse_vec(i)).unwrap();
+        }
+        let mut stg = MemoryStorage::new();
+        builder.dump(&mut stg).unwrap();
+        let levels = stg.read_segment(SEG_LEVELS).unwrap().as_slice().to_vec();
+        let levels: Vec<u32> = levels
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .collect();
+        assert_eq!(levels.len(), 200);
+        let at_level_zero = levels.iter().filter(|&&level| level == 0).count();
+        assert!(
+            at_level_zero > 50,
+            "only {at_level_zero} of 200 nodes stay on level 0"
+        );
+        assert!(levels.iter().all(|&level| level < 32));
     }
 }

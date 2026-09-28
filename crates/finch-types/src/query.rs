@@ -37,6 +37,12 @@ pub struct QueryParams {
     /// Refiner scale factor. When `use_refiner=true` and `refiner_k` is not set,
     /// finch may derive `refiner_k = ceil(topk * refiner_scale_factor)`.
     pub refiner_scale_factor: Option<f32>,
+    /// HNSW upper-level beam width; `None` descends greedily.
+    #[serde(default)]
+    pub hnsw_upper_ef: Option<u32>,
+    /// Level-1 routing points that seed the HNSW level-0 beam; `None` uses 24, `1` one entry.
+    #[serde(default)]
+    pub hnsw_l0_seeds: Option<u32>,
 }
 
 impl QueryParams {

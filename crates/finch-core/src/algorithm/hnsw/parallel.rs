@@ -56,6 +56,7 @@ pub(super) struct SharedGraph {
     pub(super) dim: usize,
     pub(super) vec_stride_floats: usize,
     pub(super) heuristic_dim: usize,
+    pub(super) tuning: HnswBuildTuning,
     pub(super) m: usize,
     pub(super) ef_construction: usize,
     pub(super) l0_m: usize,
@@ -116,6 +117,7 @@ impl SharedGraph {
             vec_stride_floats: self.vec_stride_floats,
             dim: self.dim,
             heuristic_dim: self.heuristic_dim,
+            tuning: self.tuning,
         }
     }
 

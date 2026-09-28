@@ -77,11 +77,11 @@ fn resolve_ip() -> DistFn {
         unsafe { x86::sse4::ip_f32(a, b) }
     }
 
-    if is_x86_feature_detected!("avx2") {
-        return avx2;
-    }
     if is_x86_feature_detected!("avx512f") {
         return avx512;
+    }
+    if is_x86_feature_detected!("avx2") {
+        return avx2;
     }
     if is_x86_feature_detected!("sse4.1") {
         return sse4;
@@ -129,11 +129,11 @@ fn resolve_l2_scatter() -> ScatterFn {
 
 #[cfg(target_arch = "x86_64")]
 fn resolve_ip_scatter() -> ScatterFn {
-    if is_x86_feature_detected!("avx2") {
-        return x86::avx2::ip_scatter_f32;
-    }
     if is_x86_feature_detected!("avx512f") {
         return x86::avx512::ip_scatter_f32;
+    }
+    if is_x86_feature_detected!("avx2") {
+        return x86::avx2::ip_scatter_f32;
     }
     scalar::ip_scatter_f32_scalar
 }
@@ -152,6 +152,13 @@ static COSINE_FN: OnceLock<DistFn> = OnceLock::new();
 static L2_SCATTER_FN: OnceLock<ScatterFn> = OnceLock::new();
 #[cfg(target_arch = "x86_64")]
 static IP_SCATTER_FN: OnceLock<ScatterFn> = OnceLock::new();
+#[cfg(target_arch = "x86_64")]
+static HAS_AVX2: OnceLock<bool> = OnceLock::new();
+
+#[cfg(target_arch = "x86_64")]
+fn has_avx2() -> bool {
+    *HAS_AVX2.get_or_init(|| is_x86_feature_detected!("avx2"))
+}
 
 // ---------------------------------------------------------------------------
 // Public API: single-vector distances
@@ -244,9 +251,9 @@ pub fn l2_batch_f32(matrix: &[f32], query: &[f32], m: usize, dim: usize, out: &m
     debug_assert_eq!(out.len(), m);
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx2") {
+        if has_avx2() {
             assert!(matrix.len() >= m * dim && query.len() >= dim && out.len() >= m);
-            // SAFETY: avx2 detected above; slice bounds asserted above.
+            // SAFETY: `has_avx2` detected avx2; slice bounds asserted above.
             unsafe { x86::avx2::l2_batch_f32(matrix, query, m, dim, out) };
             return;
         }
@@ -268,9 +275,9 @@ pub fn ip_batch_f32(matrix: &[f32], query: &[f32], m: usize, dim: usize, out: &m
     debug_assert_eq!(out.len(), m);
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx2") {
+        if has_avx2() {
             assert!(matrix.len() >= m * dim && query.len() >= dim && out.len() >= m);
-            // SAFETY: avx2 detected above; slice bounds asserted above.
+            // SAFETY: `has_avx2` detected avx2; slice bounds asserted above.
             unsafe { x86::avx2::ip_batch_f32(matrix, query, m, dim, out) };
             return;
         }

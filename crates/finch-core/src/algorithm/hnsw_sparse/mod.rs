@@ -274,7 +274,8 @@ impl HnswSparseBuilder {
     fn random_level(&self) -> usize {
         let mut rng = rand::thread_rng();
         let mut level = 0;
-        let scale = 1.0 / (self.params.scaling_factor as f64).ln();
+        // At scaling_factor <= e, 1/ln is >= 1: every draw promotes and every node reaches level 32.
+        let scale = (1.0 / (self.params.scaling_factor.max(2) as f64).ln()).min(0.5);
         while rng.gen::<f64>() < scale && level < 32 {
             level += 1;
         }

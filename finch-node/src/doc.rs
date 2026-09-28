@@ -131,6 +131,8 @@ impl TryFrom<VectorQueryOptions> for finch_types::VectorQuery {
                 use_refiner: opts.use_refiner.unwrap_or(false),
                 refiner_k: opts.refiner_k,
                 refiner_scale_factor: opts.refiner_scale_factor.map(|x| x as f32),
+                hnsw_upper_ef: None,
+                hnsw_l0_seeds: None,
             },
         })
     }

@@ -10,6 +10,7 @@ struct UpperSegments {
 impl HnswBuilder {
     pub fn dump(&self, storage: &mut dyn StorageWriter) -> ZResult<()> {
         let n = self.keys.len();
+        storage.write_segment(SEG_HEADER, &self.encode_header())?;
         storage.write_segment(SEG_KEYS, &u64s_to_le(&self.keys))?;
 
         // Write vectors (either raw f32 or quantized bytes)
@@ -74,6 +75,28 @@ impl HnswBuilder {
             neighbors: upper_buf,
             index: upper_idx_buf,
         }
+    }
+
+    /// Magic, format version, metric, then the build heuristics that shaped the graph.
+    fn encode_header(&self) -> Vec<u8> {
+        let t = &self.params.build_tuning;
+        let flags = u32::from(t.simple_neighbor_select)
+            | (u32::from(t.keep_pruned_connections) << 1)
+            | (u32::from(t.l0_repair) << 2)
+            | (u32::from(t.qdrant_backlink) << 3);
+        let refine_cap = t.l0_refine_candidate_cap.map_or(0, |cap| cap as u32);
+        let mut buf = HEADER_MAGIC.to_vec();
+        for word in [
+            HEADER_VERSION,
+            self.params.metric as u32,
+            self.heuristic_dim as u32,
+            flags,
+            refine_cap,
+            t.prune_alpha.to_bits(),
+        ] {
+            buf.extend_from_slice(&word.to_le_bytes());
+        }
+        buf
     }
 
     fn encode_meta(&self, vec_stride_bytes: usize) -> Vec<u8> {

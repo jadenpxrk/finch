@@ -170,16 +170,8 @@ impl L0RepairState {
 
 impl HnswBuilder {
     pub fn new(dim: usize, params: HnswIndexParams) -> Self {
-        Self::with_heuristic_dim(dim, params, heuristic_dim_from_env(dim))
-    }
-
-    /// An empty builder whose neighbor heuristic uses the first `heuristic_dim` dimensions.
-    pub(super) fn with_heuristic_dim(
-        dim: usize,
-        params: HnswIndexParams,
-        heuristic_dim: usize,
-    ) -> Self {
         let metric_type = params.metric;
+        let heuristic_dim = heuristic_dim(&params.build_tuning, dim);
         // align the in-memory vector stride and avoid 1024-byte
         // multiples which can cause severe cache conflict slowdowns (notably at
         // 1536-dim f32 = 6144 bytes).
@@ -231,13 +223,14 @@ impl HnswBuilder {
     }
 
     fn view(&self) -> VectorView<'_> {
-        VectorView::new(
-            self.metric_type,
-            &self.vectors,
-            self.vec_stride_floats,
-            self.dim,
-            self.heuristic_dim,
-        )
+        VectorView {
+            metric_type: self.metric_type,
+            vectors: &self.vectors,
+            vec_stride_floats: self.vec_stride_floats,
+            dim: self.dim,
+            heuristic_dim: self.heuristic_dim,
+            tuning: self.params.build_tuning,
+        }
     }
 
     #[inline]
@@ -468,7 +461,7 @@ impl HnswBuilder {
             let mut ok = true;
             for &s in selected.iter() {
                 let d = dist_between(cand, s);
-                if should_prune_neighbor(d, dist_to_query) {
+                if should_prune_neighbor(1.0, d, dist_to_query) {
                     ok = false;
                     break;
                 }
@@ -499,6 +492,7 @@ impl HnswBuilder {
             vec_stride_floats,
             dim,
             heuristic_dim,
+            params,
             ..
         } = self;
         let links = match slot.upper_idx {
@@ -513,13 +507,14 @@ impl HnswBuilder {
             return;
         }
 
-        let view = VectorView::new(
-            *metric_type,
+        let view = VectorView {
+            metric_type: *metric_type,
             vectors,
-            *vec_stride_floats,
-            *dim,
-            *heuristic_dim,
-        );
+            vec_stride_floats: *vec_stride_floats,
+            dim: *dim,
+            heuristic_dim: *heuristic_dim,
+            tuning: params.build_tuning,
+        };
         let vectors = view.vectors;
         let node_vec = vec_slice_raw(vectors, view.vec_stride_floats, view.dim, node);
         let score = |nb: u32| {
@@ -583,9 +578,10 @@ impl HnswBuilder {
     }
 
     pub(super) fn refine_l0_neighbors(&mut self) {
-        let Some(candidate_cap) = l0_refinement_candidate_cap() else {
+        let Some(candidate_cap) = self.params.build_tuning.l0_refine_candidate_cap else {
             return;
         };
+        let candidate_cap = candidate_cap.max(1);
         let n = self.keys.len();
         if n <= 1 {
             return;

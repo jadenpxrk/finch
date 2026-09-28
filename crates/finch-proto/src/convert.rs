@@ -96,6 +96,7 @@ impl From<TypesHnsw> for MHnsw {
             scaling_factor: p.scaling_factor as u32,
             metric: p.metric as u32,
             quantize: p.quantize as u32,
+            build_tuning: p.build_tuning,
         }
     }
 }
@@ -108,6 +109,7 @@ impl From<MHnsw> for TypesHnsw {
             metric: decode_metric(p.metric),
             quantize: decode_quantize(p.quantize),
             build_concurrency: None,
+            build_tuning: p.build_tuning,
         }
     }
 }

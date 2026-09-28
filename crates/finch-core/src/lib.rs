@@ -14,7 +14,7 @@ pub use algorithm::flat::{
     FlatBuilder, FlatSearcher, MemoryStorage, StorageReader, StorageWriter,
 };
 pub use algorithm::flat_sparse::{FlatSparseBuilder, FlatSparseSearcher, SparseVector};
-pub use algorithm::hnsw::{HnswBuilder, HnswSearcher};
+pub use algorithm::hnsw::{HnswBuilder, HnswSearchParams, HnswSearcher};
 pub use algorithm::hnsw_sparse::{HnswSparseBuilder, HnswSparseSearcher};
 pub use algorithm::ivf::{IvfBuilder, IvfSearcher};
 pub use algorithm::{AllowAllFilter, DocFilter, TopkHeap};

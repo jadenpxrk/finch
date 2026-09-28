@@ -61,6 +61,7 @@ impl TryFrom<FieldSchemaOptions> for finch_types::FieldSchema {
                     metric: decode_metric(hnsw.metric)?,
                     quantize: decode_quantize(hnsw.quantize)?,
                     build_concurrency: None,
+                    build_tuning: Default::default(),
                 },
             ));
         } else if let Some(ivf) = opts.ivf_index {
