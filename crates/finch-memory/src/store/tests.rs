@@ -193,6 +193,196 @@ fn make_claim(
     })
 }
 
+/// A store that first writes the episodes and spans each record cites, because writes reject
+/// evidence ids that do not resolve in the record's scope.
+struct EvidencedStore(MemoryStore);
+
+impl std::ops::Deref for EvidencedStore {
+    type Target = MemoryStore;
+
+    fn deref(&self) -> &MemoryStore {
+        &self.0
+    }
+}
+
+impl EvidencedStore {
+    fn create(path: &Path, embedding_dim: usize, options: CollectionOptions) -> ZResult<Self> {
+        MemoryStore::create(path, embedding_dim, options).map(Self)
+    }
+
+    /// Writes the cited episodes and spans that do not exist yet; each span quotes the first
+    /// cited episode. Sequence 0 on every seeded episode keeps claim ordering ties unchanged.
+    fn seed_evidence(&self, scope: &MemoryScope, span_ids: &[MemoryId], episode_ids: &[MemoryId]) {
+        let Some(source_episode_id) = episode_ids.first() else {
+            return;
+        };
+        let existing_episodes = self.episodes.fetch(episode_ids.to_vec()).unwrap();
+        for id in episode_ids
+            .iter()
+            .filter(|id| !existing_episodes.contains_key(*id))
+        {
+            self.append_episode(&EpisodeRecord {
+                id: id.clone(),
+                scope: scope.clone(),
+                status: MemoryStatus::Active,
+                visibility: Visibility::Private,
+                policy_tags: Vec::new(),
+                source_kind: SourceKind::UserMessage,
+                actor: ActorKind::User,
+                sequence_no: 0,
+                temporal: crate::types::TemporalFields {
+                    created_at_ms: 0,
+                    ingested_at_ms: 0,
+                    event_time_ms: None,
+                    valid_from_ms: None,
+                    valid_to_ms: None,
+                },
+                raw_text: id.clone(),
+                blob_ref: None,
+                mime_type: None,
+                content_hash: id.clone(),
+                causal_parent_ids: Vec::new(),
+                metadata_json: None,
+            })
+            .unwrap();
+        }
+        let existing_spans = self.spans.fetch(span_ids.to_vec()).unwrap();
+        for id in span_ids
+            .iter()
+            .filter(|id| !existing_spans.contains_key(*id))
+        {
+            let mut span = span_record(id, MemoryStatus::Active, None);
+            span.scope = scope.clone();
+            span.source_id = source_episode_id.clone();
+            // Stored without lexical terms or an embedding, so searches never return it.
+            insert_one(&self.spans, span_doc(&span, None).unwrap()).unwrap();
+        }
+    }
+
+    /// Writes the cited claims that do not exist yet as superseded rows, so they prove the
+    /// reference without becoming current state.
+    fn seed_source_claims(&self, scope: &MemoryScope, claim_ids: &[MemoryId]) {
+        let existing = self.claims.fetch(claim_ids.to_vec()).unwrap();
+        for id in claim_ids.iter().filter(|id| !existing.contains_key(*id)) {
+            let mut claim = make_claim(
+                scope,
+                id,
+                "",
+                "",
+                None,
+                0,
+                (ClaimKind::Fact, ClaimPolarity::Affirmative),
+            );
+            claim.status = MemoryStatus::Superseded;
+            claim.source_span_ids.clear();
+            claim.source_episode_ids.clear();
+            insert_one(&self.claims, claim_doc(&claim, None).unwrap()).unwrap();
+        }
+    }
+
+    fn add_entity(&self, input: EntityInput, embedding: Option<&[f32]>) -> ZResult<EntityRecord> {
+        self.seed_source_claims(&input.scope, &input.source_claim_ids);
+        self.0.add_entity(input, embedding)
+    }
+
+    fn append_claim(&self, record: &ClaimRecord, embedding: Option<&[f32]>) -> ZResult<()> {
+        self.seed_evidence(
+            &record.scope,
+            &record.source_span_ids,
+            &record.source_episode_ids,
+        );
+        self.0.append_claim(record, embedding)
+    }
+
+    fn add_manual_claim(
+        &self,
+        input: ManualClaimInput,
+        embedding: Option<&[f32]>,
+    ) -> ZResult<ClaimRecord> {
+        self.seed_evidence(
+            &input.scope,
+            &input.source_span_ids,
+            &input.source_episode_ids,
+        );
+        self.0.add_manual_claim(input, embedding)
+    }
+
+    fn add_rule(&self, input: RuleInput) -> ZResult<RuleRecord> {
+        self.seed_evidence(
+            &input.scope,
+            &input.source_span_ids,
+            &input.source_episode_ids,
+        );
+        self.0.add_rule(input)
+    }
+
+    fn append_rule(&self, record: &RuleRecord) -> ZResult<()> {
+        self.seed_evidence(
+            &record.scope,
+            &record.source_span_ids,
+            &record.source_episode_ids,
+        );
+        self.0.append_rule(record)
+    }
+
+    fn add_correction(&self, record: &CorrectionRecord) -> ZResult<()> {
+        self.seed_evidence(
+            &record.scope,
+            &record.source_span_ids,
+            &record.source_episode_ids,
+        );
+        self.0.add_correction(record)
+    }
+
+    fn apply_state_mutation_batch(
+        &self,
+        batch: StateMutationBatch,
+    ) -> ZResult<crate::StateMutationResult> {
+        self.apply_state_mutation_batch_with_claim_embeddings(batch, BTreeMap::new())
+    }
+
+    fn apply_state_mutation_batch_with_claim_embeddings(
+        &self,
+        batch: StateMutationBatch,
+        claim_embeddings: BTreeMap<MemoryId, Vec<f32>>,
+    ) -> ZResult<crate::StateMutationResult> {
+        for (span_ids, episode_ids) in batch
+            .claims
+            .iter()
+            .map(|record| (&record.source_span_ids, &record.source_episode_ids))
+            .chain(
+                batch
+                    .rules
+                    .iter()
+                    .map(|record| (&record.source_span_ids, &record.source_episode_ids)),
+            )
+            .chain(
+                batch
+                    .corrections
+                    .iter()
+                    .map(|record| (&record.source_span_ids, &record.source_episode_ids)),
+            )
+        {
+            self.seed_evidence(&batch.scope, span_ids, episode_ids);
+        }
+        let incoming_claim_ids = batch
+            .claims
+            .iter()
+            .map(|claim| claim.id.clone())
+            .collect::<BTreeSet<_>>();
+        let entity_claim_ids = batch
+            .entities
+            .iter()
+            .flat_map(|entity| entity.source_claim_ids.iter())
+            .filter(|id| !incoming_claim_ids.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.seed_source_claims(&batch.scope, &entity_claim_ids);
+        self.0
+            .apply_state_mutation_batch_with_claim_embeddings(batch, claim_embeddings)
+    }
+}
+
 mod adversarial_round_1;
 mod claims;
 mod generated_ids;
@@ -213,3 +403,4 @@ mod rule_projection;
 mod rules;
 mod scope_keys;
 mod state_protocol;
+mod write_integrity;

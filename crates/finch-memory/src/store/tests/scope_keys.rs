@@ -55,11 +55,11 @@ fn write_owners_then_space(store: &MemoryStore) -> [MemoryScope; 3] {
     scopes
 }
 
-fn open_store(name: &str) -> MemoryStore {
-    MemoryStore::create(&temp_dir(name), 3, CollectionOptions::default()).unwrap()
+fn open_store(name: &str) -> EvidencedStore {
+    EvidencedStore::create(&temp_dir(name), 3, CollectionOptions::default()).unwrap()
 }
 
-fn close_store(store: MemoryStore) {
+fn close_store(store: EvidencedStore) {
     let path = store.path.clone();
     drop(store);
     std::fs::remove_dir_all(path).unwrap();
@@ -88,6 +88,9 @@ fn owner_to_reviewer_rule(scope: &MemoryScope, id: &str, valid_from_ms: i64) -> 
         id: Some(id.to_string()),
         scope: scope.clone(),
         valid_from_ms: Some(valid_from_ms),
+        // Evidence rows belong to one scope, so each rule cites its own.
+        source_span_ids: vec![format!("span_{id}")],
+        source_episode_ids: vec![format!("ep_{id}")],
         ..make_derived_rule_inputs()
     }
 }

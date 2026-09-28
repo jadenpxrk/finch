@@ -46,10 +46,11 @@ use finch_types::{
 };
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub(crate) mod canonical;
@@ -100,6 +101,7 @@ use state_records::{
 use timeline::{reconcile_dependency_trace_intervals, reconcile_state_record_intervals};
 
 pub struct MemoryStore {
+    id: u64,
     path: PathBuf,
     pub(crate) episodes: Arc<Collection>,
     pub(crate) spans: Arc<Collection>,
@@ -119,35 +121,62 @@ pub struct MemoryStore {
     state_mutation_lock: RwLock<()>,
 }
 
+static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(0);
+
 thread_local! {
-    // Write locks this thread holds; a write calls public reads, which must not relock.
-    static STATE_WRITE_DEPTH: Cell<usize> = const { Cell::new(0) };
+    // Stores whose write lock this thread holds; a write calls public reads, which must not relock.
+    static STATE_WRITE_HELD: RefCell<BTreeSet<u64>> = const { RefCell::new(BTreeSet::new()) };
 }
 
 pub(crate) struct StateWriteGuard<'a> {
     _lock: RwLockWriteGuard<'a, ()>,
+    store_id: u64,
 }
 
 impl Drop for StateWriteGuard<'_> {
     fn drop(&mut self) {
-        STATE_WRITE_DEPTH.with(|depth| depth.set(depth.get() - 1));
+        STATE_WRITE_HELD.with(|held| held.borrow_mut().remove(&self.store_id));
     }
 }
 
 impl MemoryStore {
     pub(crate) fn lock_state_mutation(&self) -> StateWriteGuard<'_> {
         let lock = self.state_mutation_lock.write();
-        STATE_WRITE_DEPTH.with(|depth| depth.set(depth.get() + 1));
-        StateWriteGuard { _lock: lock }
+        STATE_WRITE_HELD.with(|held| held.borrow_mut().insert(self.id));
+        StateWriteGuard {
+            _lock: lock,
+            store_id: self.id,
+        }
     }
 
     /// Public reads hold this so they see a state mutation batch whole or not at all.
     pub(crate) fn lock_state_read(&self) -> Option<RwLockReadGuard<'_, ()>> {
-        if STATE_WRITE_DEPTH.with(Cell::get) > 0 {
+        if STATE_WRITE_HELD.with(|held| held.borrow().contains(&self.id)) {
             return None;
         }
         // Recursive so a public read that calls another cannot deadlock behind a waiting writer.
         Some(self.state_mutation_lock.read_recursive())
+    }
+
+    /// The one entry point of a state mutation: holds the write lock and journals every write of
+    /// `mutate`, committing on success and restoring the prior rows on error.
+    pub(crate) fn with_state_mutation<T>(
+        &self,
+        scope: &MemoryScope,
+        mutate: impl FnOnce() -> ZResult<T>,
+    ) -> ZResult<T> {
+        let _mutation_guard = self.lock_state_mutation();
+        self.begin_state_mutation_journal(scope)?;
+        match mutate() {
+            Ok(value) => {
+                self.commit_state_mutation_journal()?;
+                Ok(value)
+            }
+            Err(error) => {
+                self.recover_pending_state_mutation()?;
+                Err(error)
+            }
+        }
     }
 }
 
@@ -711,6 +740,7 @@ impl MemoryStore {
             Collection::create_and_open(&path.join(name), schema, options.clone())
         };
         let store = Self {
+            id: NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed),
             path: path.to_path_buf(),
             episodes: create(EPISODES_COLLECTION, episode_schema())?,
             spans: create(SPANS_COLLECTION, span_collection_schema)?,
@@ -760,6 +790,7 @@ impl MemoryStore {
         )?;
         let open = |name: &str| Collection::open(&path.join(name), options.clone());
         let store = Self {
+            id: NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed),
             path: path.to_path_buf(),
             episodes: open(EPISODES_COLLECTION)?,
             spans: open(SPANS_COLLECTION)?,
@@ -854,42 +885,45 @@ impl MemoryStore {
     }
 
     pub fn add_correction(&self, record: &CorrectionRecord) -> ZResult<()> {
-        let _mutation_guard = self.lock_state_mutation();
-        #[cfg(not(test))]
-        if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {
-            self.validate_evidence_references(
-                &record.scope,
-                &record.source_span_ids,
-                &record.source_episode_ids,
-            )?;
-        } else if !matches!(record.actor, crate::ActorKind::User) {
-            return Err(Status::invalid_argument(
-                "non-user corrections require source evidence",
-            ));
-        }
-        let mut record = self.resolve_existing_correction_target(record)?;
-        record.source_sequence_no =
-            self.source_sequence_no_for_episode_ids(&record.scope, &record.source_episode_ids)?;
-        insert_one(
-            &self.corrections,
-            correction_doc(&record).map_err(json_error)?,
-        )?;
-        if record.target_type != "claim" {
-            return Ok(());
-        }
-        let affected_slot_ids = self.correction_target_slot_ids_of(&record)?;
-        if affected_slot_ids.is_empty() {
-            if record.target_selector.is_some() {
-                self.refresh_state_projection(&record.scope, Some(record.effective_at_ms))?;
+        self.with_state_mutation(&record.scope, || {
+            if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {
+                self.validate_evidence_references(
+                    &record.scope,
+                    &record.source_span_ids,
+                    &record.source_episode_ids,
+                )?;
+            } else if !matches!(record.actor, crate::ActorKind::User) {
+                return Err(Status::invalid_argument(
+                    "non-user corrections require source evidence",
+                ));
             }
-            return Ok(());
-        }
-        let projected =
-            self.current_state_records_for_slot_ids(&record.scope, &affected_slot_ids)?;
-        if correction_already_projected(&record, &projected) {
-            return Ok(());
-        }
-        self.project_correction(&record, affected_slot_ids)
+            let mut record = self.resolve_existing_correction_target(record)?;
+            record.source_sequence_no =
+                self.source_sequence_no_for_episode_ids(&record.scope, &record.source_episode_ids)?;
+            let correction_docs = vec![correction_doc(&record).map_err(json_error)?];
+            self.capture_state_mutation_docs(
+                CORRECTIONS_COLLECTION,
+                &self.corrections,
+                &correction_docs,
+            )?;
+            insert_many(&self.corrections, correction_docs)?;
+            if record.target_type != "claim" {
+                return Ok(());
+            }
+            let affected_slot_ids = self.correction_target_slot_ids_of(&record)?;
+            if affected_slot_ids.is_empty() {
+                if record.target_selector.is_some() {
+                    self.rebuild_state_projection(&record.scope, Some(record.effective_at_ms))?;
+                }
+                return Ok(());
+            }
+            let projected =
+                self.current_state_records_for_slot_ids(&record.scope, &affected_slot_ids)?;
+            if correction_already_projected(&record, &projected) {
+                return Ok(());
+            }
+            self.project_correction(&record, affected_slot_ids)
+        })
     }
 
     /// The slot a stored claim correction names plus the slots of the claims it targets.
@@ -927,7 +961,6 @@ impl MemoryStore {
             Some(record.effective_at_ms),
         )?;
         changed_claims.retain(|claim| claim.scope == record.scope);
-        changed_claims.truncate(MAX_VECTOR_QUERY_TOPK);
         let known_ids = changed_claims
             .iter()
             .map(|claim| claim.id.clone())
@@ -938,7 +971,9 @@ impl MemoryStore {
             .iter()
             .map(|application| claim_doc(&application.claim, None).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        insert_many(&self.claims, derived_docs)?;
+        self.capture_state_mutation_docs(CLAIMS_COLLECTION, &self.claims, &derived_docs)?;
+        // Surviving triggers re-derive claims already stored under the same deterministic ids.
+        upsert_many(&self.claims, derived_docs)?;
         affected_slot_ids.extend(
             applications
                 .iter()

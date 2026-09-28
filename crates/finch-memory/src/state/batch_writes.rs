@@ -14,7 +14,6 @@ impl MemoryStore {
         claim_embeddings: BTreeMap<MemoryId, Vec<f32>>,
     ) -> ZResult<StateMutationResult> {
         validate_batch_scope(&batch)?;
-        #[cfg(not(test))]
         self.validate_batch_evidence(&batch)?;
         self.apply_validated_state_mutation_batch(batch, claim_embeddings)
     }
@@ -24,22 +23,14 @@ impl MemoryStore {
         mut batch: StateMutationBatch,
         claim_embeddings: BTreeMap<MemoryId, Vec<f32>>,
     ) -> ZResult<StateMutationResult> {
-        let _mutation_guard = self.lock_state_mutation();
-        for correction in &mut batch.corrections {
-            *correction =
-                self.resolve_correction_target_with_pending_claims(correction, &batch.claims)?;
-        }
-        self.begin_state_mutation_journal(&batch.scope)?;
-        match self.apply_state_mutation_batch_inner(batch, claim_embeddings) {
-            Ok(result) => {
-                self.commit_state_mutation_journal()?;
-                Ok(result)
+        let scope = batch.scope.clone();
+        self.with_state_mutation(&scope, || {
+            for correction in &mut batch.corrections {
+                *correction =
+                    self.resolve_correction_target_with_pending_claims(correction, &batch.claims)?;
             }
-            Err(error) => {
-                self.recover_pending_state_mutation()?;
-                Err(error)
-            }
-        }
+            self.apply_state_mutation_batch_inner(batch, claim_embeddings)
+        })
     }
 
     pub(crate) fn validate_batch_evidence(&self, batch: &StateMutationBatch) -> ZResult<()> {

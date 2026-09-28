@@ -292,6 +292,13 @@ impl MemoryStore {
             .into_iter()
             .filter(|record| record.scope.matches_filter(scope))
             .filter(|record| {
+                interval_holds_at(
+                    record.valid_from_ms,
+                    record.valid_to_ms,
+                    temporal.valid_at_ms,
+                )
+            })
+            .filter(|record| {
                 temporal
                     .transaction_at_ms
                     .is_none_or(|at| record.recorded_at_ms <= at)

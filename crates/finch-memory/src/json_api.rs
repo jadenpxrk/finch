@@ -764,13 +764,14 @@ mod tests {
                 causal_parent_ids: Vec::new(),
                 metadata_json: None,
             };
-            store
+            let ingested = store
                 .ingest_episode_json(
                     &serde_json::to_string(&episode).unwrap(),
                     observed_at_ms,
                     None,
                 )
                 .unwrap();
+            let ingested = serde_json::from_str::<crate::IngestedEpisode>(&ingested).unwrap();
             let claim = ManualClaimInput {
                 id: Some(id.to_string()),
                 scope: scope.clone(),
@@ -782,7 +783,7 @@ mod tests {
                 object_value: Some(value.to_string()),
                 claim_kind: ClaimKind::Fact,
                 polarity: ClaimPolarity::Affirmative,
-                source_span_ids: Vec::new(),
+                source_span_ids: ingested.spans.iter().map(|span| span.id.clone()).collect(),
                 source_episode_ids: vec![episode_id],
                 asserted_by: "user".to_string(),
                 confidence: Some(1.0),

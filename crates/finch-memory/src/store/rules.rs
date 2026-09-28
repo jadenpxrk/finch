@@ -18,16 +18,18 @@ pub(super) struct DependencyChainResolution {
 
 impl MemoryStore {
     pub(crate) fn append_rule(&self, record: &RuleRecord) -> ZResult<()> {
-        let _mutation_guard = self.lock_state_mutation();
-        #[cfg(not(test))]
-        self.validate_evidence_references(
-            &record.scope,
-            &record.source_span_ids,
-            &record.source_episode_ids,
-        )?;
-        let record = self.sequence_and_bind_rule(record.clone())?;
-        insert_one(&self.rules, rule_doc(&record).map_err(json_error)?)?;
-        self.propagate_new_rule(&record)
+        self.with_state_mutation(&record.scope, || {
+            self.validate_evidence_references(
+                &record.scope,
+                &record.source_span_ids,
+                &record.source_episode_ids,
+            )?;
+            let record = self.sequence_and_bind_rule(record.clone())?;
+            let rule_docs = vec![rule_doc(&record).map_err(json_error)?];
+            self.capture_state_mutation_docs(RULES_COLLECTION, &self.rules, &rule_docs)?;
+            insert_many(&self.rules, rule_docs)?;
+            self.propagate_new_rule(&record)
+        })
     }
 
     pub fn add_rule(&self, input: RuleInput) -> ZResult<RuleRecord> {

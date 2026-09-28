@@ -1,9 +1,18 @@
 use super::*;
 
 impl MemoryStore {
-    /// Maintenance rebuild of a whole scope: the write-time projector run over every slot that
-    /// has current evidence or a rule endpoint. State and traces of any other slot are retired.
+    /// Maintenance rebuild of a whole scope as one journaled state mutation.
     pub fn refresh_state_projection(
+        &self,
+        scope: &MemoryScope,
+        valid_at_ms: Option<i64>,
+    ) -> ZResult<()> {
+        self.with_state_mutation(scope, || self.rebuild_state_projection(scope, valid_at_ms))
+    }
+
+    /// The write-time projector run over every slot of `scope` that has current evidence or a
+    /// rule endpoint. State and traces of any other slot are retired.
+    pub(crate) fn rebuild_state_projection(
         &self,
         scope: &MemoryScope,
         valid_at_ms: Option<i64>,
@@ -114,6 +123,11 @@ impl MemoryStore {
                 state_record_doc(&record).map_err(json_error)
             })
             .collect::<ZResult<Vec<_>>>()?;
+        self.capture_state_mutation_docs(
+            STATE_RECORDS_COLLECTION,
+            &self.state_records,
+            &retired_states,
+        )?;
         upsert_many(&self.state_records, retired_states)?;
         let retired_traces = active_traces
             .into_iter()
@@ -125,6 +139,11 @@ impl MemoryStore {
                 dependency_trace_doc(&record).map_err(json_error)
             })
             .collect::<ZResult<Vec<_>>>()?;
+        self.capture_state_mutation_docs(
+            DEPENDENCY_TRACES_COLLECTION,
+            &self.dependency_traces,
+            &retired_traces,
+        )?;
         upsert_many(&self.dependency_traces, retired_traces)
     }
 

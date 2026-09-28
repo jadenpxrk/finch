@@ -22,7 +22,7 @@ fn memory_store_rejects_rules_without_source_evidence() {
 fn memory_store_stores_explicit_rules_with_provenance() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_with_provenance");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     let input = make_derived_rule_inputs();
     let rule = store.add_rule(input.clone()).unwrap();
@@ -43,7 +43,7 @@ fn memory_store_stores_explicit_rules_with_provenance() {
 fn memory_store_scan_rules_fails_on_undecodable_row() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_decode_error");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     let rule = store.add_rule(make_derived_rule_inputs()).unwrap();
     let corrupt = rule_doc(&rule).unwrap().set("status", "not_a_status");
@@ -59,7 +59,7 @@ fn memory_store_scan_rules_fails_on_undecodable_row() {
 fn memory_store_persists_surface_bound_rule_before_registry_resolution() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_surface_binding");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     let mut input = make_derived_rule_inputs();
     input.trigger_subject_key = "proyecto alfa".to_string();
@@ -92,7 +92,7 @@ fn memory_store_persists_surface_bound_rule_before_registry_resolution() {
 fn memory_store_rebinds_rule_when_entity_alias_becomes_available() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_deferred_entity_binding");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     let mut input = make_derived_rule_inputs();
     input.trigger_subject_key = "equipo norte".to_string();
@@ -151,7 +151,7 @@ fn memory_store_rebinds_rule_when_entity_alias_becomes_available() {
 fn memory_store_resolver_applies_derive_rule_on_changed_trigger() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_derive");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     store.add_rule(make_derived_rule_inputs()).unwrap();
     let scope = scope();
@@ -395,7 +395,7 @@ fn unsupported_rule_uses_episode_sequence_when_timestamps_are_equal() {
 fn on_change_rule_requires_a_proven_value_transition() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_requires_transition");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let prior = make_claim(
         &scope,
@@ -481,7 +481,7 @@ fn on_change_rule_requires_a_proven_value_transition() {
 fn standing_derive_rule_applies_to_current_trigger_from_the_rule_boundary() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("standing_derive_current_trigger");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     store
         .append_claim(
@@ -536,7 +536,7 @@ fn standing_derive_rule_applies_to_current_trigger_from_the_rule_boundary() {
 fn standing_derive_rule_in_a_later_batch_applies_to_existing_trigger() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("standing_derive_later_batch");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     store
         .apply_state_mutation_batch(StateMutationBatch {
@@ -603,7 +603,7 @@ fn standing_derive_rule_in_a_later_batch_applies_to_existing_trigger() {
 fn on_change_derive_does_not_copy_a_pre_rule_trigger_without_a_later_change() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("on_change_no_pre_rule_copy");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     store
         .append_claim(
@@ -671,7 +671,7 @@ fn on_change_derive_does_not_copy_a_pre_rule_trigger_without_a_later_change() {
 fn on_change_rule_finds_prior_value_after_slot_id_rebinding() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_transition_rebound_slot");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let prior = make_claim(
         &scope,
@@ -742,7 +742,7 @@ fn on_change_rule_finds_prior_value_after_slot_id_rebinding() {
 fn on_change_unsupported_rule_finds_prior_value_through_later_entity_alias() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_transition_entity_alias");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let prior = make_claim(
         &scope,
@@ -838,7 +838,7 @@ fn on_change_unsupported_rule_finds_prior_value_through_later_entity_alias() {
 fn memory_store_resolver_marks_dependent_target_unsupported() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_unsupported");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     let mut unsupported_rule = make_derived_rule_inputs();
     let scope = scope();
@@ -922,7 +922,7 @@ fn memory_store_resolver_marks_dependent_target_unsupported() {
 fn memory_store_resolver_marks_persisted_current_target_unsupported() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_unsupported_persisted_target");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     let mut unsupported_rule = make_derived_rule_inputs();
     let scope = scope();
@@ -997,7 +997,7 @@ fn memory_store_resolver_marks_persisted_current_target_unsupported() {
 fn memory_store_resolver_matches_structured_generic_target_for_mark_unsupported() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_structured_generic_target");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     let mut unsupported_rule = make_derived_rule_inputs();
     let scope = scope();
@@ -1077,7 +1077,7 @@ fn memory_store_resolver_matches_structured_generic_target_for_mark_unsupported(
 fn memory_store_resolver_generic_fallback_does_not_invalidate_exact_signal_target() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_generic_target_with_specific_signal");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     let mut generic_rule = make_derived_rule_inputs();
@@ -1194,7 +1194,7 @@ fn memory_store_resolver_generic_fallback_does_not_invalidate_exact_signal_targe
 fn memory_store_resolver_derive_value_uses_exact_target_slot() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_exact_target_derive_value");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     let mut derive_rule = make_derived_rule_inputs();
@@ -1254,7 +1254,7 @@ fn memory_store_resolver_derive_value_uses_exact_target_slot() {
 fn memory_store_resolver_supports_two_hop_derivation() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_two_hop");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     store
         .add_rule(RuleInput {
@@ -1369,7 +1369,7 @@ fn memory_store_resolver_supports_two_hop_derivation() {
 fn memory_store_resolver_orders_branching_dependency_applications() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_branch_order");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     for (id, trigger_subject, target_subject) in [
         ("rule_source_alpha", "source", "alpha"),
@@ -1453,7 +1453,7 @@ fn memory_store_resolver_orders_branching_dependency_applications() {
 fn memory_store_rules_for_trigger_slot_and_scope_time_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_trigger_slot_scope_time");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut base_scope = scope();
     base_scope.tenant_id = Some("tenant-A".to_string());
 
@@ -1471,6 +1471,8 @@ fn memory_store_rules_for_trigger_slot_and_scope_time_filtering() {
     let mut off_scope_rule = make_derived_rule_inputs();
     off_scope_rule.id = Some("rule_off_scope".to_string());
     off_scope_rule.scope = off_scope.clone();
+    off_scope_rule.source_span_ids = vec!["rule_span_owner_tenant_b".to_string()];
+    off_scope_rule.source_episode_ids = vec!["ep_owner_tenant_b".to_string()];
     off_scope_rule.trigger_subject_key = "project alpha".to_string();
     off_scope_rule.trigger_predicate_key = "owner".to_string();
     off_scope_rule.valid_from_ms = Some(5);
@@ -1533,7 +1535,7 @@ fn memory_store_rules_for_trigger_slot_and_scope_time_filtering() {
 fn memory_store_rule_limit_applies_after_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_limit_after_filtering");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut base_scope = scope();
     base_scope.tenant_id = Some("tenant-A".to_string());
     let mut other_scope = scope();
@@ -1543,6 +1545,8 @@ fn memory_store_rule_limit_applies_after_filtering() {
         let mut rule = make_derived_rule_inputs();
         rule.id = Some(format!("rule_off_scope_{i}"));
         rule.scope = other_scope.clone();
+        rule.source_span_ids = vec!["rule_span_owner_tenant_b".to_string()];
+        rule.source_episode_ids = vec!["ep_owner_tenant_b".to_string()];
         store.add_rule(rule).unwrap();
     }
 
@@ -1590,7 +1594,7 @@ fn memory_store_rule_scan_does_not_truncate_at_vector_query_limit() {
 fn memory_store_preserves_explicit_distinct_rule_slot_bindings() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("explicit_distinct_rule_slot_bindings");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let trigger = store
         .add_manual_claim(
@@ -1691,7 +1695,7 @@ fn memory_store_preserves_explicit_distinct_rule_slot_bindings() {
 fn subject_wide_invalidation_with_a_concrete_target_slot_only_retires_that_slot() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("wildcard_with_concrete_target");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let mk = |id: &str, predicate: &str, value: &str, at: i64| {
         make_claim(

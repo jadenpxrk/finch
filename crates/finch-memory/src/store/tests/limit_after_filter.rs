@@ -95,7 +95,7 @@ fn future_claims_consume_vector_fetch_and_hide_valid_slot() {
     // Claims not yet valid must not fill the claim vector fetch ahead of a valid claim.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_claim_vector");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
     for i in 0..VECTOR_FETCH_K {
         let future = owner_claim(&format!("future_{i}"), &format!("future_{i}"), 100);
         store.append_claim(&future, Some(&[1.0, 0.0, 0.0])).unwrap();
@@ -145,7 +145,7 @@ fn context_corrections_keep_more_than_1024_claim_corrections() {
     // Context corrections must not drop the latest correction once a claim has more than 1024.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_context_corrections");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
     let claim = owner_claim("claim", "project", 10);
     store.append_claim(&claim, None).unwrap();
     for i in 0..DEFAULT_CORRECTION_SCAN_LIMIT {
@@ -183,7 +183,7 @@ fn claim_selector_correction_after_1024_selector_corrections_is_scanned() {
     // A claim selector correction must be found however many selector corrections precede it.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_claim_selector");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
     let claim = owner_claim("claim", "project", 10);
     store.append_claim(&claim, None).unwrap();
     for i in 0..DEFAULT_CORRECTION_SCAN_LIMIT {
@@ -220,7 +220,7 @@ fn claim_slot_tombstone_after_1024_slot_corrections_applies() {
     // A slot tombstone must retract the claim however many slot corrections precede it.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_claim_slot");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
     let claim = owner_claim("claim", "project", 10);
     store.append_claim(&claim, None).unwrap();
     let slot_id = stored_slot_id(&store, &claim.id);

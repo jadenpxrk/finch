@@ -73,7 +73,7 @@ fn memory_store_persists_manual_claims_by_scope_and_time() {
 fn memory_store_resolves_current_claims_with_latest_and_corrections() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("current_claims");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut user = scope();
     user.user_id = Some("user_claim_current".to_string());
 
@@ -256,7 +256,7 @@ fn memory_store_resolves_current_claims_with_latest_and_corrections() {
 fn memory_store_current_claim_limit_applies_after_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("current_claim_limit_after_filtering");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut other_scope = scope();
@@ -307,7 +307,7 @@ fn memory_store_current_claim_limit_applies_after_filtering() {
 fn memory_store_claim_tombstone_survives_off_scope_correction_saturation() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("claim_tombstone_scope_saturation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut other_scope = scope();
@@ -392,7 +392,7 @@ fn memory_store_claim_tombstone_survives_off_scope_correction_saturation() {
 fn memory_store_claim_tombstone_survives_future_correction_saturation() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("claim_tombstone_future_saturation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
 
@@ -475,7 +475,7 @@ fn memory_store_claim_tombstone_survives_future_correction_saturation() {
 fn memory_store_claim_tombstone_survives_same_scope_unrelated_correction_saturation() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("claim_tombstone_unrelated_saturation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
 
@@ -558,7 +558,7 @@ fn memory_store_claim_tombstone_survives_same_scope_unrelated_correction_saturat
 fn memory_store_claim_selector_tombstone_survives_unrelated_correction_saturation() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("claim_selector_tombstone_saturation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
 
@@ -641,7 +641,7 @@ fn memory_store_claim_selector_tombstone_survives_unrelated_correction_saturatio
 fn memory_store_context_corrections_are_targeted_to_claims_and_spans() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("context_corrections_targeted");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
 
@@ -959,7 +959,7 @@ fn memory_store_keeps_relationship_and_event_claims_separate_in_projection() {
 fn proposed_claim_slot_binding_is_admitted_only_with_subject_identity_and_becomes_an_alias() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("admit_bound_claim_slots");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let responsable = make_claim(
         &scope,
@@ -1080,7 +1080,7 @@ fn proposed_claim_slot_binding_is_admitted_only_with_subject_identity_and_become
 fn current_claim_limit_applies_after_newest_version_wins() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("current_claim_limit_versions");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     for version in 1..=5 {
         let claim = make_claim(

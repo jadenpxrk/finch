@@ -62,6 +62,16 @@ fn rule_input(scope: MemoryScope) -> RuleInput {
     }
 }
 
+/// `rule_input` citing evidence of its own tenant; evidence rows belong to one scope.
+fn tenant_rule_input(scope: &MemoryScope) -> RuleInput {
+    let tenant = scope.tenant_id.clone().unwrap_or_default();
+    RuleInput {
+        source_span_ids: vec![format!("rule_span_{tenant}")],
+        source_episode_ids: vec![format!("ep_rule_{tenant}")],
+        ..rule_input(scope.clone())
+    }
+}
+
 #[test]
 fn generated_correction_ids_collide_between_tenants() {
     // Corrections created independently in different tenant scopes must coexist.
@@ -102,11 +112,18 @@ fn generated_rule_ids_collide_between_tenants() {
     // Rules created independently in different tenant scopes must coexist.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("generated_rule_scope");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
     let scopes = tenant_scopes();
+    // Identical inputs in two tenants still generate two ids.
+    let built_ids = scopes.each_ref().map(|scope| {
+        store
+            .build_rule_record(rule_input(scope.clone()))
+            .unwrap()
+            .id
+    });
     let results = scopes
         .each_ref()
-        .map(|scope| store.add_rule(rule_input(scope.clone())));
+        .map(|scope| store.add_rule(tenant_rule_input(scope)));
     drop(store);
     let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
     let rules = scopes
@@ -127,6 +144,7 @@ fn generated_rule_ids_collide_between_tenants() {
         assert_eq!(&rules[0].scope, scope);
     }
     assert_ne!(rules[0][0].id, rules[1][0].id);
+    assert_ne!(built_ids[0], built_ids[1]);
 }
 
 #[test]
@@ -221,7 +239,7 @@ fn space_only_generated_ids_keep_their_stored_values() {
     });
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("space_only_generated_ids");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
     let rule = store.add_rule(rule_input(scope())).unwrap();
     drop(store);
     std::fs::remove_dir_all(path).unwrap();
@@ -258,10 +276,10 @@ fn identical_tenant_writes_project_distinct_derived_ids() {
     // Ids derived from generated ids (state, trace, and derived claim versions) inherit their scope.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("generated_derived_scope");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
     let scopes = tenant_scopes();
     for scope in &scopes {
-        store.add_rule(rule_input(scope.clone())).unwrap();
+        store.add_rule(tenant_rule_input(scope)).unwrap();
         store
             .add_manual_claim(
                 ManualClaimInput {
@@ -275,7 +293,7 @@ fn identical_tenant_writes_project_distinct_derived_ids() {
                     object_value: Some("green".to_string()),
                     claim_kind: ClaimKind::Fact,
                     polarity: ClaimPolarity::Affirmative,
-                    source_span_ids: vec!["span_status".to_string()],
+                    source_span_ids: Vec::new(),
                     source_episode_ids: Vec::new(),
                     asserted_by: "user".to_string(),
                     confidence: None,

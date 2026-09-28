@@ -6,7 +6,7 @@ use crate::store::state_records::state_record_from_claim;
 fn fixed_rule_value_takes_precedence_over_copy_template() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("fixed_rule_value_precedence");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut input = make_derived_rule_inputs();
     input.value = Some("resultado fijo".to_string());
     input.value_template = Some("{value}".to_string());
@@ -129,7 +129,7 @@ fn retracted_claim_projects_closed_tombstone_state() {
 fn canonical_slot_correction_suppresses_all_earlier_versions_and_allows_later_evidence() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("canonical_slot_correction_lifecycle");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let first = make_claim(
         &scope,
@@ -338,7 +338,7 @@ fn structured_correction_binds_to_a_grounded_claim_in_the_same_batch() {
 fn answer_ready_projection_does_not_admit_unrelated_same_subject_slots() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("answer_ready_slot_selection");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let owner = make_claim(
         &scope,
@@ -403,7 +403,7 @@ fn answer_ready_projection_does_not_admit_unrelated_same_subject_slots() {
 fn retrieved_history_projects_current_state_for_the_same_canonical_slot() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("historical_evidence_current_state");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let previous = make_claim(
         &scope,
@@ -459,7 +459,7 @@ fn retrieved_history_projects_current_state_for_the_same_canonical_slot() {
 fn atomic_claim_embedding_projects_current_state_for_a_matched_historical_claim() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("atomic_claim_current_state");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let previous = make_claim(
         &scope,
@@ -526,7 +526,7 @@ fn atomic_claim_embedding_projects_current_state_for_a_matched_historical_claim(
 fn grounded_claims_inherit_source_span_embeddings_for_slot_selection() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("grounded_claim_source_embedding");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let owner = make_claim(
         &scope,
@@ -552,6 +552,7 @@ fn grounded_claims_inherit_source_span_embeddings_for_slot_selection() {
     ] {
         let mut span = span_record(&claim.source_span_ids[0], MemoryStatus::Active, Some(10));
         span.scope = scope.clone();
+        span.source_id = claim.source_episode_ids[0].clone();
         store.append_span(&span, Some(&embedding)).unwrap();
     }
     store
@@ -587,7 +588,7 @@ fn grounded_claims_inherit_source_span_embeddings_for_slot_selection() {
 fn claim_vector_retrieval_applies_limit_after_canonical_slot_deduplication() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("claim_vector_canonical_slot_limit");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let mut claims = (0..8)
         .map(|version| {
@@ -662,7 +663,7 @@ fn claim_vector_retrieval_applies_limit_after_canonical_slot_deduplication() {
 fn current_state_retrieval_admits_unembedded_derived_slots_by_slot_identity() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("current_state_lexical_derived_slot");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let owner = make_claim(
         &scope,
@@ -726,7 +727,7 @@ fn current_state_retrieval_admits_unembedded_derived_slots_by_slot_identity() {
 fn current_state_retrieval_ranks_paraphrased_value_over_vector_neighbor() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("current_state_paraphrase_overlap");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let neighbor = make_claim(
         &scope,
@@ -790,7 +791,7 @@ fn current_state_retrieval_ranks_paraphrased_value_over_vector_neighbor() {
 fn projection_trace_separates_candidate_filtering_from_preserved_history() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("projection_trace_history");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     for (id, value, at) in [
         ("responsable_primero", "Ana", 10),
@@ -976,7 +977,7 @@ fn projection_trace_separates_candidate_filtering_from_preserved_history() {
 fn target_and_coverage_projection_keeps_coverage_without_equal_target_authority() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("target_and_coverage_projection");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     for (id, predicate, value) in [
         ("proyecto_responsable", "responsable", "Ana"),
@@ -1083,7 +1084,7 @@ fn target_and_coverage_projection_keeps_coverage_without_equal_target_authority(
 fn explicit_state_selection_excludes_unrequested_evidence_slots() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("projection_evidence_slot_admission");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     for (id, predicate, value) in [
         ("servicio_responsable", "responsable", "Ana"),
@@ -1155,7 +1156,7 @@ fn explicit_state_selection_excludes_unrequested_evidence_slots() {
 fn entity_alias_index_resolves_beyond_legacy_scan_limit() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("entity_alias_index_scale");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let entities = (0..1_100)
         .map(|index| EntityInput {
@@ -1220,7 +1221,7 @@ fn entity_alias_index_resolves_beyond_legacy_scan_limit() {
 fn entity_alias_index_fails_closed_on_ambiguous_unicode_alias() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("entity_alias_index_collision");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let entities = ["entity_alpha", "entity_beta"]
         .into_iter()
@@ -1282,7 +1283,7 @@ fn entity_alias_index_fails_closed_on_ambiguous_unicode_alias() {
 fn structured_slot_deletion_invalidates_explicit_dependent_state() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("structured_slot_deletion_dependency");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let mut rule = make_derived_rule_inputs();
     rule.id = Some("rule_responsable_contact".to_string());
@@ -1394,7 +1395,7 @@ fn structured_slot_deletion_invalidates_explicit_dependent_state() {
 fn memory_store_queries_valid_time_independently_from_transaction_time() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("bitemporal_state_projection");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     store
@@ -1552,7 +1553,7 @@ fn answer_ready_evidence_hydration_attaches_missing_target_proof() {
 fn expired_answer_target_projects_no_evidence_until_direct_reassertion() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("expired_answer_target_no_evidence");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let mut expired = make_claim(
         &scope,
@@ -1712,7 +1713,7 @@ fn expired_answer_target_projects_no_evidence_until_direct_reassertion() {
 fn mixed_answer_targets_have_one_authoritative_state_per_slot() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("mixed_answer_target_authority");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let current = make_claim(
         &scope,

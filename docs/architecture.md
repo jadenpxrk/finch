@@ -299,12 +299,14 @@ restore brings a retracted claim back. A forget ends the claim in every current 
 it as a tombstone. The stored row stays. Any rule that depends on the affected slot fires again,
 so a derived value falls with its source.
 
-The batch write API changes several collections in one batch. Before the batch changes
-anything, Finch writes the prior version of every record it will touch to a journal file in the
-store directory. When the batch completes, Finch deletes the journal. If the process dies in
+Every state write changes several collections: the batch write API, and the single writes of a
+claim, correction, rule, entity, or slot alias, and the scope rebuild. Each one takes the store's
+write lock and opens a journal file in the store directory. Before it changes a record, Finch
+writes that record's prior version to the journal. When the write completes, Finch deletes the
+journal; when it fails, Finch restores every prior version first. If the process dies in
 between, the next open finds the journal, restores every prior version, and deletes it. A read
-therefore sees the whole batch or none of it. A single claim write or correction outside the
-batch API updates its collections in several steps without the journal.
+therefore sees the whole write or none of it. A write to a state collection with no journal open
+is an error.
 
 ## 13. The memory read path
 

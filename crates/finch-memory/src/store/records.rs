@@ -2,49 +2,48 @@ use super::*;
 
 impl MemoryStore {
     pub fn append_claim(&self, record: &ClaimRecord, embedding: Option<&[f32]>) -> ZResult<()> {
-        let _mutation_guard = self.lock_state_mutation();
-        #[cfg(not(test))]
-        if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {
-            self.validate_evidence_references(
-                &record.scope,
-                &record.source_span_ids,
-                &record.source_episode_ids,
+        self.with_state_mutation(&record.scope, || {
+            if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {
+                self.validate_evidence_references(
+                    &record.scope,
+                    &record.source_span_ids,
+                    &record.source_episode_ids,
+                )?;
+            }
+            let scope = &record.scope;
+            let mut record = record.clone();
+            record.source_sequence_no =
+                self.source_sequence_no_for_episode_ids(scope, &record.source_episode_ids)?;
+            let alias_inputs =
+                self.admit_bound_claim_slots(scope, std::slice::from_mut(&mut record))?;
+            let mut record = self.canonicalize_claim_at_valid_time(scope, record)?;
+            let claim_docs = vec![claim_doc(&record, embedding).map_err(json_error)?];
+            self.capture_state_mutation_docs(CLAIMS_COLLECTION, &self.claims, &claim_docs)?;
+            insert_many(&self.claims, claim_docs)?;
+            if !alias_inputs.is_empty() {
+                self.write_claim_slot_aliases(alias_inputs, &record)?;
+                record = self.canonicalize_claim_at_valid_time(scope, record)?;
+                upsert_many(
+                    &self.claims,
+                    vec![claim_doc(&record, embedding).map_err(json_error)?],
+                )?;
+            }
+            let valid_at_ms = record.valid_from_ms.or(Some(record.observed_at_ms));
+            self.rebind_rules_for_scope(scope, valid_at_ms)?;
+            let known_ids = BTreeSet::from([record.id.clone()]);
+            let applications = self.resolve_rules_for_changed_claims(
+                std::slice::from_ref(&record),
+                &known_ids,
+                MAX_RULE_HOPS,
             )?;
-        }
-        let scope = &record.scope;
-        let mut record = record.clone();
-        record.source_sequence_no =
-            self.source_sequence_no_for_episode_ids(scope, &record.source_episode_ids)?;
-        let alias_inputs =
-            self.admit_bound_claim_slots(scope, std::slice::from_mut(&mut record))?;
-        let mut record = self.canonicalize_claim_at_valid_time(scope, record)?;
-        insert_one(
-            &self.claims,
-            claim_doc(&record, embedding).map_err(json_error)?,
-        )?;
-        if !alias_inputs.is_empty() {
-            self.write_claim_slot_aliases(alias_inputs, &record)?;
-            record = self.canonicalize_claim_at_valid_time(scope, record)?;
-            upsert_many(
-                &self.claims,
-                vec![claim_doc(&record, embedding).map_err(json_error)?],
-            )?;
-        }
-        let valid_at_ms = record.valid_from_ms.or(Some(record.observed_at_ms));
-        self.rebind_rules_for_scope(scope, valid_at_ms)?;
-        let known_ids = BTreeSet::from([record.id.clone()]);
-        let applications = self.resolve_rules_for_changed_claims(
-            std::slice::from_ref(&record),
-            &known_ids,
-            MAX_RULE_HOPS,
-        )?;
-        self.store_and_project_applications(
-            scope,
-            record.slot_id.as_ref(),
-            &applications,
-            valid_at_ms,
-            &record.id,
-        )
+            self.store_and_project_applications(
+                scope,
+                record.slot_id.as_ref(),
+                &applications,
+                valid_at_ms,
+                &record.id,
+            )
+        })
     }
 
     fn write_claim_slot_aliases(
@@ -62,6 +61,7 @@ impl MemoryStore {
                 slot_alias_doc(&alias).map_err(json_error)
             })
             .collect::<ZResult<Vec<_>>>()?;
+        self.capture_state_mutation_docs(SLOT_ALIASES_COLLECTION, &self.slot_aliases, &alias_docs)?;
         upsert_many(&self.slot_aliases, alias_docs)
     }
 
@@ -79,6 +79,7 @@ impl MemoryStore {
             .iter()
             .map(|application| claim_doc(&application.claim, None).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
+        self.capture_state_mutation_docs(CLAIMS_COLLECTION, &self.claims, &derived_docs)?;
         insert_many(&self.claims, derived_docs)?;
         let affected_slot_ids = anchor_slot_id
             .into_iter()
@@ -140,43 +141,41 @@ impl MemoryStore {
         record: &EntityRecord,
         embedding: Option<&[f32]>,
     ) -> ZResult<EntityRecord> {
-        let _mutation_guard = self.lock_state_mutation();
-        let mut record = record.clone();
-        if let Some(mut existing) = self
-            .entities_by_ids(&record.scope, std::slice::from_ref(&record.id))?
-            .into_iter()
-            .next()
-        {
-            record.canonical_name = std::mem::take(&mut existing.canonical_name);
-            record.absorb_provenance(existing);
-        }
-        #[cfg(not(test))]
-        if !record.aliases.is_empty() && record.source_claim_ids.is_empty() {
-            return Err(Status::invalid_argument(
-                "entity aliases require source claim evidence",
-            ));
-        }
-        #[cfg(not(test))]
-        if !record.source_claim_ids.is_empty()
-            && !self.validate_claim_references(
-                &record.scope,
-                &record.source_claim_ids,
-                &BTreeSet::new(),
-            )?
-        {
-            return Err(Status::invalid_argument(
-                "entity source claims must exist in the entity scope",
-            ));
-        }
-        self.ensure_entity_ids_owned_by_scope(std::slice::from_ref(&record))?;
-        upsert_many(
-            &self.entities,
-            vec![entity_doc(&record, embedding).map_err(json_error)?],
-        )?;
-        self.upsert_entity_aliases(std::slice::from_ref(&record), system_time_ms())?;
-        self.rebind_rules_for_scope(&record.scope, None)?;
-        self.refresh_state_projection(&record.scope, None)?;
-        Ok(record)
+        self.with_state_mutation(&record.scope, || {
+            let mut record = record.clone();
+            if let Some(mut existing) = self
+                .entities_by_ids(&record.scope, std::slice::from_ref(&record.id))?
+                .into_iter()
+                .next()
+            {
+                record.canonical_name = std::mem::take(&mut existing.canonical_name);
+                record.absorb_provenance(existing);
+            }
+            if !record.aliases.is_empty() && record.source_claim_ids.is_empty() {
+                return Err(Status::invalid_argument(
+                    "entity aliases require source claim evidence",
+                ));
+            }
+            if !record.source_claim_ids.is_empty()
+                && !self.validate_claim_references(
+                    &record.scope,
+                    &record.source_claim_ids,
+                    &BTreeSet::new(),
+                )?
+            {
+                return Err(Status::invalid_argument(
+                    "entity source claims must exist in the entity scope",
+                ));
+            }
+            self.ensure_entity_ids_owned_by_scope(std::slice::from_ref(&record))?;
+            let entity_docs = vec![entity_doc(&record, embedding).map_err(json_error)?];
+            self.capture_state_mutation_docs(ENTITIES_COLLECTION, &self.entities, &entity_docs)?;
+            upsert_many(&self.entities, entity_docs)?;
+            self.upsert_entity_aliases(std::slice::from_ref(&record), system_time_ms())?;
+            self.rebind_rules_for_scope(&record.scope, None)?;
+            self.rebuild_state_projection(&record.scope, None)?;
+            Ok(record)
+        })
     }
 
     pub fn add_entity(

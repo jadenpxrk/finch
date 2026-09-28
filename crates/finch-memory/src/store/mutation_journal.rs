@@ -59,7 +59,9 @@ impl MemoryStore {
     ) -> ZResult<()> {
         let path = self.path.join(STATE_MUTATION_JOURNAL);
         if !path.exists() {
-            return Ok(());
+            return Err(Status::internal(format!(
+                "state write to {collection_name} outside a journaled state mutation"
+            )));
         }
         let mut journal = read_journal(&path)?;
         let position = journal
@@ -104,6 +106,10 @@ impl MemoryStore {
         collection: &Collection,
         docs: &[Doc],
     ) -> ZResult<()> {
+        #[cfg(test)]
+        if !docs.is_empty() {
+            count_state_write_toward_crash();
+        }
         self.capture_state_mutation_documents(
             collection_name,
             collection,
@@ -164,6 +170,25 @@ impl MemoryStore {
             (SLOT_ALIASES_COLLECTION, self.slot_aliases.as_ref()),
         ]
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    // Test crash point: this many journaled writes succeed, then the next one panics before it runs.
+    pub(crate) static STATE_WRITES_BEFORE_CRASH: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn count_state_write_toward_crash() {
+    STATE_WRITES_BEFORE_CRASH.with(|remaining| match remaining.get() {
+        Some(0) => {
+            remaining.set(None);
+            panic!("injected crash before a state write");
+        }
+        Some(writes) => remaining.set(Some(writes - 1)),
+        None => {}
+    });
 }
 
 fn read_journal(path: &Path) -> ZResult<StateMutationJournal> {

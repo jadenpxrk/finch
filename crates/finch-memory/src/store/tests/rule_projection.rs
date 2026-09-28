@@ -4,7 +4,7 @@ use super::*;
 fn memory_store_resolver_does_not_loop_on_cycle() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_cycle");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     store
         .add_rule(RuleInput {
@@ -89,7 +89,7 @@ fn memory_store_resolver_does_not_loop_on_cycle() {
 fn answer_target_dependency_closure_excludes_downstream_siblings() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("target_reverse_dependency_closure");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     for (id, subject, value) in [
@@ -187,7 +187,7 @@ fn answer_target_dependency_closure_excludes_downstream_siblings() {
 fn retrieved_derived_consequence_of_selected_trigger_becomes_answer_authority() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("retrieved_derived_consequence_authority");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     let contact = make_claim(
@@ -578,7 +578,7 @@ fn retrieved_derived_consequence_of_selected_trigger_becomes_answer_authority() 
 fn answer_ready_projection_fails_closed_for_an_unresolved_dependency_until_direct_reassertion() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("unresolved_dependency_closure");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let target = make_claim(
         &scope,
@@ -724,7 +724,7 @@ fn answer_ready_projection_fails_closed_for_an_unresolved_dependency_until_direc
 fn unresolved_dependency_propagates_unsupported_state_through_multiple_hops() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("unresolved_dependency_multihop");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let intermediate = make_claim(
         &scope,
@@ -847,7 +847,7 @@ fn unresolved_dependency_propagates_unsupported_state_through_multiple_hops() {
 fn dependency_completion_validates_an_existing_materialized_claim() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("existing_materialized_dependency");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let trigger = make_claim(
         &scope,
@@ -891,7 +891,7 @@ fn dependency_completion_validates_an_existing_materialized_claim() {
 fn answer_context_only_emits_proof_for_the_projected_rule_result() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("projected_dependency_proof");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let trigger = make_claim(
         &scope,
@@ -964,7 +964,7 @@ fn answer_context_only_emits_proof_for_the_projected_rule_result() {
 fn dependency_completion_validates_an_existing_unsupported_claim() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("existing_unsupported_dependency");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let trigger = make_claim(
         &scope,
@@ -1024,7 +1024,7 @@ fn dependency_completion_validates_an_existing_unsupported_claim() {
 fn late_slot_alias_binding_reconciles_dependency_state_without_another_trigger_write() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("late_slot_alias_dependency_reconciliation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let prior_trigger = make_claim(
         &scope,
@@ -1166,7 +1166,7 @@ fn late_slot_alias_binding_reconciles_dependency_state_without_another_trigger_w
 fn late_dependency_rule_persists_unsupported_state_until_direct_evidence_returns() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("late_rule_unsupported_reconciliation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let prior_trigger = make_claim(
         &scope,
@@ -1302,7 +1302,7 @@ fn late_dependency_rule_persists_unsupported_state_until_direct_evidence_returns
 fn memory_store_context_packs_resolved_state_without_runner_plumbing() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_context_pack");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     let mut unsupported_rule = make_derived_rule_inputs();
     unsupported_rule.id = Some("rule_owner_reviewer".to_string());
@@ -1366,7 +1366,7 @@ fn memory_store_context_packs_resolved_state_without_runner_plumbing() {
 fn memory_store_projects_missing_read_time_rule_state() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("read_time_rule_projection");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
 
     let mut rule = make_derived_rule_inputs();
     rule.id = Some("rule_owner_reviewer_read_time".to_string());
@@ -1472,7 +1472,7 @@ fn dependency_rule_projects_from_current_and_later_trigger_versions() {
 fn memory_store_resolves_selected_target_from_indexed_trigger_at_read_time() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("read_time_target_rule_projection");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let reviewer = make_claim(
         &scope,
@@ -1567,7 +1567,7 @@ fn memory_store_resolves_selected_target_from_indexed_trigger_at_read_time() {
 fn memory_store_projects_answer_ready_state_from_core() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("answer_ready_state_projection");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     let mut rule = make_derived_rule_inputs();
@@ -1890,7 +1890,7 @@ fn memory_store_projects_answer_ready_state_from_core() {
 fn answer_ready_projection_follows_multilingual_reverse_dependency_chain() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("multilingual_reverse_dependency_chain");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     for (id, subject, predicate, value, observed_at) in [
@@ -2033,7 +2033,7 @@ fn answer_ready_projection_follows_multilingual_reverse_dependency_chain() {
 fn memory_store_canonical_entity_alias_collision_fails_closed_for_slots() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("canonical_alias_collision");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     for (id, canonical_name) in [
@@ -2050,7 +2050,7 @@ fn memory_store_canonical_entity_alias_collision_fails_closed_for_slots() {
                     entity_type: "project".to_string(),
                     canonical_name: canonical_name.to_string(),
                     aliases: vec!["project".to_string()],
-                    source_claim_ids: vec!["claim_project_owner_collision".to_string()],
+                    source_claim_ids: vec!["claim_project_alias_evidence".to_string()],
                     merge_parent_ids: Vec::new(),
                     split_from_id: None,
                     confidence: Some(1.0),
@@ -2112,7 +2112,7 @@ fn memory_store_canonical_entity_alias_collision_fails_closed_for_slots() {
 fn memory_store_tombstone_suppresses_canonical_state_until_later_readd() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("canonical_tombstone_lifecycle");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     let owner_morgan = make_claim(
@@ -2271,7 +2271,7 @@ fn memory_store_tombstone_suppresses_canonical_state_until_later_readd() {
 fn memory_store_unsupported_generic_target_suppresses_current_state_for_concrete_slot() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("generic_unsupported_suppresses_current_state");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     let mut rule = make_derived_rule_inputs();
@@ -2396,7 +2396,7 @@ fn memory_store_unsupported_generic_target_suppresses_current_state_for_concrete
 fn read_time_subject_wide_invalidation_keeps_distinct_concrete_targets() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("read_time_subject_wide_targets");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     let mut rule = make_derived_rule_inputs();
@@ -2572,7 +2572,7 @@ fn exact_dependency_rule(
 fn answer_ready_projection_prefers_a_concrete_derivation_over_same_transition_invalidation() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("same_transition_derivation_precedence");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
 
     for claim in [
@@ -2684,7 +2684,7 @@ fn answer_ready_projection_prefers_a_concrete_derivation_over_same_transition_in
 fn write_time_resolution_does_not_invalidate_an_already_known_derivation() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("known_derivation_precedence");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let previous_trigger = make_claim(
         &scope,
@@ -2767,7 +2767,7 @@ fn write_time_resolution_does_not_invalidate_an_already_known_derivation() {
 fn dependency_completion_keeps_invalidation_from_a_different_trigger() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("different_transition_invalidation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let claims = vec![
         make_claim(
@@ -2866,7 +2866,7 @@ fn dependency_completion_keeps_invalidation_from_a_different_trigger() {
 fn dependency_completion_keeps_invalidation_when_derivation_has_no_value() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("unmaterialized_derivation_invalidation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     let claims = vec![
         make_claim(

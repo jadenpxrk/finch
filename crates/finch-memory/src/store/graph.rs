@@ -6,15 +6,20 @@ impl MemoryStore {
         input: SlotAliasInput,
         recorded_at_ms: i64,
     ) -> ZResult<SlotAliasRecord> {
-        let _mutation_guard = self.lock_state_mutation();
-        let record = self.build_slot_alias_record(input, recorded_at_ms, &BTreeSet::new())?;
-        upsert_many(
-            &self.slot_aliases,
-            vec![slot_alias_doc(&record).map_err(json_error)?],
-        )?;
-        self.rebind_rules_for_scope(&record.scope, record.valid_from_ms)?;
-        self.refresh_state_projection(&record.scope, record.valid_from_ms)?;
-        Ok(record)
+        let scope = input.scope.clone();
+        self.with_state_mutation(&scope, || {
+            let record = self.build_slot_alias_record(input, recorded_at_ms, &BTreeSet::new())?;
+            let alias_docs = vec![slot_alias_doc(&record).map_err(json_error)?];
+            self.capture_state_mutation_docs(
+                SLOT_ALIASES_COLLECTION,
+                &self.slot_aliases,
+                &alias_docs,
+            )?;
+            upsert_many(&self.slot_aliases, alias_docs)?;
+            self.rebind_rules_for_scope(&record.scope, record.valid_from_ms)?;
+            self.rebuild_state_projection(&record.scope, record.valid_from_ms)?;
+            Ok(record)
+        })
     }
 
     pub(crate) fn build_slot_alias_record(

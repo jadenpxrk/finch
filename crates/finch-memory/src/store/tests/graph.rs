@@ -123,7 +123,7 @@ fn memory_store_profile_limit_applies_after_scope_filtering() {
 fn memory_store_persists_entities_and_expands_edges_one_hop() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("graph");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut user_1 = scope();
     user_1.user_id = Some("user_1".to_string());
     store
@@ -136,7 +136,7 @@ fn memory_store_persists_entities_and_expands_edges_one_hop() {
                 entity_type: "project".to_string(),
                 canonical_name: "Finch".to_string(),
                 aliases: vec!["finch-db".to_string()],
-                source_claim_ids: Vec::new(),
+                source_claim_ids: vec!["claim_finch_alias".to_string()],
                 merge_parent_ids: Vec::new(),
                 split_from_id: None,
                 confidence: Some(1.0),
@@ -290,7 +290,7 @@ fn memory_store_edge_limit_applies_after_scope_filtering() {
 fn memory_store_entity_limit_applies_after_scope_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("entity_scope_limit");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut other_scope = scope();
@@ -449,7 +449,7 @@ fn explicit_entity_id_cannot_take_over_another_scope() {
 fn explicit_slot_alias_id_cannot_take_over_another_scope() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("slot_alias_id_scope");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let add_alias = |tenant: &str| {
         let mut scope = scope();
         scope.tenant_id = Some(tenant.to_string());
@@ -551,7 +551,7 @@ fn slot_alias_scan_applies_its_limit() {
     // The public slot-alias read returned every alias in scope, whatever limit the caller asked for.
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("slot_alias_scan_limit");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
     let scope = scope();
     for (tag, predicate) in [("owner", "billing owner"), ("lead", "billing lead")] {
         let target = make_claim(
