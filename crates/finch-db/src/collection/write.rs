@@ -16,14 +16,19 @@ use crate::write_normalization::{
 use super::Collection;
 
 impl Collection {
+    /// Returns one status per doc, in order. If rotating a full writing segment fails, the docs
+    /// written before it keep `Ok`, the rest get the rotation error and are not written, and
+    /// rotation is retried after the next written doc.
     pub fn insert(&self, docs: Vec<Doc>) -> ZResult<Vec<Status>> {
         self.write_docs(Operator::Insert, docs)
     }
 
+    /// Returns one status per doc, with the rotation contract of [`Collection::insert`].
     pub fn upsert(&self, docs: Vec<Doc>) -> ZResult<Vec<Status>> {
         self.write_docs(Operator::Upsert, docs)
     }
 
+    /// Returns one status per doc, with the rotation contract of [`Collection::insert`].
     pub fn update(&self, docs: Vec<Doc>) -> ZResult<Vec<Status>> {
         self.write_docs(Operator::Update, docs)
     }
@@ -36,7 +41,8 @@ impl Collection {
         let _guard = self.write_lock.lock();
         let version = self.cur_version();
 
-        let mut results = Vec::with_capacity(docs.len());
+        let doc_count = docs.len();
+        let mut results = Vec::with_capacity(doc_count);
         for doc in docs {
             if let Err(s) = self.write_doc(op, &version.schema, doc) {
                 results.push(s);
@@ -46,7 +52,10 @@ impl Collection {
             let writing = self.writing_segment.read();
             if self.should_rotate_writing(&writing, version.schema.max_doc_count_per_segment) {
                 drop(writing);
-                self.rotate_segment()?;
+                if let Err(e) = self.rotate_segment() {
+                    results.resize(doc_count, e);
+                    break;
+                }
             }
         }
 
@@ -134,6 +143,9 @@ impl Collection {
         Ok(())
     }
 
+    /// Returns one status per pk. A delete is committed once its WAL record is written, and a
+    /// later failure never undoes it: a failed key removal fails the pks after it, and a failed
+    /// bitmap snapshot is retried by the next delete or flush.
     pub fn delete(&self, pks: Vec<String>) -> ZResult<Vec<Status>> {
         self.check_not_readonly()?;
         let _guard = self.write_lock.lock();
@@ -161,11 +173,15 @@ impl Collection {
                 continue;
             }
             delete_store.mark_deleted(*doc_id);
-            self.id_map.delete(pk)?;
             results.push(Status::default());
+            // WAL replay on reopen removes the key this call could not.
+            if let Err(e) = self.id_map.delete(pk) {
+                results.resize(pks.len(), e);
+                break;
+            }
         }
 
-        self.persist_delete_snapshot(delete_store)?;
+        let _ = self.persist_delete_snapshot(delete_store);
         Ok(results)
     }
 
@@ -239,6 +255,8 @@ impl Collection {
         Ok(to_delete)
     }
 
+    /// Deletes every live doc matching the filter, in doc_id order, with the commit rule of
+    /// [`Collection::delete`]. On a failure the error names how many docs were deleted first.
     pub fn delete_by_filter(&self, filter_str: &str) -> ZResult<Status> {
         self.check_not_readonly()?;
         // Taken before the version so a column rename cannot land between compile and scan.
@@ -248,11 +266,11 @@ impl Collection {
         let mut delete_store = self.delete_store.write();
         let delete_bitmap = delete_store.bitmap();
 
-        // Compute deletions first, then append WAL, then mutate state. This
-        // avoids applying deletes that can't be made durable.
         let to_delete = self.collect_filter_deletions(&filter, delete_bitmap.as_ref())?;
 
-        // Append WAL for all deletions.
+        // Each delete is applied only after its WAL record is written.
+        let mut deleted = 0;
+        let mut failure = None;
         for (doc_id, pk) in &to_delete {
             let wal_entry = WalEntry {
                 op: WalOp::Delete,
@@ -261,16 +279,29 @@ impl Collection {
                 pk: pk.clone(),
                 doc: None,
             };
-            self.wal_append(&wal_entry)?;
-        }
-
-        // Apply deletions.
-        for (doc_id, pk) in &to_delete {
+            if let Err(e) = self.wal_append(&wal_entry) {
+                failure = Some(e);
+                break;
+            }
             delete_store.mark_deleted(*doc_id);
-            self.id_map.delete(pk)?;
+            deleted += 1;
+            if let Err(e) = self.id_map.delete(pk) {
+                failure = Some(e);
+                break;
+            }
         }
 
-        self.persist_delete_snapshot(delete_store)?;
-        Ok(Status::default())
+        let _ = self.persist_delete_snapshot(delete_store);
+        match failure {
+            None => Ok(Status::default()),
+            Some(e) => Err(Status::new(
+                e.code,
+                format!(
+                    "deleted {deleted} of {} matching docs: {}",
+                    to_delete.len(),
+                    e.message
+                ),
+            )),
+        }
     }
 }

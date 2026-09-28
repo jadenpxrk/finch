@@ -349,7 +349,8 @@ tombstone. With the same records and the same hits, the packer writes the same c
 - A process crash does not lose an acknowledged write.
 - By default, an operating system crash or power loss can lose recent writes. A global config
   setting makes Finch fsync the WAL every N records.
-- A delete commits a new manifest before it returns.
+- A delete is in the WAL before it returns and commits a new manifest. If that commit fails,
+  the delete still stands, and the next delete or flush retries the commit.
 - A filter matches the same documents with or without an inverted index.
 - A filter condition on a missing field does not match.
 - With the same records and search hits, the memory layer packs the same context.
