@@ -34,3 +34,4 @@ mod write_normalization;
 pub use collection::Collection;
 pub use config::{ensure_rayon_initialized, global_config, init_logging, initialize_global_config};
 pub use profile::QueryProfile;
+pub use wal::crc32c_hash;

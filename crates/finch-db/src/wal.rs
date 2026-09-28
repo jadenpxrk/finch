@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use finch_types::{Doc, Status, StatusCode, ZResult};
 
 mod record_file;
-pub(crate) use record_file::crc32c_hash;
+pub use record_file::crc32c_hash;
 use record_file::{WalFileOptions, WalRecordFileReader, WalRecordFileWriter, WAL_HEADER_SIZE};
 
 #[derive(Serialize, Deserialize, Debug)]

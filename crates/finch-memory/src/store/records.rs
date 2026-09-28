@@ -111,6 +111,7 @@ impl MemoryStore {
         input: ManualClaimInput,
         embedding: Option<&[f32]>,
     ) -> ZResult<ClaimRecord> {
+        self.ensure_not_poisoned()?;
         let mut claim = create_manual_claim(input);
         claim.source_sequence_no =
             self.source_sequence_no_for_episode_ids(&claim.scope, &claim.source_episode_ids)?;
@@ -129,6 +130,7 @@ impl MemoryStore {
     }
 
     pub fn add_profile(&self, input: ProfileInput) -> ZResult<ProfileRecord> {
+        self.ensure_not_poisoned()?;
         let profile = crate::ingest::create_profile(input);
         self.append_profile(&profile)?;
         Ok(profile)
@@ -191,6 +193,7 @@ impl MemoryStore {
     }
 
     pub fn add_edge(&self, input: EdgeInput) -> ZResult<EdgeRecord> {
+        self.ensure_not_poisoned()?;
         let edge = create_edge(input);
         self.append_edge(&edge)?;
         Ok(edge)

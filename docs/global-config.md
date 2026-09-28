@@ -71,8 +71,12 @@ fields of `QueryParams`. Finch reads no `FINCH_HNSW_*` environment variables.
 - `wal_flush_every_docs`: after this many WAL records, Finch flushes its write buffer to the
   operating system. `0` turns this off.
 - `wal_fsync_every_docs`: after this many WAL records, Finch flushes and calls
-  `File::sync_all`, so the records survive a power loss. `0` turns this off. Lower values
+  `File::sync_all`, so the records up to that point survive a power loss. Up to N - 1 later
+  records can still be lost. `0`, the default, turns this off, and then a power loss or an
+  operating system crash can lose any write since the collection's last flush. Lower values
   make writes slower.
+- The memory layer's mutation journal keeps a write whole or absent across a process crash.
+  Across a power loss it holds only as far as this setting makes the WAL reach the disk.
 
 Each insert, upsert, update, or delete of one document writes one WAL record.
 

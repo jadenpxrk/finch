@@ -44,13 +44,13 @@ use finch_types::{
     CollectionOptions, CollectionSchema, CreateIndexOptions, Doc, HnswIndexParams, IndexParams,
     Status, Value, VectorQuery, ZResult,
 };
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub(crate) mod canonical;
@@ -119,6 +119,9 @@ pub struct MemoryStore {
     slots: Arc<Collection>,
     pub(crate) slot_aliases: Arc<Collection>,
     state_mutation_lock: RwLock<()>,
+    state_mutation_journal: Mutex<Option<mutation_journal::OpenStateMutationJournal>>,
+    // Set when a failed mutation could not be rolled back; only a reopen recovers the rows.
+    poisoned: AtomicBool,
 }
 
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(0);
@@ -150,12 +153,25 @@ impl MemoryStore {
     }
 
     /// Public reads hold this so they see a state mutation batch whole or not at all.
-    pub(crate) fn lock_state_read(&self) -> Option<RwLockReadGuard<'_, ()>> {
+    pub(crate) fn lock_state_read(&self) -> ZResult<Option<RwLockReadGuard<'_, ()>>> {
         if STATE_WRITE_HELD.with(|held| held.borrow().contains(&self.id)) {
-            return None;
+            return Ok(None);
         }
         // Recursive so a public read that calls another cannot deadlock behind a waiting writer.
-        Some(self.state_mutation_lock.read_recursive())
+        let guard = self.state_mutation_lock.read_recursive();
+        self.ensure_not_poisoned()?;
+        Ok(Some(guard))
+    }
+
+    /// Fails once a failed state mutation could not be rolled back, since its rows may be visible.
+    fn ensure_not_poisoned(&self) -> ZResult<()> {
+        if self.poisoned.load(Ordering::Acquire) {
+            return Err(Status::internal(format!(
+                "memory store at {} could not roll back a failed state mutation; reopen it to recover",
+                self.path.display()
+            )));
+        }
+        Ok(())
     }
 
     /// The one entry point of a state mutation: holds the write lock and journals every write of
@@ -166,6 +182,7 @@ impl MemoryStore {
         mutate: impl FnOnce() -> ZResult<T>,
     ) -> ZResult<T> {
         let _mutation_guard = self.lock_state_mutation();
+        self.ensure_not_poisoned()?;
         self.begin_state_mutation_journal(scope)?;
         match mutate() {
             Ok(value) => {
@@ -173,7 +190,13 @@ impl MemoryStore {
                 Ok(value)
             }
             Err(error) => {
-                self.recover_pending_state_mutation()?;
+                if let Err(rollback) = self.recover_pending_state_mutation() {
+                    self.poisoned.store(true, Ordering::Release);
+                    return Err(Status::internal(format!(
+                        "{error}; rolling it back failed: {rollback}; reopen the memory store at {} to recover",
+                        self.path.display()
+                    )));
+                }
                 Err(error)
             }
         }
@@ -719,6 +742,7 @@ impl MemoryStore {
         hnsw_params: HnswIndexParams,
         concurrency: Option<usize>,
     ) -> ZResult<()> {
+        self.ensure_not_poisoned()?;
         self.spans.create_index(
             "embedding",
             IndexParams::Hnsw(hnsw_params),
@@ -758,6 +782,8 @@ impl MemoryStore {
             slots: create(SLOTS_COLLECTION, slot_schema())?,
             slot_aliases: create(SLOT_ALIASES_COLLECTION, slot_alias_schema())?,
             state_mutation_lock: RwLock::new(()),
+            state_mutation_journal: Mutex::new(None),
+            poisoned: AtomicBool::new(false),
         };
         store.recover_pending_state_mutation()?;
         Ok(store)
@@ -808,6 +834,8 @@ impl MemoryStore {
             slots,
             slot_aliases,
             state_mutation_lock: RwLock::new(()),
+            state_mutation_journal: Mutex::new(None),
+            poisoned: AtomicBool::new(false),
         };
         store.recover_pending_state_mutation()?;
         Ok(store)
@@ -833,6 +861,7 @@ impl MemoryStore {
         &self,
         records: &[(IngestedEpisode, Vec<Vec<f32>>)],
     ) -> ZResult<()> {
+        self.ensure_not_poisoned()?;
         let mut episode_docs = Vec::new();
         let mut span_docs = Vec::new();
         let mut term_docs = Vec::new();
@@ -856,6 +885,7 @@ impl MemoryStore {
     }
 
     pub fn append_vector_spans(&self, records: &[(SpanRecord, Vec<f32>)]) -> ZResult<()> {
+        self.ensure_not_poisoned()?;
         let docs = records
             .iter()
             .map(|(span, embedding)| span_doc(span, Some(embedding)).map_err(json_error))
@@ -873,6 +903,7 @@ impl MemoryStore {
         text: &str,
         chunk_options: &ChunkOptions,
     ) -> ZResult<IngestedArtifact> {
+        self.ensure_not_poisoned()?;
         let spans = chunk_artifact_text(&record, text, chunk_options);
         self.append_artifact(&record)?;
         for span in &spans {

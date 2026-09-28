@@ -44,7 +44,7 @@ fn crc32c_table() -> &'static [u32; 256] {
 }
 
 /// CRC32C hash with caller-provided initial crc (no final xor).
-pub(crate) fn crc32c_hash(data: &[u8], mut crc: u32) -> u32 {
+pub fn crc32c_hash(data: &[u8], mut crc: u32) -> u32 {
     let table = crc32c_table();
     for &b in data {
         let idx = ((crc as u8) ^ b) as usize;

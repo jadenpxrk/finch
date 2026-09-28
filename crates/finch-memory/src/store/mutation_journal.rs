@@ -1,4 +1,5 @@
 use super::*;
+use finch_db::crc32c_hash;
 use finch_types::Doc;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -6,7 +7,6 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 
 const STATE_MUTATION_JOURNAL: &str = ".state-mutation-journal.json";
-const STATE_MUTATION_JOURNAL_TMP: &str = ".state-mutation-journal.json.tmp";
 
 #[derive(Serialize, Deserialize)]
 struct DocumentBeforeImage {
@@ -20,10 +20,17 @@ struct CollectionChanges {
     documents: Vec<DocumentBeforeImage>,
 }
 
+/// The journal header; a journal written before records were appended holds every change here.
 #[derive(Serialize, Deserialize)]
 struct StateMutationJournal {
     scope: MemoryScope,
     collections: Vec<CollectionChanges>,
+}
+
+/// The running mutation's journal file, open for appends, and the rows it already holds.
+pub(crate) struct OpenStateMutationJournal {
+    file: fs::File,
+    captured: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl MemoryStore {
@@ -36,7 +43,7 @@ impl MemoryStore {
         let bytes = serde_json::to_vec(&journal).map_err(json_error)?;
         let mut file = OpenOptions::new()
             .create_new(true)
-            .write(true)
+            .append(true)
             .open(&path)
             .map_err(|error| {
                 Status::io_error(format!(
@@ -48,7 +55,12 @@ impl MemoryStore {
             let _ = fs::remove_file(&path);
             return Err(Status::io_error(error.to_string()));
         }
-        sync_directory(&self.path)
+        sync_directory(&self.path)?;
+        *self.state_mutation_journal.lock() = Some(OpenStateMutationJournal {
+            file,
+            captured: BTreeMap::new(),
+        });
+        Ok(())
     }
 
     pub(crate) fn capture_state_mutation_documents(
@@ -57,33 +69,19 @@ impl MemoryStore {
         collection: &Collection,
         pks: impl IntoIterator<Item = String>,
     ) -> ZResult<()> {
-        let path = self.path.join(STATE_MUTATION_JOURNAL);
-        if !path.exists() {
+        let mut journal = self.state_mutation_journal.lock();
+        let Some(journal) = journal.as_mut() else {
             return Err(Status::internal(format!(
                 "state write to {collection_name} outside a journaled state mutation"
             )));
-        }
-        let mut journal = read_journal(&path)?;
-        let position = journal
-            .collections
-            .iter()
-            .position(|changes| changes.name == collection_name)
-            .unwrap_or_else(|| {
-                journal.collections.push(CollectionChanges {
-                    name: collection_name.to_string(),
-                    documents: Vec::new(),
-                });
-                journal.collections.len() - 1
-            });
-        let changes = &mut journal.collections[position];
-        let captured = changes
-            .documents
-            .iter()
-            .map(|before| before.pk.as_str())
-            .collect::<BTreeSet<_>>();
+        };
+        let captured = journal
+            .captured
+            .entry(collection_name.to_string())
+            .or_default();
         let mut missing = pks
             .into_iter()
-            .filter(|pk| !captured.contains(pk.as_str()))
+            .filter(|pk| !captured.contains(pk))
             .collect::<Vec<_>>();
         missing.sort();
         missing.dedup();
@@ -91,13 +89,22 @@ impl MemoryStore {
             return Ok(());
         }
         let existing = collection.fetch(missing.clone())?;
-        changes
-            .documents
-            .extend(missing.into_iter().map(|pk| DocumentBeforeImage {
-                doc: existing.get(&pk).map(|doc| (**doc).clone()),
-                pk,
-            }));
-        write_journal(&self.path, &journal)
+        let changes = CollectionChanges {
+            name: collection_name.to_string(),
+            documents: missing
+                .iter()
+                .map(|pk| DocumentBeforeImage {
+                    doc: existing.get(pk).map(|doc| (**doc).clone()),
+                    pk: pk.clone(),
+                })
+                .collect(),
+        };
+        append_record(
+            &mut journal.file,
+            &serde_json::to_vec(&changes).map_err(json_error)?,
+        )?;
+        captured.extend(missing);
+        Ok(())
     }
 
     pub(crate) fn capture_state_mutation_docs(
@@ -118,10 +125,16 @@ impl MemoryStore {
     }
 
     pub(crate) fn commit_state_mutation_journal(&self) -> ZResult<()> {
+        self.state_mutation_journal.lock().take();
         remove_journal(&self.path.join(STATE_MUTATION_JOURNAL))
     }
 
     pub(crate) fn recover_pending_state_mutation(&self) -> ZResult<()> {
+        self.state_mutation_journal.lock().take();
+        #[cfg(test)]
+        if FAIL_NEXT_ROLLBACK.with(|fail| fail.replace(false)) {
+            return Err(Status::io_error("injected rollback failure"));
+        }
         let path = self.path.join(STATE_MUTATION_JOURNAL);
         if !path.exists() {
             return Ok(());
@@ -177,6 +190,12 @@ thread_local! {
     // Test crash point: this many journaled writes succeed, then the next one panics before it runs.
     pub(crate) static STATE_WRITES_BEFORE_CRASH: std::cell::Cell<Option<usize>> =
         const { std::cell::Cell::new(None) };
+    // Test fault: the next rollback of a state mutation fails before it reads the journal.
+    pub(crate) static FAIL_NEXT_ROLLBACK: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    // Every journal record append: the bytes it wrote and the file length after it.
+    pub(crate) static JOURNAL_APPENDS: std::cell::RefCell<Vec<(u64, u64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[cfg(test)]
@@ -191,27 +210,82 @@ fn count_state_write_toward_crash() {
     });
 }
 
+/// The header, then every whole record in the order it was appended.
 fn read_journal(path: &Path) -> ZResult<StateMutationJournal> {
     let bytes = fs::read(path).map_err(|error| Status::io_error(error.to_string()))?;
-    serde_json::from_slice(&bytes).map_err(json_error)
+    let mut header = serde_json::Deserializer::from_slice(&bytes).into_iter();
+    let mut journal: StateMutationJournal = header
+        .next()
+        .ok_or_else(|| {
+            Status::io_error(format!(
+                "state mutation journal {} has no header",
+                path.display()
+            ))
+        })?
+        .map_err(json_error)?;
+    let mut rest = &bytes[header.byte_offset()..];
+    while let Some(payload) = next_record(&mut rest, path)? {
+        let changes: CollectionChanges = serde_json::from_slice(payload).map_err(json_error)?;
+        match journal
+            .collections
+            .iter_mut()
+            .find(|collection| collection.name == changes.name)
+        {
+            Some(collection) => collection.documents.extend(changes.documents),
+            None => journal.collections.push(changes),
+        }
+    }
+    Ok(journal)
 }
 
-fn write_journal(root: &Path, journal: &StateMutationJournal) -> ZResult<()> {
-    let path = root.join(STATE_MUTATION_JOURNAL);
-    let temporary = root.join(STATE_MUTATION_JOURNAL_TMP);
-    let bytes = serde_json::to_vec(journal).map_err(json_error)?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&temporary)
+/// The next whole record's payload, or `None` at the end or at a final record a crash cut short.
+fn next_record<'a>(rest: &mut &'a [u8], path: &Path) -> ZResult<Option<&'a [u8]>> {
+    if rest.is_empty() {
+        return Ok(None);
+    }
+    if let Some((payload, size)) = whole_record(rest) {
+        *rest = &rest[size..];
+        return Ok(Some(payload));
+    }
+    // Each record is synced before the next starts, so only the last can be torn, and a torn
+    // record has no newline yet; compact JSON payloads never contain one.
+    if !rest.contains(&b'\n') {
+        return Ok(None);
+    }
+    Err(Status::io_error(format!(
+        "state mutation journal {} has a corrupt record; inspect or move it aside before reopening",
+        path.display()
+    )))
+}
+
+/// A record is `{length:08x}{payload}{crc32c:08x}\n`; returns the payload and the record size.
+fn whole_record(bytes: &[u8]) -> Option<(&[u8], usize)> {
+    let length = hex_u32(bytes.get(..8)?)? as usize;
+    let payload = bytes.get(8..8 + length)?;
+    let checksum = hex_u32(bytes.get(8 + length..16 + length)?)?;
+    (bytes.get(16 + length) == Some(&b'\n') && checksum == crc32c_hash(payload, 0))
+        .then_some((payload, 17 + length))
+}
+
+fn hex_u32(digits: &[u8]) -> Option<u32> {
+    u32::from_str_radix(std::str::from_utf8(digits).ok()?, 16).ok()
+}
+
+fn append_record(file: &mut fs::File, payload: &[u8]) -> ZResult<()> {
+    let length = u32::try_from(payload.len())
+        .map_err(|_| Status::invalid_argument("state mutation journal record too large"))?;
+    let mut record = format!("{length:08x}").into_bytes();
+    record.extend_from_slice(payload);
+    record.extend_from_slice(format!("{:08x}\n", crc32c_hash(payload, 0)).as_bytes());
+    file.write_all(&record)
+        .and_then(|_| file.sync_data())
         .map_err(|error| Status::io_error(error.to_string()))?;
-    file.write_all(&bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|error| Status::io_error(error.to_string()))?;
-    fs::rename(&temporary, &path)
-        .map_err(|error| Status::io_error(error.to_string()))
-        .and_then(|_| sync_directory(root))
+    #[cfg(test)]
+    JOURNAL_APPENDS.with(|appends| {
+        let length = file.metadata().map_or(0, |metadata| metadata.len());
+        appends.borrow_mut().push((record.len() as u64, length));
+    });
+    Ok(())
 }
 
 fn remove_journal(path: &Path) -> ZResult<()> {

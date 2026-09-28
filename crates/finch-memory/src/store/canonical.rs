@@ -132,7 +132,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<CanonicalSlotBindingContext>> {
-        let _state_guard = self.lock_state_read();
+        let _state_guard = self.lock_state_read()?;
         if limit == 0 {
             return Ok(Vec::new());
         }

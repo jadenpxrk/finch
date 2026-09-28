@@ -305,11 +305,21 @@ so a derived value falls with its source.
 Every state write changes several collections: the batch write API, and the single writes of a
 claim, correction, rule, entity, or slot alias, and the scope rebuild. Each one takes the store's
 write lock and opens a journal file in the store directory. Before it changes a record, Finch
-writes that record's prior version to the journal. When the write completes, Finch deletes the
-journal; when it fails, Finch restores every prior version first. If the process dies in
-between, the next open finds the journal, restores every prior version, and deletes it. A read
-therefore sees the whole write or none of it. A write to a state collection with no journal open
-is an error.
+appends that record's prior version to the journal as one checksummed entry and fsyncs it. A
+write that changes many records adds one short entry per change and never rewrites the file.
+When the write completes, Finch deletes the journal; when it fails, Finch restores every prior
+version first. If that restore also fails, some of the failed write may still be visible, so
+the store refuses every later read and write with an error that says to reopen it. If the
+process dies in between, the next open reads the journal up to its last whole entry, restores
+every prior version, and deletes it. It skips an entry the crash cut short, because Finch had not
+yet changed the record that entry names. A read therefore sees the whole write or none of it. A
+write to a state collection with no journal open is an error.
+
+The journal makes a write whole or absent across a process crash. Across a power loss or an
+operating system crash it holds only as far as the collections' WALs reach the disk, and that
+depends on the global setting `wal_fsync_every_docs`, which by default never fsyncs. With the
+default, a power loss can lose part of a finished write or part of a restore, even though the
+journal itself was on disk.
 
 ## 13. The memory read path
 
@@ -352,8 +362,9 @@ tombstone. With the same records and the same hits, the packer writes the same c
 - A query sees an upsert or an update as one step: the old version or the new one, never both.
 - Each document in a batch write succeeds or fails alone.
 - A process crash does not lose an acknowledged write.
-- By default, an operating system crash or power loss can lose recent writes. A global config
-  setting makes Finch fsync the WAL every N records.
+- By default, an operating system crash or power loss can lose recent writes. The global
+  setting `wal_fsync_every_docs` makes Finch fsync the WAL every N records; its default, 0,
+  never fsyncs.
 - A delete is in the WAL before it returns and commits a new manifest. If that commit fails,
   the delete still stands, and the next delete or flush retries the commit.
 - A filter matches the same documents with or without an inverted index.
@@ -361,7 +372,11 @@ tombstone. With the same records and the same hits, the packer writes the same c
 - With the same records and search hits, the memory layer packs the same context.
 - One process at a time can open a collection for writing.
 - Every read and write of the memory layer stays inside its scope.
-- A batch write takes effect as one batch, or not at all.
+- A memory-layer write takes effect as one batch, or not at all, across a process crash.
+  Across a power loss this holds only as far as the WAL fsync setting reaches, which by default
+  is not at all.
+- If a failed memory-layer write cannot be rolled back, the store refuses every read and write
+  until it is reopened, and the reopen rolls it back.
 - A claim, a correction, and a rule never change after Finch stores them. A new record
   supersedes an old one.
 - A read at a past valid time or a past transaction time returns the versions that held then.

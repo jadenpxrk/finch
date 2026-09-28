@@ -125,7 +125,7 @@ impl MemoryStore {
         request: &AnswerReadyStateRequest<'_>,
         projection: &AnswerReadyStateProjection,
     ) -> ZResult<AnswerReadyStateProjectionTrace> {
-        let _state_guard = self.lock_state_read();
+        let _state_guard = self.lock_state_read()?;
         let (selection_views, answer_target_slot_ids) = answer_ready_read_plan(request)?;
         let preferred_slot_ids = selection_views.into_keys().collect::<BTreeSet<_>>();
         let candidates = self.trace_state_selection(scope, request, &preferred_slot_ids)?;

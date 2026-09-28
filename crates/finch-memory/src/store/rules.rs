@@ -33,6 +33,7 @@ impl MemoryStore {
     }
 
     pub fn add_rule(&self, input: RuleInput) -> ZResult<RuleRecord> {
+        self.ensure_not_poisoned()?;
         let record = self.build_rule_record(input)?;
         self.append_rule(&record)?;
         Ok(record)
@@ -48,7 +49,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<RuleRecord>> {
-        let _state_guard = self.lock_state_read();
+        let _state_guard = self.lock_state_read()?;
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -87,7 +88,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<RepairableTriggerSlot>> {
-        let _state_guard = self.lock_state_read();
+        let _state_guard = self.lock_state_read()?;
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -149,7 +150,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<RuleRecord>> {
-        let _state_guard = self.lock_state_read();
+        let _state_guard = self.lock_state_read()?;
         let trigger_subject_key = canonical_slot_part(trigger_subject);
         let trigger_predicate_key = canonical_slot_part(trigger_predicate);
         if limit == 0 {
@@ -189,7 +190,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<RuleRecord>> {
-        let _state_guard = self.lock_state_read();
+        let _state_guard = self.lock_state_read()?;
         if limit == 0 {
             return Ok(Vec::new());
         }
