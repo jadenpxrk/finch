@@ -385,6 +385,7 @@ impl EvidencedStore {
 
 mod adversarial_round_1;
 mod claims;
+mod fetch_by_id;
 mod generated_ids;
 mod graph;
 mod lifecycle;

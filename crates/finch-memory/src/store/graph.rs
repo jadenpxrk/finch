@@ -277,32 +277,15 @@ impl MemoryStore {
         scope: &MemoryScope,
         entity_ids: &[String],
     ) -> ZResult<Vec<EntityRecord>> {
-        let mut entity_ids = entity_ids.to_vec();
-        entity_ids.sort();
-        entity_ids.dedup();
-        if entity_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut by_id = BTreeMap::new();
-        for chunk in entity_ids.chunks(MAX_CONTAINS_FILTER_VALUES) {
-            let query = VectorQuery::new("", Vec::new(), MAX_VECTOR_QUERY_TOPK)
-                .with_filter(format!(
-                    "{} AND status = 'active' AND ({})",
-                    scope_filter(scope),
-                    sql_or_eq_list("id", chunk.iter().map(String::as_str)),
-                ))
-                .with_output_fields(output_fields(ENTITY_OUTPUT_FIELDS));
-            for entity in self
-                .entities
-                .query(query)?
-                .into_iter()
-                .map(|doc| entity_from_doc(&doc))
-                .collect::<ZResult<Vec<_>>>()?
-            {
-                by_id.insert(entity.id.clone(), entity);
-            }
-        }
-        let mut entities = by_id.into_values().collect::<Vec<_>>();
+        let mut entities = self
+            .entities
+            .fetch(entity_ids.to_vec())?
+            .values()
+            .map(|doc| entity_from_doc(doc))
+            .collect::<ZResult<Vec<_>>>()?;
+        entities.retain(|entity| {
+            entity.status == MemoryStatus::Active && entity.scope.matches_filter(scope)
+        });
         entities.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(entities)
     }

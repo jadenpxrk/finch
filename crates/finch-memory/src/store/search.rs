@@ -1177,29 +1177,13 @@ impl MemoryStore {
         scope: &MemoryScope,
         claim_ids: &[MemoryId],
     ) -> ZResult<Vec<ClaimRecord>> {
-        let mut claim_ids = claim_ids.to_vec();
-        claim_ids.sort();
-        claim_ids.dedup();
-        let mut by_id = BTreeMap::new();
-        for chunk in claim_ids.chunks(MAX_CONTAINS_FILTER_VALUES) {
-            let query = VectorQuery::new("", Vec::new(), MAX_VECTOR_QUERY_TOPK)
-                .with_filter(format!(
-                    "{} AND ({})",
-                    scope_filter(scope),
-                    sql_or_eq_list("id", chunk.iter().map(String::as_str)),
-                ))
-                .with_output_fields(output_fields(CLAIM_OUTPUT_FIELDS));
-            for claim in self
-                .claims
-                .query(query)?
-                .into_iter()
-                .map(|doc| claim_from_doc(&doc))
-                .collect::<ZResult<Vec<_>>>()?
-            {
-                by_id.insert(claim.id.clone(), claim);
-            }
-        }
-        let mut claims = by_id.into_values().collect::<Vec<_>>();
+        let mut claims = self
+            .claims
+            .fetch(claim_ids.to_vec())?
+            .values()
+            .map(|doc| claim_from_doc(doc))
+            .collect::<ZResult<Vec<_>>>()?;
+        claims.retain(|claim| claim.scope.matches_filter(scope));
         claims.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(claims)
     }
