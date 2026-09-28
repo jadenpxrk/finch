@@ -8,7 +8,7 @@ use crate::collection_files::{
     effective_index_enable_mmap, forward_path_for_segment,
 };
 use crate::index::IndexBuilder;
-use crate::invert::InvertIndex;
+use crate::invert::{frozen_path, InvertIndex};
 use crate::segment::persisted::PersistedSegment;
 use crate::segment::writing::{InvertIndexMeta, WritingSegment, WrittenSegmentMeta};
 use crate::version::{PersistedSegmentVersion, Version};
@@ -168,6 +168,7 @@ impl Collection {
 
             fill_invert_index(&idx, seg, &field.name)?;
             idx.sync()?;
+            idx.freeze()?;
             drop(idx);
 
             metas.insert(
@@ -502,7 +503,9 @@ impl Collection {
             seg.invert_indexes.write().remove(field_name);
             seg.vector_indexes.write().remove(field_name);
             let seg_path = self.path.join(format!("seg_{}", seg.id));
-            let _ = fs::remove_dir_all(seg_path.join(format!("{}_invert", field_name)));
+            let invert_path = seg_path.join(format!("{}_invert", field_name));
+            let _ = fs::remove_dir_all(&invert_path);
+            let _ = fs::remove_file(frozen_path(&invert_path));
             let _ = fs::remove_dir_all(seg_path.join(format!("idx_{}", field_name)));
         }
         sync_dir_best_effort(&self.path);

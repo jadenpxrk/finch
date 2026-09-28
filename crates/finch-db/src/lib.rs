@@ -20,6 +20,7 @@ mod query_filter;
 mod query_output;
 mod row_locator;
 pub mod segment;
+mod sorted_file;
 mod sql_query;
 pub mod sqlengine;
 mod system_projection;

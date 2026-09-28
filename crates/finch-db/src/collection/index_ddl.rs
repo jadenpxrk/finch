@@ -8,7 +8,7 @@ use rayon::prelude::*;
 
 use crate::collection_files::{effective_index_enable_mmap, vector_index_path};
 use crate::index::IndexBuilder;
-use crate::invert::InvertIndex;
+use crate::invert::{frozen_path, InvertIndex};
 use crate::segment::persisted::{PersistedSegment, VectorIndex};
 use crate::version::Version;
 
@@ -70,6 +70,7 @@ pub(super) fn build_segment_invert_index(
 
     // Flush Durability::None writes before reopening read-only.
     idx.sync()?;
+    idx.freeze()?;
     // Drop the writer handle before reopening
     // (fjall file lock is per-Database instance).
     drop(idx);
@@ -404,6 +405,7 @@ impl Collection {
                     let idx_path = self.path.join(format!("seg_{}/{}_invert", seg.id, field));
                     seg.invert_indexes.write().remove(field);
                     let _ = std::fs::remove_dir_all(&idx_path);
+                    let _ = std::fs::remove_file(frozen_path(&idx_path));
                 } else {
                     seg.vector_indexes.write().remove(field);
                 }

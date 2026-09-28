@@ -19,7 +19,6 @@ use super::{make_writing_segment, Collection};
 // The dumped writing segment, reopened as a persisted segment awaiting the manifest commit.
 struct FlushedSegment {
     seg: PersistedSegment,
-    meta: WrittenSegmentMeta,
     active_id_map_path: PathBuf,
     new_id_map_suffix: u32,
     old_delete_suffix: u32,
@@ -41,6 +40,7 @@ impl Collection {
         };
 
         let seg = PersistedSegment::open_forward_only_with_mmap(&meta, self.options.enable_mmap)?;
+        seg.load_invert_indexes(&meta)?;
 
         let version = self.cur_version();
         let loaded_indexed_fields =
@@ -94,7 +94,6 @@ impl Collection {
             self.prepare_replacement_writing_segment_locked(Some(new_seg_id), &version.schema)?;
         let flushed = FlushedSegment {
             seg,
-            meta,
             active_id_map_path,
             new_id_map_suffix,
             old_delete_suffix,
@@ -190,12 +189,11 @@ impl Collection {
         flushed: FlushedSegment,
     ) -> ZResult<()> {
         // One critical section so a query sees the flushed docs in either the writing or the
-        // persisted segment. Invert indexes open only after the old writing segment is dropped.
+        // persisted segment.
         {
             let mut persisted = self.persisted_segments.write();
             let mut writing = self.writing_segment.write();
             drop(std::mem::replace(&mut *writing, new_writing));
-            let _ = flushed.seg.load_invert_indexes(&flushed.meta);
             persisted.push(Arc::new(flushed.seg));
         }
         cleanup_old_id_map_checkpoints(

@@ -7,6 +7,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::sorted_file::sync_dir;
+
 pub struct DeleteStore {
     bitmap: Arc<RoaringTreemap>,
     base_path: PathBuf,
@@ -67,8 +69,11 @@ impl DeleteStore {
         writer
             .flush()
             .map_err(|e| Status::io_error(e.to_string()))?;
-        let _ = writer.get_ref().sync_all();
-        let _ = fs::File::open(&self.base_path).and_then(|d| d.sync_all());
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(|e| Status::io_error(e.to_string()))?;
+        sync_dir(&self.base_path)?;
         Ok(new_suffix)
     }
 
@@ -92,8 +97,11 @@ impl DeleteStore {
         writer
             .flush()
             .map_err(|e| Status::io_error(e.to_string()))?;
-        let _ = writer.get_ref().sync_all();
-        let _ = fs::File::open(&self.base_path).and_then(|d| d.sync_all());
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(|e| Status::io_error(e.to_string()))?;
+        sync_dir(&self.base_path)?;
         Ok(self.path_suffix)
     }
 

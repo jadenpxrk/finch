@@ -24,18 +24,16 @@ impl WritingSegment {
             _ => self.forward_store.dump_to_ipc(&forward_path)?,
         }
 
-        let invert_paths: HashMap<String, InvertIndexMeta> = self
-            .invert_indexes
-            .iter()
-            .map(|(name, idx)| {
-                let meta = InvertIndexMeta {
-                    path: seg_path.join(format!("{}_invert", name)),
-                    data_type: idx.data_type,
-                    params: idx.params.clone(),
-                };
-                (name.clone(), meta)
-            })
-            .collect();
+        let mut invert_paths: HashMap<String, InvertIndexMeta> = HashMap::new();
+        for (name, idx) in &self.invert_indexes {
+            idx.freeze()?;
+            let meta = InvertIndexMeta {
+                path: seg_path.join(format!("{}_invert", name)),
+                data_type: idx.data_type,
+                params: idx.params.clone(),
+            };
+            invert_paths.insert(name.clone(), meta);
+        }
 
         Ok(WrittenSegmentMeta {
             segment_id: self.id,

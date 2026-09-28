@@ -124,8 +124,8 @@ impl InvertIndex {
 
         let mut bitmap = RoaringTreemap::new();
         let mut seen: u64 = 0;
-        for item in self.items.range(start_key..) {
-            let k = item.key().map_err(|e| Status::io_error(e.to_string()))?;
+        for item in self.keys_from(&start_key) {
+            let k = item?;
             if !k.starts_with(&ns_prefix) {
                 break;
             }
@@ -184,8 +184,8 @@ impl InvertIndex {
         prefix.extend_from_slice(prefix_str.as_bytes());
 
         let mut bitmap = RoaringTreemap::new();
-        for item in self.items.prefix(&prefix) {
-            let k = item.key().map_err(|e| Status::io_error(e.to_string()))?;
+        for item in self.keys_with_prefix(&prefix) {
+            let k = item?;
             if k.len() < prefix.len() + 1 + 8 {
                 continue;
             }
@@ -218,8 +218,8 @@ impl InvertIndex {
         prefix.extend_from_slice(rev.as_bytes());
 
         let mut bitmap = RoaringTreemap::new();
-        for item in self.items.prefix(&prefix) {
-            let k = item.key().map_err(|e| Status::io_error(e.to_string()))?;
+        for item in self.keys_with_prefix(&prefix) {
+            let k = item?;
             if k.len() < prefix.len() + 1 + 8 {
                 continue;
             }
@@ -315,8 +315,8 @@ impl InvertIndex {
         let header_len = ns_prefix.len();
 
         let mut bitmap = RoaringTreemap::new();
-        for item in self.items.prefix(&ns_prefix) {
-            let k = item.key().map_err(|e| Status::io_error(e.to_string()))?;
+        for item in self.keys_with_prefix(&ns_prefix) {
+            let k = item?;
             if k.len() < header_len + 1 + 8 {
                 continue;
             }

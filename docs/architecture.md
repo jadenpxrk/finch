@@ -59,12 +59,15 @@ the manifest does not name.
 
 Every document gets a `doc_id`, an internal number. Each insert, upsert, or update gives the
 document a new `doc_id`. The id map points each primary key at its current `doc_id`. The delete
-bitmap is the set of `doc_id`s that a delete or a replacement retired.
+bitmap is the set of `doc_id`s that a delete or a replacement retired. Each flush writes the id
+map to a sorted checkpoint file that the manifest names. A read-write open rebuilds its working
+copy of the id map from that file and the WAL; a read-only open reads the file directly.
 
 A segment is a group of documents. The writing segment holds new documents in memory, and the
 WAL (write-ahead log) records each change to it. A flush turns the writing segment into a
-persisted segment. After Finch writes a manifest, a delete bitmap snapshot, or the column file of
-a segment, it never changes that file. A newer file replaces it.
+persisted segment. After Finch writes a manifest, a delete bitmap snapshot, an id map checkpoint,
+or the column file or inverted index file of a segment, it never changes that file. A newer file
+replaces it.
 
 ## 3. The write path
 

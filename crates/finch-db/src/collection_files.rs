@@ -147,6 +147,34 @@ pub(crate) fn cleanup_old_id_map_checkpoints(base: &Path, active_path: &Path, ke
     let _ = fs::File::open(base).and_then(|d| d.sync_all());
 }
 
+/// Removes the per-process copies that releases before frozen invert files and id-map
+/// checkpoint files made for read-only opens, which a killed process leaves behind.
+pub(crate) fn remove_stale_read_only_copies(base: &Path) -> ZResult<()> {
+    let io = |p: &Path, e: std::io::Error| Status::io_error(format!("{:?}: {}", p, e));
+    let mut dirs = vec![base.to_path_buf()];
+    for entry in fs::read_dir(base).map_err(|e| io(base, e))? {
+        let path = entry.map_err(|e| io(base, e))?.path();
+        let is_seg = path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("seg_"));
+        if is_seg && path.is_dir() {
+            dirs.push(path);
+        }
+    }
+    for dir in dirs {
+        for entry in fs::read_dir(&dir).map_err(|e| io(&dir, e))? {
+            let path = entry.map_err(|e| io(&dir, e))?.path();
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+            let is_copy =
+                name.is_some_and(|n| n.starts_with("id_map_ro_") || n.starts_with("invert_ro_"));
+            if is_copy && path.is_dir() {
+                fs::remove_dir_all(&path).map_err(|e| io(&path, e))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Acquire a process-level lock on the collection directory.
 /// Read-only opens use shared lock; read-write opens use exclusive lock.
 pub(crate) fn acquire_file_lock(path: &Path, read_only: bool) -> ZResult<fs::File> {

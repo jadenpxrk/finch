@@ -15,7 +15,7 @@ use finch_types::{
 use crate::collection_files::{
     acquire_file_lock, effective_forward_file_format, effective_forward_store_open_options,
     effective_index_enable_mmap, forward_path_for_segment, id_map_path_for_suffix, legacy_wal_path,
-    vector_index_path, wal_path_for_writing_segment,
+    remove_stale_read_only_copies, vector_index_path, wal_path_for_writing_segment,
 };
 use crate::delete_store::DeleteStore;
 use crate::id_map::IdMap;
@@ -109,10 +109,15 @@ impl OpenedIdMap {
     // always maps to the legacy "id_map" directory for backward compat.
     fn open(path: &Path, version: &Version, read_only: bool) -> ZResult<Self> {
         let id_map_path = id_map_path_for_suffix(path, version.id_map_suffix);
-        let missing = !id_map_path.exists();
+        // Suffix 0 names no checkpoint: before the first flush the WAL holds the whole map.
+        let missing = if version.id_map_suffix == 0 {
+            !id_map_path.exists()
+        } else {
+            !IdMap::has_checkpoint(&id_map_path)
+        };
         if missing && read_only {
             return Err(Status::io_error(format!(
-                "id_map directory missing at {:?}",
+                "id_map checkpoint missing at {:?}",
                 id_map_path
             )));
         }
@@ -386,7 +391,7 @@ impl WalRecovery<'_> {
         let wal_entries = Wal::replay(&wal_path)?;
         if self.id_map.missing && wal_entries.is_empty() && self.has_persisted_segments {
             return Err(Status::io_error(format!(
-                "id_map directory missing at {:?} and WAL is empty; cannot recover",
+                "id_map checkpoint missing at {:?} and WAL is empty; cannot recover",
                 self.id_map.path
             )));
         }
@@ -530,6 +535,10 @@ impl Collection {
 
         let version_manager = VersionManager::load(path)?;
         let version = version_manager.current();
+        // Only a read-write open may delete: it holds the exclusive lock.
+        if !options.read_only {
+            remove_stale_read_only_copies(path)?;
+        }
         let options = with_manifest_mmap(options, &version);
         let segment_ctx = SegmentOpenContext {
             path,

@@ -1,11 +1,13 @@
 //! Inverted index for scalar field filtering (backed by fjall LSM-tree)
 
 use finch_types::{DataType, InvertIndexParams, Status, Value, ZResult};
-use fjall::{Database, KeyspaceCreateOptions, PersistMode};
+use fjall::{Database, KeyspaceCreateOptions, PersistMode, Readable};
 use half::f16;
 use roaring::RoaringTreemap;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::sorted_file::{write_sorted_file, SortedFile};
 
 const NS_TERMS: u8 = 1;
 const NS_REVERSED_TERMS: u8 = 2;
@@ -14,30 +16,38 @@ const NS_NULL: u8 = 4;
 const NS_NONNULL: u8 = 5;
 const VALUE_DELIM: u8 = 0;
 
-static INV_RO_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Temp directory that is deleted on drop.
-struct CleanupDir(PathBuf);
-impl Drop for CleanupDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+/// Sorted key file that a persisted segment reads instead of the fjall directory at `path`.
+pub(crate) fn frozen_path(path: &Path) -> PathBuf {
+    let mut p = path.as_os_str().to_owned();
+    p.push(".keys");
+    PathBuf::from(p)
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> ZResult<()> {
-    std::fs::create_dir_all(dst).map_err(|e| Status::io_error(e.to_string()))?;
-    for entry in std::fs::read_dir(src).map_err(|e| Status::io_error(e.to_string()))? {
-        let entry = entry.map_err(|e| Status::io_error(e.to_string()))?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path).map_err(|e| Status::io_error(e.to_string()))?;
+enum Store {
+    Live {
+        db: Database,
+        items: fjall::Keyspace,
+    },
+    Frozen(SortedFile),
+}
+
+/// One index key, borrowed from a frozen file or owned by fjall.
+enum Key<'a> {
+    Live(fjall::Slice),
+    Frozen(&'a [u8]),
+}
+
+impl Deref for Key<'_> {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Key::Live(k) => k,
+            Key::Frozen(k) => k,
         }
     }
-    Ok(())
 }
+
+type Keys<'a> = Box<dyn Iterator<Item = ZResult<Key<'a>>> + 'a>;
 
 pub(crate) fn array_element_type(dt: DataType) -> Option<DataType> {
     use DataType as D;
@@ -197,9 +207,8 @@ fn namespace_prefix(field: &str, namespace: u8) -> Vec<u8> {
 }
 
 pub struct InvertIndex {
-    db: Database,
-    items: fjall::Keyspace,
-    _ro_cleanup: Option<CleanupDir>,
+    store: Store,
+    path: PathBuf,
     pub field_name: String,
     pub data_type: DataType,
     index_value_type: DataType,
@@ -222,46 +231,44 @@ impl InvertIndex {
         let items = db
             .keyspace("invert", KeyspaceCreateOptions::default)
             .map_err(|e| Status::io_error(e.to_string()))?;
-        let index_value_type = array_element_type(data_type).unwrap_or(data_type);
-        let enable_range_optimization_terms =
-            params.enable_range_optimization && !matches!(index_value_type, DataType::Bool);
-        let enable_range_optimization_array_len =
-            params.enable_range_optimization && is_array_type(data_type);
-        let enable_extended_wildcard =
-            params.enable_extended_wildcard && matches!(index_value_type, DataType::String);
-        Ok(InvertIndex {
-            db,
-            items,
-            _ro_cleanup: None,
+        Ok(Self::with_store(
+            Store::Live { db, items },
+            path,
             field_name,
             data_type,
-            index_value_type,
             params,
-            enable_range_optimization_terms,
-            enable_range_optimization_array_len,
-            enable_extended_wildcard,
-        })
+        ))
     }
 
+    /// Opens the frozen file of a persisted index. An index from before frozen files is
+    /// frozen first, which needs the only handle on its fjall directory.
     pub fn open_read_only(
         path: &Path,
         field_name: String,
         data_type: DataType,
         params: InvertIndexParams,
     ) -> ZResult<Self> {
-        // fjall holds an exclusive lock per Database, so read-only opens
-        // copy the database directory to a unique temp path.
-        let seq = INV_RO_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let ro_name = format!("invert_ro_{}_{}", std::process::id(), seq);
-        let dst = path.parent().unwrap_or(path).join(&ro_name);
-        copy_dir_recursive(path, &dst)?;
-        let db = Database::builder(&dst).open().map_err(|e| {
-            let _ = std::fs::remove_dir_all(&dst);
-            Status::io_error(e.to_string())
-        })?;
-        let items = db
-            .keyspace("invert", KeyspaceCreateOptions::default)
-            .map_err(|e| Status::io_error(e.to_string()))?;
+        let frozen = frozen_path(path);
+        if !frozen.exists() {
+            Self::open(path, field_name.clone(), data_type, params.clone())?.freeze()?;
+        }
+        let file = SortedFile::open(&frozen)?;
+        Ok(Self::with_store(
+            Store::Frozen(file),
+            path,
+            field_name,
+            data_type,
+            params,
+        ))
+    }
+
+    fn with_store(
+        store: Store,
+        path: &Path,
+        field_name: String,
+        data_type: DataType,
+        params: InvertIndexParams,
+    ) -> Self {
         let index_value_type = array_element_type(data_type).unwrap_or(data_type);
         let enable_range_optimization_terms =
             params.enable_range_optimization && !matches!(index_value_type, DataType::Bool);
@@ -269,10 +276,9 @@ impl InvertIndex {
             params.enable_range_optimization && is_array_type(data_type);
         let enable_extended_wildcard =
             params.enable_extended_wildcard && matches!(index_value_type, DataType::String);
-        Ok(InvertIndex {
-            db,
-            items,
-            _ro_cleanup: Some(CleanupDir(dst)),
+        InvertIndex {
+            store,
+            path: path.to_path_buf(),
             field_name,
             data_type,
             index_value_type,
@@ -280,26 +286,71 @@ impl InvertIndex {
             enable_range_optimization_terms,
             enable_range_optimization_array_len,
             enable_extended_wildcard,
-        })
+        }
+    }
+
+    /// Writes the frozen file that `open_read_only` reads, from a consistent snapshot.
+    pub fn freeze(&self) -> ZResult<()> {
+        let Store::Live { db, items } = &self.store else {
+            return Ok(());
+        };
+        let snapshot = db.snapshot();
+        let entries = snapshot.iter(items).map(|guard| {
+            guard
+                .into_inner()
+                .map_err(|e| Status::io_error(e.to_string()))
+        });
+        write_sorted_file(&frozen_path(&self.path), entries)
     }
 
     /// Flush all writes to disk so they survive reopen.
     pub fn sync(&self) -> ZResult<()> {
-        self.db
-            .persist(PersistMode::SyncAll)
+        let Store::Live { db, .. } = &self.store else {
+            return Ok(());
+        };
+        db.persist(PersistMode::SyncAll)
             .map_err(|e| Status::io_error(e.to_string()))
+    }
+
+    fn live_items(&self) -> ZResult<&fjall::Keyspace> {
+        match &self.store {
+            Store::Live { items, .. } => Ok(items),
+            Store::Frozen(_) => Err(Status::permission_denied(
+                "invert index of a persisted segment is read-only",
+            )),
+        }
+    }
+
+    /// Keys `>= start` in order.
+    fn keys_from<'a>(&'a self, start: &[u8]) -> Keys<'a> {
+        match &self.store {
+            Store::Live { items, .. } => Box::new(items.range(start.to_vec()..).map(|item| {
+                item.key()
+                    .map(Key::Live)
+                    .map_err(|e| Status::io_error(e.to_string()))
+            })),
+            Store::Frozen(file) => Box::new(file.iter_from(start).map(|(k, _)| Ok(Key::Frozen(k)))),
+        }
+    }
+
+    /// Keys that start with `prefix`, in order.
+    fn keys_with_prefix<'a>(&'a self, prefix: &'a [u8]) -> Keys<'a> {
+        Box::new(
+            self.keys_from(prefix)
+                .take_while(move |k| k.as_ref().map_or(true, |k| k.starts_with(prefix))),
+        )
     }
 
     // ── Write helpers ────────────────────────────────────────────────────
 
     fn put_kv(&self, key: &[u8], value: &[u8]) -> ZResult<()> {
-        self.items
+        self.live_items()?
             .insert(key, value)
             .map_err(|e| Status::io_error(e.to_string()))
     }
 
     fn del_kv(&self, key: &[u8]) -> ZResult<()> {
-        self.items
+        self.live_items()?
             .remove(key)
             .map_err(|e| Status::io_error(e.to_string()))
     }
@@ -307,8 +358,8 @@ impl InvertIndex {
     /// Iterate all keys starting with `prefix` and collect doc_ids into a bitmap.
     fn scan_prefix_doc_ids(&self, prefix: &[u8]) -> ZResult<RoaringTreemap> {
         let mut bitmap = RoaringTreemap::new();
-        for item in self.items.prefix(prefix) {
-            let k = item.key().map_err(|e| Status::io_error(e.to_string()))?;
+        for item in self.keys_with_prefix(prefix) {
+            let k = item?;
             if k.len() < prefix.len() + 8 {
                 continue;
             }

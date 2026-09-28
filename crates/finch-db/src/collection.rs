@@ -194,10 +194,15 @@ impl Collection {
 
 impl Drop for Collection {
     fn drop(&mut self) {
-        // Persist buffered fjall writes so data survives reopen.
+        // The id map needs no sync: open rebuilds it from the checkpoint and the WAL.
         if !self.options.read_only {
-            let _ = self.id_map.sync();
-            let _ = self.writing_segment.write().sync_invert_indexes();
+            // Not fatal: WAL replay on the next open re-inserts every writing-segment key.
+            if let Err(e) = self.writing_segment.write().sync_invert_indexes() {
+                tracing::warn!(
+                    "could not sync writing-segment invert indexes on close: {}",
+                    e
+                );
+            }
         }
     }
 }

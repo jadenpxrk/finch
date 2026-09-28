@@ -1,49 +1,82 @@
-//! Primary key → doc_id mapping backed by fjall (LSM-tree)
+//! Primary key → doc_id mapping.
+//!
+//! A read-write collection keeps the map in a fjall database under `<dir>/live`. Each flush
+//! writes a checkpoint: a sorted file at `<dir>/checkpoint` of a new id-map directory, which
+//! the manifest names by suffix. Opening rebuilds the live database from the checkpoint, and
+//! WAL replay adds everything after it. Read-only opens read the checkpoint file directly.
 
-use byteorder::{LittleEndian, ReadBytesExt};
 use finch_types::{Status, ZResult};
-use fjall::{Database, KeyspaceCreateOptions, PersistMode};
+use fjall::{Database, KeyspaceCreateOptions, Readable};
 use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-static RO_COUNTER: AtomicU64 = AtomicU64::new(0);
+use crate::sorted_file::{sync_dir, write_sorted_file, SortedFile};
 
-/// Temp directory that is deleted on drop.
-struct CleanupDir(PathBuf);
-impl Drop for CleanupDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
+const CHECKPOINT_FILE: &str = "checkpoint";
+const LIVE_DIR: &str = "live";
+// Releases before checkpoint files made each id-map directory a fjall database; fjall keeps
+// this file at its root.
+const LEGACY_FJALL_LOCK: &str = "lock";
+
+fn io_err(e: impl ToString) -> Status {
+    Status::io_error(e.to_string())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> ZResult<()> {
-    fs::create_dir_all(dst).map_err(|e| Status::io_error(e.to_string()))?;
-    for entry in fs::read_dir(src).map_err(|e| Status::io_error(e.to_string()))? {
-        let entry = entry.map_err(|e| Status::io_error(e.to_string()))?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            fs::copy(&src_path, &dst_path).map_err(|e| Status::io_error(e.to_string()))?;
+fn decode_doc_id(bytes: &[u8]) -> ZResult<u64> {
+    bytes
+        .get(..8)
+        .and_then(|b| b.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or_else(|| Status::internal("corrupted id map entry"))
+}
+
+fn is_legacy_dir(dir: &Path) -> bool {
+    !dir.join(CHECKPOINT_FILE).exists() && dir.join(LEGACY_FJALL_LOCK).exists()
+}
+
+fn open_items(dir: &Path) -> ZResult<(Database, fjall::Keyspace)> {
+    let db = Database::builder(dir).open().map_err(io_err)?;
+    let items = db
+        .keyspace("id_map", KeyspaceCreateOptions::default)
+        .map_err(io_err)?;
+    Ok((db, items))
+}
+
+fn write_checkpoint(db: &Database, items: &fjall::Keyspace, path: &Path) -> ZResult<()> {
+    let snapshot = db.snapshot();
+    let entries = snapshot
+        .iter(items)
+        .map(|guard| guard.into_inner().map_err(io_err));
+    write_sorted_file(path, entries)
+}
+
+// Removes everything in `dir` except the checkpoint file, creating `dir` if needed.
+fn clear_all_but_checkpoint(dir: &Path) -> ZResult<()> {
+    fs::create_dir_all(dir).map_err(io_err)?;
+    for entry in fs::read_dir(dir).map_err(io_err)? {
+        let entry = entry.map_err(io_err)?;
+        if entry.file_name() == CHECKPOINT_FILE {
+            continue;
         }
+        let path = entry.path();
+        let removed = if entry.file_type().map_err(io_err)?.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        removed.map_err(|e| Status::io_error(format!("could not clear {:?}: {}", path, e)))?;
     }
     Ok(())
 }
 
-struct OpenIdMap {
-    db: Database,
-    items: fjall::Keyspace,
-    _ro_cleanup: Option<CleanupDir>,
-}
-
 enum IdMapState {
-    Open(OpenIdMap),
-    LazyReadOnly {
-        opened: OnceLock<Result<OpenIdMap, String>>,
+    Live {
+        db: Database,
+        items: fjall::Keyspace,
+    },
+    ReadOnly {
+        checkpoint: OnceLock<Result<Option<SortedFile>, String>>,
     },
 }
 
@@ -53,70 +86,76 @@ pub struct IdMap {
 }
 
 impl IdMap {
-    pub fn open(path: &Path) -> ZResult<Self> {
-        let db = Database::builder(path)
-            .open()
-            .map_err(|e| Status::io_error(e.to_string()))?;
-        let items = db
-            .keyspace("id_map", KeyspaceCreateOptions::default)
-            .map_err(|e| Status::io_error(e.to_string()))?;
-        Ok(IdMap {
-            state: IdMapState::Open(OpenIdMap {
-                db,
-                items,
-                _ro_cleanup: None,
-            }),
-            path: path.to_path_buf(),
-        })
-    }
-
-    pub fn open_read_only(path: &Path) -> ZResult<Self> {
-        Ok(IdMap {
-            state: IdMapState::LazyReadOnly {
-                opened: OnceLock::new(),
-            },
-            path: path.to_path_buf(),
-        })
-    }
-
-    fn open_read_only_copy(path: &Path) -> ZResult<OpenIdMap> {
-        // Copy the fjall database directory to a unique temp path so
-        // multiple read-only instances can coexist.
-        let seq = RO_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let ro_name = format!("id_map_ro_{}_{}", std::process::id(), seq);
-        let dst = path.parent().unwrap_or(path).join(&ro_name);
-        copy_dir_recursive(path, &dst)?;
-        let db = Database::builder(&dst).open().map_err(|e| {
-            let _ = fs::remove_dir_all(&dst);
-            Status::io_error(e.to_string())
-        })?;
-        let items = db
-            .keyspace("id_map", KeyspaceCreateOptions::default)
-            .map_err(|e| Status::io_error(e.to_string()))?;
-        Ok(OpenIdMap {
-            db,
-            items,
-            _ro_cleanup: Some(CleanupDir(dst)),
-        })
-    }
-
-    fn open_state(&self) -> ZResult<&OpenIdMap> {
-        match &self.state {
-            IdMapState::Open(open) => Ok(open),
-            IdMapState::LazyReadOnly { opened } => {
-                let loaded = opened.get_or_init(|| {
-                    Self::open_read_only_copy(&self.path).map_err(|e| e.to_string())
-                });
-                match loaded {
-                    Ok(open) => Ok(open),
-                    Err(e) => Err(Status::io_error(e.clone())),
-                }
+    /// Opens the id map in `dir` for writing, upgrading a pre-checkpoint directory in place.
+    pub fn open(dir: &Path) -> ZResult<Self> {
+        let checkpoint = dir.join(CHECKPOINT_FILE);
+        if is_legacy_dir(dir) {
+            let (db, items) = open_items(dir)?;
+            write_checkpoint(&db, &items, &checkpoint)?;
+        }
+        // The live database holds nothing that the checkpoint and WAL replay do not rebuild.
+        clear_all_but_checkpoint(dir)?;
+        let (db, items) = open_items(&dir.join(LIVE_DIR))?;
+        if checkpoint.exists() {
+            let file = SortedFile::open(&checkpoint)?;
+            let mut ingestion = items.start_ingestion().map_err(io_err)?;
+            for (pk, doc_id) in file.iter_from(&[]) {
+                ingestion.write(pk, doc_id).map_err(io_err)?;
             }
+            ingestion.finish().map_err(io_err)?;
+        }
+        Ok(IdMap {
+            state: IdMapState::Live { db, items },
+            path: dir.to_path_buf(),
+        })
+    }
+
+    /// Opens the checkpoint in `dir` without writing anything; it is read on first use.
+    pub fn open_read_only(dir: &Path) -> ZResult<Self> {
+        if is_legacy_dir(dir) {
+            return Err(Status::io_error(format!(
+                "id map at {:?} uses the format of an older release; open the collection read-write once to upgrade it",
+                dir
+            )));
+        }
+        Ok(IdMap {
+            state: IdMapState::ReadOnly {
+                checkpoint: OnceLock::new(),
+            },
+            path: dir.to_path_buf(),
+        })
+    }
+
+    /// Whether `dir` holds a checkpoint, in either format.
+    pub(crate) fn has_checkpoint(dir: &Path) -> bool {
+        dir.join(CHECKPOINT_FILE).exists() || dir.join(LEGACY_FJALL_LOCK).exists()
+    }
+
+    // The checkpoint of a read-only map, loaded on first use; `None` when no flush wrote one.
+    fn checkpoint(&self) -> ZResult<Option<&SortedFile>> {
+        let IdMapState::ReadOnly { checkpoint } = &self.state else {
+            return Ok(None);
+        };
+        let loaded = checkpoint.get_or_init(|| {
+            let path = self.path.join(CHECKPOINT_FILE);
+            if !path.exists() {
+                return Ok(None);
+            }
+            SortedFile::open(&path).map(Some).map_err(|e| e.message)
+        });
+        match loaded {
+            Ok(file) => Ok(file.as_ref()),
+            Err(e) => Err(Status::io_error(e.clone())),
         }
     }
 
-    fn items(&self) -> ZResult<&fjall::Keyspace> {
-        Ok(&self.open_state()?.items)
+    fn live_items(&self) -> ZResult<&fjall::Keyspace> {
+        match &self.state {
+            IdMapState::Live { items, .. } => Ok(items),
+            IdMapState::ReadOnly { .. } => {
+                Err(Status::permission_denied("id map is open read-only"))
+            }
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -124,83 +163,68 @@ impl IdMap {
     }
 
     pub fn insert(&self, pk: &str, doc_id: u64) -> ZResult<()> {
-        self.items()?
+        self.live_items()?
             .insert(pk.as_bytes(), doc_id.to_le_bytes())
-            .map_err(|e| Status::io_error(e.to_string()))
+            .map_err(io_err)
     }
 
     pub fn get(&self, pk: &str) -> ZResult<Option<u64>> {
-        let Some(bytes) = self
-            .items()?
-            .get(pk.as_bytes())
-            .map_err(|e| Status::io_error(e.to_string()))?
-        else {
-            return Ok(None);
-        };
-        if bytes.len() < 8 {
-            return Err(Status::internal("corrupted id map entry"));
+        match &self.state {
+            IdMapState::Live { items, .. } => items
+                .get(pk.as_bytes())
+                .map_err(io_err)?
+                .map(|bytes| decode_doc_id(&bytes))
+                .transpose(),
+            IdMapState::ReadOnly { .. } => self
+                .checkpoint()?
+                .and_then(|file| file.get(pk.as_bytes()))
+                .map(decode_doc_id)
+                .transpose(),
         }
-        let mut cur = std::io::Cursor::new(bytes.as_ref());
-        Ok(Some(
-            cur.read_u64::<LittleEndian>()
-                .map_err(|e| Status::io_error(e.to_string()))?,
-        ))
     }
 
     pub fn delete(&self, pk: &str) -> ZResult<()> {
-        self.items()?
-            .remove(pk.as_bytes())
-            .map_err(|e| Status::io_error(e.to_string()))
+        self.live_items()?.remove(pk.as_bytes()).map_err(io_err)
     }
 
     pub fn multi_get(&self, pks: &[&str]) -> ZResult<Vec<Option<u64>>> {
         pks.iter().map(|pk| self.get(pk)).collect()
     }
 
-    /// Flush all writes to disk so they survive reopen.
-    pub fn sync(&self) -> ZResult<()> {
-        self.open_state()?
-            .db
-            .persist(PersistMode::SyncAll)
-            .map_err(|e| Status::io_error(e.to_string()))
-    }
-
-    /// Create a snapshot by copying the fjall database directory to `dest_path`.
-    pub fn create_snapshot(&self, dest_path: &Path) -> ZResult<()> {
-        self.sync()?;
-        copy_dir_recursive(&self.path, dest_path)?;
-        // Best-effort durability
-        let _ = fs::File::open(dest_path).and_then(|d| d.sync_all());
-        if let Some(parent) = dest_path.parent() {
-            let _ = fs::File::open(parent).and_then(|d| d.sync_all());
+    /// Writes a consistent checkpoint of the live map into `dest_dir`, replacing whatever an
+    /// earlier failed flush left there.
+    pub fn create_snapshot(&self, dest_dir: &Path) -> ZResult<()> {
+        let IdMapState::Live { db, items } = &self.state else {
+            return Err(Status::permission_denied("id map is open read-only"));
+        };
+        match fs::remove_dir_all(dest_dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io_err(e)),
+            _ => {}
         }
-        Ok(())
+        fs::create_dir_all(dest_dir).map_err(io_err)?;
+        write_checkpoint(db, items, &dest_dir.join(CHECKPOINT_FILE))?;
+        sync_dir(dest_dir.parent().unwrap_or(Path::new(".")))
     }
 
     /// Iterate all (pk, doc_id) pairs
     pub fn iter_all(&self) -> Vec<(String, u64)> {
-        let mut results = Vec::new();
-        let Ok(items) = self.items() else {
-            return results;
+        let decode = |k: &[u8], v: &[u8]| {
+            let pk = String::from_utf8(k.to_vec()).ok()?;
+            Some((pk, decode_doc_id(v).ok()?))
         };
-        for guard in items.iter() {
-            let Ok((k, v)) = guard.into_inner() else {
-                continue;
-            };
-            let pk = match String::from_utf8(k.to_vec()) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if v.len() < 8 {
-                continue;
-            }
-            let mut cur = std::io::Cursor::new(v.as_ref());
-            let doc_id = match cur.read_u64::<LittleEndian>() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-            results.push((pk, doc_id));
+        match &self.state {
+            IdMapState::Live { items, .. } => items
+                .iter()
+                .filter_map(|guard| guard.into_inner().ok())
+                .filter_map(|(k, v)| decode(&k, &v))
+                .collect(),
+            IdMapState::ReadOnly { .. } => match self.checkpoint() {
+                Ok(Some(file)) => file
+                    .iter_from(&[])
+                    .filter_map(|(k, v)| decode(k, v))
+                    .collect(),
+                _ => Vec::new(),
+            },
         }
-        results
     }
 }
