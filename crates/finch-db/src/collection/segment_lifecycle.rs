@@ -105,10 +105,7 @@ impl Collection {
             &new_version,
             new_writing,
             |new_writing| self.publish_flushed_segment(new_writing, flushed),
-            |new_writing| {
-                drop(new_writing);
-                self.reopen_writing_invert_indexes_best_effort();
-            },
+            drop,
         )
     }
 
@@ -118,8 +115,6 @@ impl Collection {
         if writing.doc_count() == 0 {
             return Ok(None);
         }
-        // Flush Durability::None fjall writes to disk before persisting.
-        writing.sync_invert_indexes()?;
         let meta = writing.dump(&self.path, effective_forward_file_format(&self.options))?;
 
         // Build vector indexes directly from in-memory writing segment (same
@@ -249,15 +244,6 @@ impl Collection {
         }
     }
 
-    // Best-effort rollback: re-open invert handles so the collection remains usable for
-    // subsequent writes.
-    pub(super) fn reopen_writing_invert_indexes_best_effort(&self) {
-        let _ = self
-            .writing_segment
-            .write()
-            .reopen_invert_indexes(&self.path);
-    }
-
     // Opens the writing segment that replaces the current one, with id `next_id` or the
     // current id.
     pub(super) fn prepare_replacement_writing_segment_locked(
@@ -265,21 +251,7 @@ impl Collection {
         next_id: Option<u32>,
         schema: &CollectionSchema,
     ) -> ZResult<WritingSegment> {
-        let writing_id = {
-            let mut writing = self.writing_segment.write();
-            let id = next_id.unwrap_or(writing.id);
-            // Avoid holding multiple writable fjall-backed invert indexes at
-            // once (old writing segment + replacement writing segment).
-            writing.drop_invert_indexes();
-            id
-        };
-
-        match make_writing_segment(writing_id, schema, &self.path, false) {
-            Ok(w) => Ok(w),
-            Err(e) => {
-                self.reopen_writing_invert_indexes_best_effort();
-                Err(e)
-            }
-        }
+        let writing_id = next_id.unwrap_or(self.writing_segment.read().id);
+        make_writing_segment(writing_id, schema, &self.path, false)
     }
 }

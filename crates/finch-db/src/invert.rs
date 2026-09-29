@@ -1,10 +1,11 @@
-//! Inverted index for scalar field filtering (backed by fjall LSM-tree)
+//! Inverted index for scalar field filtering
 
 use finch_types::{DataType, InvertIndexParams, Status, Value, ZResult};
 use fjall::{Database, KeyspaceCreateOptions, PersistMode, Readable};
 use half::f16;
 use roaring::RoaringTreemap;
-use std::ops::Deref;
+use std::collections::BTreeSet;
+use std::ops::{Bound, Deref};
 use std::path::{Path, PathBuf};
 
 use crate::sorted_file::{write_sorted_file, SortedFile};
@@ -23,18 +24,24 @@ pub(crate) fn frozen_path(path: &Path) -> PathBuf {
     PathBuf::from(p)
 }
 
+/// Whether a persisted index exists at `path`, as a frozen file or an older fjall directory.
+pub(crate) fn persisted_index_exists(path: &Path) -> bool {
+    frozen_path(path).exists() || path.exists()
+}
+
 enum Store {
     Live {
         db: Database,
         items: fjall::Keyspace,
     },
+    Memory(BTreeSet<Vec<u8>>),
     Frozen(SortedFile),
 }
 
-/// One index key, borrowed from a frozen file or owned by fjall.
+/// One index key, owned by fjall or borrowed from memory or a frozen file.
 enum Key<'a> {
     Live(fjall::Slice),
-    Frozen(&'a [u8]),
+    Borrowed(&'a [u8]),
 }
 
 impl Deref for Key<'_> {
@@ -42,7 +49,7 @@ impl Deref for Key<'_> {
     fn deref(&self) -> &[u8] {
         match self {
             Key::Live(k) => k,
-            Key::Frozen(k) => k,
+            Key::Borrowed(k) => k,
         }
     }
 }
@@ -202,6 +209,10 @@ fn encode_marker_key(field: &str, namespace: u8, doc_id: u64) -> Vec<u8> {
     key
 }
 
+fn read_only() -> Status {
+    Status::permission_denied("invert index of a persisted segment is read-only")
+}
+
 fn namespace_prefix(field: &str, namespace: u8) -> Vec<u8> {
     encode_header(field, namespace)
 }
@@ -238,6 +249,23 @@ impl InvertIndex {
             data_type,
             params,
         ))
+    }
+
+    /// An empty index held in memory, as a writing segment rebuilds it from WAL replay.
+    /// `freeze` writes it to the frozen file for `path`.
+    pub fn in_memory(
+        path: &Path,
+        field_name: String,
+        data_type: DataType,
+        params: InvertIndexParams,
+    ) -> Self {
+        Self::with_store(
+            Store::Memory(BTreeSet::new()),
+            path,
+            field_name,
+            data_type,
+            params,
+        )
     }
 
     /// Opens the frozen file of a persisted index. An index from before frozen files is
@@ -291,16 +319,20 @@ impl InvertIndex {
 
     /// Writes the frozen file that `open_read_only` reads, from a consistent snapshot.
     pub fn freeze(&self) -> ZResult<()> {
-        let Store::Live { db, items } = &self.store else {
-            return Ok(());
-        };
-        let snapshot = db.snapshot();
-        let entries = snapshot.iter(items).map(|guard| {
-            guard
-                .into_inner()
-                .map_err(|e| Status::io_error(e.to_string()))
-        });
-        write_sorted_file(&frozen_path(&self.path), entries)
+        let path = frozen_path(&self.path);
+        match &self.store {
+            Store::Live { db, items } => {
+                let snapshot = db.snapshot();
+                let entries = snapshot.iter(items).map(|guard| {
+                    guard
+                        .into_inner()
+                        .map_err(|e| Status::io_error(e.to_string()))
+                });
+                write_sorted_file(&path, entries)
+            }
+            Store::Memory(keys) => write_sorted_file(&path, keys.iter().map(|k| Ok((k, b"")))),
+            Store::Frozen(_) => Ok(()),
+        }
     }
 
     /// Flush all writes to disk so they survive reopen.
@@ -312,15 +344,6 @@ impl InvertIndex {
             .map_err(|e| Status::io_error(e.to_string()))
     }
 
-    fn live_items(&self) -> ZResult<&fjall::Keyspace> {
-        match &self.store {
-            Store::Live { items, .. } => Ok(items),
-            Store::Frozen(_) => Err(Status::permission_denied(
-                "invert index of a persisted segment is read-only",
-            )),
-        }
-    }
-
     /// Keys `>= start` in order.
     fn keys_from<'a>(&'a self, start: &[u8]) -> Keys<'a> {
         match &self.store {
@@ -329,7 +352,13 @@ impl InvertIndex {
                     .map(Key::Live)
                     .map_err(|e| Status::io_error(e.to_string()))
             })),
-            Store::Frozen(file) => Box::new(file.iter_from(start).map(|(k, _)| Ok(Key::Frozen(k)))),
+            Store::Memory(keys) => Box::new(
+                keys.range::<[u8], _>((Bound::Included(start), Bound::Unbounded))
+                    .map(|k| Ok(Key::Borrowed(k))),
+            ),
+            Store::Frozen(file) => {
+                Box::new(file.iter_from(start).map(|(k, _)| Ok(Key::Borrowed(k))))
+            }
         }
     }
 
@@ -343,16 +372,30 @@ impl InvertIndex {
 
     // ── Write helpers ────────────────────────────────────────────────────
 
-    fn put_kv(&self, key: &[u8], value: &[u8]) -> ZResult<()> {
-        self.live_items()?
-            .insert(key, value)
-            .map_err(|e| Status::io_error(e.to_string()))
+    fn put_key(&mut self, key: Vec<u8>) -> ZResult<()> {
+        match &mut self.store {
+            Store::Live { items, .. } => items
+                .insert(key, b"")
+                .map_err(|e| Status::io_error(e.to_string())),
+            Store::Memory(keys) => {
+                keys.insert(key);
+                Ok(())
+            }
+            Store::Frozen(_) => Err(read_only()),
+        }
     }
 
-    fn del_kv(&self, key: &[u8]) -> ZResult<()> {
-        self.live_items()?
-            .remove(key)
-            .map_err(|e| Status::io_error(e.to_string()))
+    fn del_key(&mut self, key: &[u8]) -> ZResult<()> {
+        match &mut self.store {
+            Store::Live { items, .. } => items
+                .remove(key)
+                .map_err(|e| Status::io_error(e.to_string())),
+            Store::Memory(keys) => {
+                keys.remove(key);
+                Ok(())
+            }
+            Store::Frozen(_) => Err(read_only()),
+        }
     }
 
     /// Iterate all keys starting with `prefix` and collect doc_ids into a bitmap.
@@ -374,20 +417,20 @@ impl InvertIndex {
 
     // ── Public API ───────────────────────────────────────────────────────
 
-    pub fn insert(&self, doc_id: u64, value: &Value) -> ZResult<()> {
+    pub fn insert(&mut self, doc_id: u64, value: &Value) -> ZResult<()> {
         for key in self.keys_for(doc_id, value)? {
-            self.put_kv(&key, b"")?;
+            self.put_key(key)?;
         }
         Ok(())
     }
 
-    pub fn delete(&self, doc_id: u64, value: &Value) -> ZResult<()> {
+    pub fn delete(&mut self, doc_id: u64, value: &Value) -> ZResult<()> {
         // `insert` writes nothing for a value it cannot encode, so there is nothing to remove.
         let Ok(keys) = self.keys_for(doc_id, value) else {
             return Ok(());
         };
         for key in keys {
-            self.del_kv(&key)?;
+            self.del_key(&key)?;
         }
         Ok(())
     }
@@ -397,24 +440,24 @@ impl InvertIndex {
         self.keys_for(0, value).map(drop)
     }
 
-    pub fn insert_null_marker(&self, doc_id: u64) -> ZResult<()> {
+    pub fn insert_null_marker(&mut self, doc_id: u64) -> ZResult<()> {
         let key = encode_marker_key(&self.field_name, NS_NULL, doc_id);
-        self.put_kv(&key, b"")
+        self.put_key(key)
     }
 
-    pub fn delete_null_marker(&self, doc_id: u64) -> ZResult<()> {
+    pub fn delete_null_marker(&mut self, doc_id: u64) -> ZResult<()> {
         let key = encode_marker_key(&self.field_name, NS_NULL, doc_id);
-        self.del_kv(&key)
+        self.del_key(&key)
     }
 
-    pub fn insert_nonnull_marker(&self, doc_id: u64) -> ZResult<()> {
+    pub fn insert_nonnull_marker(&mut self, doc_id: u64) -> ZResult<()> {
         let key = encode_marker_key(&self.field_name, NS_NONNULL, doc_id);
-        self.put_kv(&key, b"")
+        self.put_key(key)
     }
 
-    pub fn delete_nonnull_marker(&self, doc_id: u64) -> ZResult<()> {
+    pub fn delete_nonnull_marker(&mut self, doc_id: u64) -> ZResult<()> {
         let key = encode_marker_key(&self.field_name, NS_NONNULL, doc_id);
-        self.del_kv(&key)
+        self.del_key(&key)
     }
 
     // Every key `insert` writes for `value`, built in full so a value that fails writes nothing.

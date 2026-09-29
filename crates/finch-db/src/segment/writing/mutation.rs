@@ -41,7 +41,7 @@ impl WritingSegment {
     }
 
     fn index_doc(&mut self, doc: &Doc) -> ZResult<()> {
-        for (field_name, idx) in &self.invert_indexes {
+        for (field_name, idx) in &mut self.invert_indexes {
             match doc.fields.get(field_name) {
                 Some(val) if !val.is_null() => {
                     idx.insert_nonnull_marker(doc.doc_id)?;
@@ -55,8 +55,8 @@ impl WritingSegment {
         self.add_vectors(doc.doc_id, doc)
     }
 
-    fn remove_invert_entries(&self, old: &Doc) -> ZResult<()> {
-        for (field_name, idx) in &self.invert_indexes {
+    fn remove_invert_entries(&mut self, old: &Doc) -> ZResult<()> {
+        for (field_name, idx) in &mut self.invert_indexes {
             match old.fields.get(field_name) {
                 Some(v) if !v.is_null() => {
                     idx.delete(old.doc_id, v)?;

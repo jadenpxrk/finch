@@ -52,10 +52,11 @@ fn test_flush_next_segment_failure_does_not_advance_manifest() {
         .unwrap();
     assert!(statuses.iter().all(|s| s.is_ok()), "statuses={statuses:?}");
 
-    std::fs::write(path.join("seg_1"), b"block next writing segment").unwrap();
+    // A directory where the next writing segment's WAL goes makes creating it fail.
+    std::fs::create_dir(path.join("wal_1.log")).unwrap();
     assert!(col.flush().is_err());
     drop(col);
-    std::fs::remove_file(path.join("seg_1")).unwrap();
+    std::fs::remove_dir(path.join("wal_1.log")).unwrap();
 
     let read_only = CollectionOptions {
         read_only: true,

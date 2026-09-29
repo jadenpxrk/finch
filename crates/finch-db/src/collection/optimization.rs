@@ -407,8 +407,7 @@ impl Collection {
         self.commit_optimize_outcome(outcome)
     }
 
-    // Avoid reusing the currently-open writing segment id. Reusing it causes
-    // fjall invert-index lock conflicts during optimize.
+    // Avoid reusing the open writing segment id: its flush writes `seg_{id}`.
     fn output_segment_ids(&self, version: &Version) -> OutputSegmentIds {
         let active_writing = self.writing_segment.read().id;
         let reserved: HashSet<u32> = version

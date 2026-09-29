@@ -16,7 +16,7 @@ fn test_lookup_eq_string_is_exact_not_prefix() {
     let path = temp_db_dir("lookup_eq_string_exact");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "tag".to_string(),
         DataType::String,
@@ -38,7 +38,7 @@ fn test_lookup_range_bounded_early_exits() {
     let path = temp_db_dir("lookup_range_bounded");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "n".to_string(),
         DataType::Int32,
@@ -77,7 +77,7 @@ fn test_array_field_indexes_elements_and_length() {
     let path = temp_db_dir("array_string_elements");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "tags".to_string(),
         DataType::ArrayString,
@@ -113,7 +113,7 @@ fn test_array_len_range_is_bounded() {
     let path = temp_db_dir("array_len_bounded");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "xs".to_string(),
         DataType::ArrayInt32,
@@ -153,7 +153,7 @@ fn test_lookup_range_float32_orders_negatives_correctly() {
     let path = temp_db_dir("lookup_range_f32_neg");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "x".to_string(),
         DataType::Float32,
@@ -194,7 +194,7 @@ fn test_float_negative_zero_is_canonicalized_for_equality() {
     let path = temp_db_dir("float_neg_zero_eq");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "x".to_string(),
         DataType::Float32,
@@ -230,7 +230,7 @@ fn test_normalize_value_allows_float_prefilter_literals() {
     let path = temp_db_dir("normalize_float");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "x".to_string(),
         DataType::Float32,
@@ -258,7 +258,7 @@ fn test_lookup_ne_excludes_nulls_like_sql_semantics() {
     let path = temp_db_dir("lookup_ne_nulls");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "x".to_string(),
         DataType::Int32,
@@ -281,4 +281,56 @@ fn test_lookup_ne_excludes_nulls_like_sql_semantics() {
     assert!(bm.contains(2));
 
     let _ = fs::remove_dir_all(&path);
+}
+
+#[test]
+fn test_in_memory_index_freezes_to_the_same_file_as_fjall() {
+    let dir = temp_db_dir("in_memory_matches_fjall");
+    fs::create_dir_all(&dir).unwrap();
+    let params = InvertIndexParams {
+        enable_range_optimization: true,
+        enable_extended_wildcard: true,
+    };
+    let (live_path, mem_path) = (dir.join("live"), dir.join("mem"));
+    let mut live = InvertIndex::open(
+        &live_path,
+        "tags".into(),
+        DataType::ArrayString,
+        params.clone(),
+    )
+    .unwrap();
+    let mut mem = InvertIndex::in_memory(&mem_path, "tags".into(), DataType::ArrayString, params);
+    let tags = |xs: &[&str]| Value::ArrayString(xs.iter().map(|s| s.to_string()).collect());
+    for idx in [&mut live, &mut mem] {
+        idx.insert(1, &tags(&["red", "blue"])).unwrap();
+        idx.insert_nonnull_marker(1).unwrap();
+        idx.insert(2, &tags(&["red"])).unwrap();
+        idx.insert_nonnull_marker(2).unwrap();
+        idx.insert_null_marker(3).unwrap();
+        idx.delete(1, &tags(&["red", "blue"])).unwrap();
+        idx.delete_nonnull_marker(1).unwrap();
+        idx.insert(1, &tags(&["green"])).unwrap();
+        idx.insert_nonnull_marker(1).unwrap();
+    }
+    assert_eq!(
+        mem.lookup_eq(&Value::String("red".into())).unwrap(),
+        live.lookup_eq(&Value::String("red".into())).unwrap()
+    );
+    assert_eq!(
+        mem.lookup_array_len_gt(0, false).unwrap(),
+        live.lookup_array_len_gt(0, false).unwrap()
+    );
+    assert_eq!(
+        mem.lookup_is_null().unwrap(),
+        live.lookup_is_null().unwrap()
+    );
+    assert!(!mem_path.exists(), "in-memory index touched disk");
+
+    live.freeze().unwrap();
+    mem.freeze().unwrap();
+    assert_eq!(
+        fs::read(frozen_path(&mem_path)).unwrap(),
+        fs::read(frozen_path(&live_path)).unwrap()
+    );
+    let _ = fs::remove_dir_all(&dir);
 }

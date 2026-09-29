@@ -20,6 +20,7 @@ use crate::collection_files::{
 use crate::delete_store::DeleteStore;
 use crate::id_map::IdMap;
 use crate::index::IndexBuilder;
+use crate::invert::persisted_index_exists;
 use crate::segment::persisted::PersistedSegment;
 use crate::segment::writing::{InvertIndexMeta, WritingSegment, WrittenSegmentMeta};
 use crate::version::{PersistedSegmentVersion, Version, VersionManager, FORMAT_VERSION};
@@ -210,7 +211,7 @@ fn segment_invert_paths(
             continue;
         };
         let p = seg_path.join(format!("{}_invert", field.name));
-        if !p.exists() {
+        if !persisted_index_exists(&p) {
             return Err(Status::io_error(format!(
                 "segment {} invert index missing for field {} at {:?}",
                 segment_id, field.name, p
@@ -261,8 +262,7 @@ fn load_segment_vector_indexes(
 }
 
 // Format 0 keyed binary terms by a length prefix, so range scans ordered them by length first.
-// Rebuilds those indexes in persisted segments and clears the writing segment's, which WAL
-// replay refills.
+// Rebuilds those indexes in persisted segments and deletes the writing segment's old fjall copy.
 fn rebuild_binary_invert_indexes(
     path: &Path,
     schema: &CollectionSchema,
@@ -562,8 +562,7 @@ impl Collection {
             version_manager.flush(&upgraded)?;
         }
 
-        // Create writing segment. For read-only opens, keep it in-memory only
-        // (no invert-index fjall handles) to avoid writer locks.
+        // A read-only open replays no WAL, so its writing segment stays empty.
         if options.read_only {
             ensure_no_pending_wal(path, writing_seg_id)?;
         }
@@ -652,7 +651,7 @@ fn assign_default_index_params(mut schema: CollectionSchema) -> CollectionSchema
 mod tests {
     use finch_types::{Doc, FieldSchema, InvertIndexParams, Value, VectorQuery};
 
-    use crate::invert::InvertIndex;
+    use crate::invert::{frozen_path, InvertIndex};
 
     use super::*;
 
@@ -726,7 +725,7 @@ mod tests {
         drop(manager);
         let seg_id = old.persisted_segments[0].segment_id;
         let idx_path = path.join(format!("seg_{seg_id}/payload_invert"));
-        fs::remove_dir_all(&idx_path).unwrap();
+        fs::remove_file(frozen_path(&idx_path)).unwrap();
         let empty =
             InvertIndex::open(&idx_path, "payload".into(), DataType::Binary, params).unwrap();
         empty.sync().unwrap();

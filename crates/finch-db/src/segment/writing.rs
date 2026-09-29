@@ -13,7 +13,6 @@ use finch_types::{
     CollectionSchema, DataType, Doc, InvertIndexParams, MetricType, QuantizeType, Status, ZResult,
 };
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

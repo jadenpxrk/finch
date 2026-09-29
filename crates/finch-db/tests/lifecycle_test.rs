@@ -154,10 +154,13 @@ fn test_open_fails_when_segment_invert_index_is_missing() {
     col.flush().unwrap();
     drop(col);
 
-    // Persisted segment layout is deterministic: seg_{id}/{field}_invert
-    let invert_dir = path.join("seg_0").join("name_invert");
-    assert!(invert_dir.exists(), "expected invert dir at {invert_dir:?}");
-    std::fs::remove_dir_all(&invert_dir).unwrap();
+    // Persisted segment layout is deterministic: seg_{id}/{field}_invert.keys
+    let invert_file = path.join("seg_0").join("name_invert.keys");
+    assert!(
+        invert_file.exists(),
+        "expected invert file at {invert_file:?}"
+    );
+    std::fs::remove_file(&invert_file).unwrap();
 
     assert!(Collection::open(&path, CollectionOptions::default()).is_err());
 }

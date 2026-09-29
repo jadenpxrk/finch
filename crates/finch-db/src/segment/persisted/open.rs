@@ -1,4 +1,5 @@
 use super::*;
+use crate::invert::persisted_index_exists;
 
 impl PersistedSegment {
     pub fn open(meta: &WrittenSegmentMeta) -> ZResult<Self> {
@@ -27,7 +28,7 @@ impl PersistedSegment {
         // Persisted segments are immutable: open invert indexes read-only.
         let mut invert_indexes: HashMap<String, Arc<InvertIndex>> = HashMap::new();
         for (field_name, inv) in &meta.invert_paths {
-            if !inv.path.exists() {
+            if !persisted_index_exists(&inv.path) {
                 continue;
             }
             let idx = InvertIndex::open_read_only(
@@ -51,10 +52,6 @@ impl PersistedSegment {
     }
 
     /// Open a persisted segment without opening any invert indexes.
-    ///
-    /// This is used during flush/index-build paths to avoid attempting to open
-    /// fjall-backed invert indexes while the same segment is still the active
-    /// writing segment (fjall file locks would conflict).
     pub fn open_forward_only(meta: &WrittenSegmentMeta) -> ZResult<Self> {
         Self::open_forward_only_with_mmap(meta, true)
     }
@@ -95,7 +92,7 @@ impl PersistedSegment {
     pub fn load_invert_indexes(&self, meta: &WrittenSegmentMeta) -> ZResult<()> {
         let mut invert_indexes: HashMap<String, Arc<InvertIndex>> = HashMap::new();
         for (field_name, inv) in &meta.invert_paths {
-            if !inv.path.exists() {
+            if !persisted_index_exists(&inv.path) {
                 continue;
             }
             let idx = InvertIndex::open_read_only(

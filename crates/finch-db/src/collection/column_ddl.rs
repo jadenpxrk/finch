@@ -159,14 +159,14 @@ impl Collection {
             };
             let idx_path = seg_path.join(format!("{}_invert", field.name));
             let _ = fs::remove_dir_all(&idx_path);
-            let idx = InvertIndex::open(
+            let mut idx = InvertIndex::open(
                 &idx_path,
                 field.name.clone(),
                 field.data_type,
                 params.clone(),
             )?;
 
-            fill_invert_index(&idx, seg, &field.name)?;
+            fill_invert_index(&mut idx, seg, &field.name)?;
             idx.sync()?;
             idx.freeze()?;
             drop(idx);
@@ -374,7 +374,6 @@ impl Collection {
                 }
                 let committed = self.cur_version();
                 self.cleanup_empty_uncommitted_segment_dirs_best_effort(&committed);
-                self.reopen_writing_invert_indexes_best_effort();
             },
         )
     }

@@ -60,13 +60,13 @@ pub(super) fn build_segment_invert_index(
     // Rebuild from scratch (create_index is only called when needed
     // or when rebuild=true).
     let _ = std::fs::remove_dir_all(idx_path);
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         idx_path,
         target.field.to_string(),
         target.data_type,
         target.params.clone(),
     )?;
-    fill_invert_index(&idx, seg, target.field)?;
+    fill_invert_index(&mut idx, seg, target.field)?;
 
     // Flush Durability::None writes before reopening read-only.
     idx.sync()?;
@@ -237,7 +237,6 @@ impl Collection {
                 },
                 |new_writing| {
                     drop(new_writing);
-                    self.reopen_writing_invert_indexes_best_effort();
                     abort();
                 },
             );
@@ -315,9 +314,6 @@ impl Collection {
         drop(segs);
 
         // Ensure the active writing segment uses the updated schema.
-        // For vector index-param changes, avoid re-opening fjall-backed invert
-        // indexes (can conflict with existing handles) and only refresh the
-        // in-memory vector stores.
         self.commit_index_schema_update(&new_version, is_invert, || remove_index_dirs(&new_paths))?;
         prepared_indexes.publish(field);
         remove_index_dirs(&old_paths);

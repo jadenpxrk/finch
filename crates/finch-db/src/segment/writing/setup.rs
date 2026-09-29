@@ -82,21 +82,15 @@ impl WritingSegment {
         let (dense_indexes, binary32_indexes, binary64_indexes, sparse_indexes) =
             Self::init_vector_indexes(&schema)?;
 
-        // Persist invert indexes under the writing segment directory, matching
-        // `dump()`'s `invert_paths` layout: `seg_{id}/{field}_invert`.
+        // Kept in memory and refilled by WAL replay; `dump()` freezes each to `seg_{id}/{field}_invert`.
         let seg_path = invert_base_path.join(format!("seg_{}", id));
-        fs::create_dir_all(&seg_path).map_err(|e| Status::io_error(e.to_string()))?;
-        // Best-effort crash safety: persist the segment directory entry.
-        sync_dir_best_effort(&seg_path);
-        sync_dir_best_effort(invert_base_path);
-
         for field in schema.inverted_index_fields() {
             let Some(finch_types::IndexParams::Invert(params)) = field.index_params.as_ref() else {
                 continue;
             };
             let path = seg_path.join(format!("{}_invert", field.name));
             let idx =
-                InvertIndex::open(&path, field.name.clone(), field.data_type, params.clone())?;
+                InvertIndex::in_memory(&path, field.name.clone(), field.data_type, params.clone());
             invert_indexes.insert(field.name.clone(), idx);
         }
 

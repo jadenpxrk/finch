@@ -45,49 +45,6 @@ impl WritingSegment {
         })
     }
 
-    /// Flush all Durability::None writes in every invert index to disk.
-    pub(crate) fn sync_invert_indexes(&self) -> ZResult<()> {
-        for idx in self.invert_indexes.values() {
-            idx.sync()?;
-        }
-        Ok(())
-    }
-
-    /// Drop (close) all fjall-backed invert index handles for this writing segment.
-    ///
-    /// This is used during flush/DDL paths to avoid having multiple writable
-    /// fjall instances open concurrently (which can fail under sandboxed
-    /// environments with strict file-lock limits).
-    pub(crate) fn drop_invert_indexes(&mut self) {
-        self.invert_indexes.clear();
-    }
-
-    /// Re-open invert indexes for this writing segment from the on-disk layout.
-    ///
-    /// Only used as a best-effort rollback if a flush/DDL operation fails after
-    /// dropping invert index handles.
-    pub(crate) fn reopen_invert_indexes(&mut self, invert_base_path: &Path) -> ZResult<()> {
-        if !self.invert_indexes.is_empty() {
-            return Ok(());
-        }
-
-        let seg_path = invert_base_path.join(format!("seg_{}", self.id));
-        fs::create_dir_all(&seg_path).map_err(|e| Status::io_error(e.to_string()))?;
-        sync_dir_best_effort(&seg_path);
-        sync_dir_best_effort(invert_base_path);
-
-        for field in self.schema.inverted_index_fields() {
-            let Some(finch_types::IndexParams::Invert(params)) = field.index_params.as_ref() else {
-                continue;
-            };
-            let path = seg_path.join(format!("{}_invert", field.name));
-            let idx =
-                InvertIndex::open(&path, field.name.clone(), field.data_type, params.clone())?;
-            self.invert_indexes.insert(field.name.clone(), idx);
-        }
-        Ok(())
-    }
-
     /// Apply a new schema to this writing segment without re-opening invert index DBs.
     ///
     /// This is primarily used when schema changes only affect vector index params

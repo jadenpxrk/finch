@@ -93,7 +93,11 @@ fn count_deleted_docs_in_segment(
 }
 
 // Writes every doc of `seg` into `idx`, with null markers for docs lacking the field.
-fn fill_invert_index(idx: &InvertIndex, seg: &PersistedSegment, field_name: &str) -> ZResult<()> {
+fn fill_invert_index(
+    idx: &mut InvertIndex,
+    seg: &PersistedSegment,
+    field_name: &str,
+) -> ZResult<()> {
     let doc_ids = seg.forward_store.read().all_doc_ids();
     let docs = seg.fetch_docs(&doc_ids)?;
     for (doc_id, maybe_doc) in doc_ids.into_iter().zip(docs.into_iter()) {
@@ -189,21 +193,6 @@ impl Collection {
             return Ok(());
         };
         wal.append(entry)
-    }
-}
-
-impl Drop for Collection {
-    fn drop(&mut self) {
-        // The id map needs no sync: open rebuilds it from the checkpoint and the WAL.
-        if !self.options.read_only {
-            // Not fatal: WAL replay on the next open re-inserts every writing-segment key.
-            if let Err(e) = self.writing_segment.write().sync_invert_indexes() {
-                tracing::warn!(
-                    "could not sync writing-segment invert indexes on close: {}",
-                    e
-                );
-            }
-        }
     }
 }
 

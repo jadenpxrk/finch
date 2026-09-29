@@ -70,7 +70,7 @@ fn run_array_numbers_case(
         enable_range_optimization: true,
         enable_extended_wildcard: false,
     };
-    let idx = InvertIndex::open(&path, "xs".to_string(), data_type, params.clone()).unwrap();
+    let mut idx = InvertIndex::open(&path, "xs".to_string(), data_type, params.clone()).unwrap();
 
     let n: u32 = 2000;
     let nulls = n / 100;
@@ -239,7 +239,7 @@ fn test_invert_int32_eq_and_range_lookups_exclude_null_docs() {
     let path = temp_db_dir("seq_i32_nulls");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "age".to_string(),
         DataType::Int32,
@@ -311,7 +311,7 @@ fn test_invert_strings_answer_prefix_suffix_and_range_lookups() {
     let path = temp_db_dir("strings_like");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(
+    let mut idx = InvertIndex::open(
         &path,
         "tag".to_string(),
         DataType::String,
@@ -399,7 +399,8 @@ fn test_invert_bools_and_bool_arrays_answer_eq_ne_and_contain_lookups() {
     let path = temp_db_dir("bools_scalar");
     fs::create_dir_all(&path).unwrap();
 
-    let idx = InvertIndex::open(&path, "b".to_string(), DataType::Bool, params.clone()).unwrap();
+    let mut idx =
+        InvertIndex::open(&path, "b".to_string(), DataType::Bool, params.clone()).unwrap();
     let n: u32 = 1000;
     for doc_id in 0..n {
         idx.insert(doc_id as u64, &Value::Bool(generate_bool(doc_id)))
@@ -433,7 +434,7 @@ fn test_invert_bools_and_bool_arrays_answer_eq_ne_and_contain_lookups() {
     let path = temp_db_dir("bool_arrays");
     fs::create_dir_all(&path).unwrap();
 
-    let idx =
+    let mut idx =
         InvertIndex::open(&path, "ba".to_string(), DataType::ArrayBool, params.clone()).unwrap();
     for doc_id in 0..n {
         idx.insert(
@@ -565,7 +566,7 @@ fn run_cyclic_case(
         enable_range_optimization: true,
         enable_extended_wildcard: false,
     };
-    let idx = InvertIndex::open(&path, "x".to_string(), data_type, params).unwrap();
+    let mut idx = InvertIndex::open(&path, "x".to_string(), data_type, params).unwrap();
 
     let n: u32 = 1000;
     let nulls = if include_nulls { n / 100 } else { 0 };

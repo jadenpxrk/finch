@@ -62,6 +62,22 @@ fn write_legacy_id_map(dir: &Path, entries: &[(&str, u64)]) {
     db.persist(fjall::PersistMode::SyncAll).unwrap();
 }
 
+// Writes a pre-frozen-file `label` invert index: a fjall directory where every doc is "a".
+fn write_legacy_label_invert(dir: &Path, doc_ids: &[u64]) {
+    let mut idx = InvertIndex::open(
+        dir,
+        "label".to_string(),
+        DataType::String,
+        InvertIndexParams::default(),
+    )
+    .unwrap();
+    for &doc_id in doc_ids {
+        idx.insert_nonnull_marker(doc_id).unwrap();
+        idx.insert(doc_id, &Value::String("a".to_string())).unwrap();
+    }
+    idx.sync().unwrap();
+}
+
 #[test]
 fn flush_during_concurrent_writes_then_reopen_sees_every_key() {
     let path = temp_dir("idmap_ckpt_concurrent");
@@ -195,6 +211,8 @@ fn old_format_manifest_opens() {
     // Older releases also kept persisted invert indexes only as fjall directories.
     let frozen_invert = path.join("seg_0").join("label_invert.keys");
     std::fs::remove_file(&frozen_invert).unwrap();
+    let doc_ids: Vec<u64> = ids.iter().map(|(_, id)| *id).collect();
+    write_legacy_label_invert(&path.join("seg_0").join("label_invert"), &doc_ids);
 
     let err = match Collection::open(&path, read_only()) {
         Ok(_) => panic!("read-only open of an old-format id map must be refused"),

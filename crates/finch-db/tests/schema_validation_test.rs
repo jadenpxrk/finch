@@ -161,7 +161,7 @@ fn test_invert_index_tracks_null_and_nonnull_for_is_null_filters() {
             continue;
         }
         let inv_path = entry.path().join("tag_invert");
-        if !inv_path.exists() {
+        if !entry.path().join("tag_invert.keys").exists() {
             continue;
         }
         let ro = InvertIndex::open_read_only(
