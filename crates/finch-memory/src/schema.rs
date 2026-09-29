@@ -1,5 +1,6 @@
 use finch_types::{
-    CollectionSchema, DataType, FieldSchema, HnswIndexParams, IndexParams, MetricType,
+    CollectionSchema, DataType, FieldSchema, HnswIndexParams, IndexParams, InvertIndexParams,
+    MetricType,
 };
 
 pub const EPISODES_COLLECTION: &str = "memory_episodes";
@@ -19,8 +20,19 @@ pub const DEPENDENCY_TRACES_COLLECTION: &str = "memory_dependency_traces";
 pub const SLOTS_COLLECTION: &str = "memory_slots";
 pub const SLOT_ALIASES_COLLECTION: &str = "memory_slot_aliases";
 
+/// String fields with an inverted index in every memory collection that has them.
+pub const INDEXED_STRING_FIELDS: [&str; 3] = ["space_id", "slot_id", "subject_entity_id"];
+
+pub(crate) fn string_index_params() -> IndexParams {
+    IndexParams::Invert(InvertIndexParams::default())
+}
+
 fn string_field(name: &str) -> FieldSchema {
-    FieldSchema::new(name, DataType::String).nullable()
+    let field = FieldSchema::new(name, DataType::String).nullable();
+    if INDEXED_STRING_FIELDS.contains(&name) {
+        return field.with_index(string_index_params());
+    }
+    field
 }
 
 fn i64_field(name: &str) -> FieldSchema {

@@ -405,4 +405,5 @@ mod rule_time;
 mod rules;
 mod scope_keys;
 mod state_protocol;
+mod string_indexes;
 mod write_integrity;

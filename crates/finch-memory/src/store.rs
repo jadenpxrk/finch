@@ -17,11 +17,12 @@ use crate::row::{
 use crate::schema::{
     artifact_schema, claim_schema, correction_schema, dependency_trace_schema, edge_schema,
     entity_alias_schema, entity_schema, episode_schema, profile_schema, slot_alias_schema,
-    slot_schema, span_schema, span_schema_with_hnsw, state_record_schema, term_schema,
-    ARTIFACTS_COLLECTION, CLAIMS_COLLECTION, CORRECTIONS_COLLECTION, DEPENDENCY_TRACES_COLLECTION,
-    EDGES_COLLECTION, ENTITIES_COLLECTION, ENTITY_ALIASES_COLLECTION, EPISODES_COLLECTION,
-    PROFILES_COLLECTION, RULES_COLLECTION, SLOTS_COLLECTION, SLOT_ALIASES_COLLECTION,
-    SPANS_COLLECTION, STATE_RECORDS_COLLECTION, TERMS_COLLECTION,
+    slot_schema, span_schema, span_schema_with_hnsw, state_record_schema, string_index_params,
+    term_schema, ARTIFACTS_COLLECTION, CLAIMS_COLLECTION, CORRECTIONS_COLLECTION,
+    DEPENDENCY_TRACES_COLLECTION, EDGES_COLLECTION, ENTITIES_COLLECTION, ENTITY_ALIASES_COLLECTION,
+    EPISODES_COLLECTION, INDEXED_STRING_FIELDS, PROFILES_COLLECTION, RULES_COLLECTION,
+    SLOTS_COLLECTION, SLOT_ALIASES_COLLECTION, SPANS_COLLECTION, STATE_RECORDS_COLLECTION,
+    TERMS_COLLECTION,
 };
 use crate::state::{
     aggregate_support_state, AnswerSlotSupport, AnswerSupportContract, AnswerSupportState,
@@ -838,6 +839,25 @@ impl MemoryStore {
             poisoned: AtomicBool::new(false),
         };
         store.recover_pending_state_mutation()?;
+        if !options.read_only {
+            ensure_string_indexes(&[
+                &store.episodes,
+                &store.spans,
+                &store.artifacts,
+                &store.corrections,
+                &store.terms,
+                &store.claims,
+                &store.profiles,
+                &store.entities,
+                &store.entity_aliases,
+                &store.edges,
+                &store.rules,
+                &store.state_records,
+                &store.dependency_traces,
+                &store.slots,
+                &store.slot_aliases,
+            ])?;
+        }
         Ok(store)
     }
 
@@ -1044,6 +1064,53 @@ fn open_or_create_collection(
         )));
     }
     Collection::create_and_open(path, schema(), options.clone())
+}
+
+/// Adds the string indexes older stores lack, only after every missing column passes the NUL check.
+fn ensure_string_indexes(collections: &[&Arc<Collection>]) -> ZResult<()> {
+    let mut missing = Vec::new();
+    for collection in collections {
+        let schema = collection.schema_info();
+        for field in INDEXED_STRING_FIELDS {
+            if schema
+                .get_field(field)
+                .is_some_and(|f| f.index_params.is_none())
+            {
+                reject_nul_values(collection, &schema.name, field)?;
+                missing.push((collection, field));
+            }
+        }
+    }
+    for (collection, field) in missing {
+        collection.create_index(
+            field,
+            string_index_params(),
+            CreateIndexOptions {
+                rebuild: false,
+                concurrency: None,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+// An inverted index ends each string term with NUL, so it cannot hold a value containing one.
+fn reject_nul_values(collection: &Collection, name: &str, field: &str) -> ZResult<()> {
+    let query =
+        VectorQuery::new("", Vec::new(), usize::MAX).with_output_fields(output_fields(&[field]));
+    let has_nul = collection.scan_filter_only(query)?.iter().any(|doc| {
+        doc.fields
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.contains('\0'))
+    });
+    if has_nul {
+        return Err(Status::invalid_argument(format!(
+            "memory collection `{name}` field `{field}` has a value with a NUL character, \
+             so its inverted index cannot be added; the store was left unchanged"
+        )));
+    }
+    Ok(())
 }
 
 fn insert_one(collection: &Collection, doc: Doc) -> ZResult<()> {
