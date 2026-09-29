@@ -84,3 +84,8 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+# fjall 3.0.3 to 3.1.10 can deadlock in Database::drop (fjall issue 260). This pins the merged fix
+# until it ships in a release; remove the override and raise the version then.
+[patch.crates-io]
+fjall = { git = "https://github.com/fjall-rs/fjall", rev = "b07c286b0e7a44539e397b3ace986d98533bd4a4" }

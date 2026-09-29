@@ -133,12 +133,12 @@ form on 2026-09-26 scored as follows.
 
 ## Known limitations
 
-Dropping a collection can hang. Each collection keeps its primary-key map in fjall, and fjall
-versions 3.0 to 3.1.10 can block forever while a database shuts down. The report is
+Each collection keeps its primary-key map in fjall, and fjall releases 3.0 to 3.1.10 can block
+forever while a database shuts down. The report is
 [fjall issue 260](https://github.com/fjall-rs/fjall/issues/260) and the fix is
-[fjall pull request 321](https://github.com/fjall-rs/fjall/pull/321). The hang is rare. In a
-test that opened and dropped about 7,500 collections, it happened once. When the fix ships,
-Finch will move to that version.
+[fjall pull request 321](https://github.com/fjall-rs/fjall/pull/321), merged but not yet
+released. Finch builds fjall from that merged commit through a source override in `Cargo.toml`
+until a release contains it.
 
 ## Status
 
