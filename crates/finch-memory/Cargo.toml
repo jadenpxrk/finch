@@ -1,0 +1,12 @@
+[package]
+name = "finch-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+finch-db.workspace = true
+finch-types.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true

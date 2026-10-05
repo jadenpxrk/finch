@@ -1,0 +1,19 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Optional
+
+from ..._finch import PyQueryParam as QueryParam
+
+@dataclass(frozen=True)
+class VectorQuery:
+    field_name: str
+    id: Optional[str] = ...
+    vector: Any = ...
+    param: Optional[QueryParam] = ...
+    def has_id(self) -> bool: ...
+    def has_vector(self) -> bool: ...
+    def _validate(self) -> None: ...
+
+__all__: list[str]
+

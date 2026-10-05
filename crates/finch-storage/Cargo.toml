@@ -1,0 +1,15 @@
+[package]
+name = "finch-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+finch-types.workspace = true
+arrow.workspace = true
+parquet.workspace = true
+memmap2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+byteorder.workspace = true

@@ -1,0 +1,35 @@
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Project-local artifacts
+.env
+.env.*
+!.env.example
+logs/
+/tmp/
+.serena/
+
+# agent session scratch
+.agents/

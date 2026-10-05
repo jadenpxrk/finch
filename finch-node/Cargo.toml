@@ -1,0 +1,21 @@
+[package]
+name = "finch-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+finch-types.workspace = true
+finch-db.workspace = true
+finch-memory.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+half.workspace = true
+
+[build-dependencies]
+napi-build = "2"

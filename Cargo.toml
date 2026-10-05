@@ -1,0 +1,91 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/finch-types",
+    "crates/finch-proto",
+    "crates/finch-core",
+    "crates/finch-memory",
+    "crates/finch-storage",
+    "crates/finch-db",
+    "finch-py",
+    "finch-node",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/jadenpxrk/finch"
+
+[workspace.dependencies]
+# Internal crates
+finch-types = { path = "crates/finch-types" }
+finch-proto = { path = "crates/finch-proto" }
+finch-core = { path = "crates/finch-core" }
+finch-memory = { path = "crates/finch-memory" }
+finch-storage = { path = "crates/finch-storage" }
+finch-db = { path = "crates/finch-db" }
+
+# Columnar data
+arrow = { version = "55", features = ["ipc"] }
+parquet = { version = "55", features = ["arrow"] }
+
+# Key-value store
+fjall = "3"
+
+# Compressed bitmaps
+roaring = "0.10"
+
+# Protobuf
+prost = "0.13"
+
+# Float16
+half = { version = "2", features = ["std", "serde"] }
+
+# SQL parsing
+sqlparser = "0.50"
+
+# Python bindings
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+# Node.js bindings
+napi = { version = "2", features = ["napi4", "serde-json"] }
+napi-derive = "2"
+
+# Parallelism
+rayon = "1.10"
+parking_lot = "0.12"
+
+# Memory-mapped files
+memmap2 = "0.9"
+
+# File locking
+fs4 = { version = "0.8", features = ["sync"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error types
+thiserror = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Utilities
+bytes = "1"
+byteorder = "1"
+rand = "0.8"
+libc = "0.2"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_SystemInformation"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+# fjall 3.0.3 to 3.1.10 can deadlock in Database::drop (fjall issue 260). This pins the merged fix
+# until it ships in a release; remove the override and raise the version then.
+[patch.crates-io]
+fjall = { git = "https://github.com/fjall-rs/fjall", rev = "b07c286b0e7a44539e397b3ace986d98533bd4a4" }

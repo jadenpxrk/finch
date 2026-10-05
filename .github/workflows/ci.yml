@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.93.1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      # The bindings build in their own jobs.
+      - name: Test Rust crates
+        run: cargo test -p finch-types -p finch-proto -p finch-core -p finch-storage -p finch-db -p finch-memory --all-targets
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          components: clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+
+  python-binding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.93.1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create venv + install test deps
+        run: |
+          rm -rf .venv
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip maturin numpy
+
+      - name: Build/install finch Python extension
+        working-directory: finch-py
+        run: ../.venv/bin/maturin develop -q
+
+      - name: Import finch
+        run: .venv/bin/python -c "import finch; assert hasattr(finch, 'CollectionSchema')"
+
+      - name: Python smoke tests
+        run: .venv/bin/python -m unittest discover -s finch-py/python/tests -p "test_*.py" -v

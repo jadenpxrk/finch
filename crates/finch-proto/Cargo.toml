@@ -1,0 +1,11 @@
+[package]
+name = "finch-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+finch-types.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+prost.workspace = true
