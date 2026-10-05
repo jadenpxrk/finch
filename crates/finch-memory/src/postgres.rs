@@ -567,6 +567,12 @@ impl MemoryTable for PgTable {
         )
     }
 
+    fn scan_prefix(&self, mut query: VectorQuery, limit: usize) -> ZResult<Vec<Arc<Doc>>> {
+        query.query_vector.clear();
+        query.topk = limit;
+        self.query(query)
+    }
+
     fn query(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
         let columns = self.select_list(Some(&query))?;
         let limit = i64::try_from(query.topk).unwrap_or(i64::MAX);

@@ -18,6 +18,8 @@ pub trait MemoryTable: Send + Sync {
     fn fetch(&self, pks: Vec<String>) -> ZResult<HashMap<String, Arc<Doc>>>;
     /// Every row matching the filter, oldest write first; `topk` is not applied.
     fn scan_filter_only(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>>;
+    /// The first `limit` rows `scan_filter_only` returns.
+    fn scan_prefix(&self, query: VectorQuery, limit: usize) -> ZResult<Vec<Arc<Doc>>>;
     /// Nearest rows by cosine distance in `score`, or with no query vector the first `topk`
     /// matching rows, oldest write first.
     fn query(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>>;
@@ -49,6 +51,13 @@ impl MemoryTable for Collection {
 
     fn scan_filter_only(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
         Collection::scan_filter_only(self, query)
+    }
+
+    // A collection cannot stop a filter scan early, so it scans and truncates.
+    fn scan_prefix(&self, query: VectorQuery, limit: usize) -> ZResult<Vec<Arc<Doc>>> {
+        let mut docs = Collection::scan_filter_only(self, query)?;
+        docs.truncate(limit);
+        Ok(docs)
     }
 
     fn query(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
@@ -95,6 +104,10 @@ impl<T: MemoryTable + ?Sized> MemoryTable for Arc<T> {
 
     fn scan_filter_only(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
         (**self).scan_filter_only(query)
+    }
+
+    fn scan_prefix(&self, query: VectorQuery, limit: usize) -> ZResult<Vec<Arc<Doc>>> {
+        (**self).scan_prefix(query, limit)
     }
 
     fn query(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {

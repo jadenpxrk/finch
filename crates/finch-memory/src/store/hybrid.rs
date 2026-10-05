@@ -52,23 +52,19 @@ impl MemoryStore {
         if query_terms.is_empty() {
             return Ok(Vec::new());
         }
-        let posting_chunks = self.term_postings(scope, &query_terms)?;
-        let span_ids = posting_chunks
-            .iter()
-            .flatten()
-            .map(|posting| posting.span_id.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let by_id = self
-            .fetch_spans_by_ids(scope, &span_ids, at_ms)?
-            .into_iter()
-            .map(|span| (span.id.clone(), span))
-            .collect::<BTreeMap<_, _>>();
-        let postings = posting_chunks
-            .into_iter()
-            .flat_map(|chunk| live_posting_prefix(chunk, &by_id, scan_limit.max(k)))
-            .collect::<Vec<_>>();
+        let mut by_id = BTreeMap::new();
+        let mut checked = BTreeSet::new();
+        let mut postings = Vec::new();
+        for terms in query_terms.chunks(MAX_CONTAINS_FILTER_VALUES) {
+            postings.extend(self.live_term_postings(
+                scope,
+                terms,
+                scan_limit.max(k),
+                at_ms,
+                &mut by_id,
+                &mut checked,
+            )?);
+        }
         if postings.is_empty() {
             return Ok(Vec::new());
         }
@@ -92,31 +88,55 @@ impl MemoryStore {
         Ok(hits)
     }
 
-    /// Every posting of `terms`, one list per filter chunk, in storage order.
-    fn term_postings(
+    /// The shortest storage-order prefix of `terms`' postings that holds `limit` postings of live
+    /// spans. Postings are read in doubling pages, so a common term does not load every posting;
+    /// each span is fetched once, and the live ones go into `live`.
+    fn live_term_postings(
         &self,
         scope: &MemoryScope,
         terms: &[String],
-    ) -> ZResult<Vec<Vec<TermPosting>>> {
-        let mut chunks = Vec::new();
-        for chunk in terms.chunks(MAX_CONTAINS_FILTER_VALUES) {
-            let filter = format!(
-                "{} AND ({})",
-                scope_filter(scope),
-                sql_or_eq_list("term", chunk.iter().map(String::as_str))
-            );
+        limit: usize,
+        at_ms: Option<i64>,
+        live: &mut BTreeMap<String, SpanRecord>,
+        checked: &mut BTreeSet<String>,
+    ) -> ZResult<Vec<TermPosting>> {
+        let filter = format!(
+            "{} AND ({})",
+            scope_filter(scope),
+            sql_or_eq_list("term", terms.iter().map(String::as_str))
+        );
+        let mut rows = limit.saturating_mul(2).max(64);
+        loop {
             let query = VectorQuery::new("", Vec::new(), usize::MAX)
-                .with_filter(filter)
+                .with_filter(filter.clone())
                 .with_output_fields(output_fields(TERM_OUTPUT_FIELDS));
-            chunks.push(
-                self.terms
-                    .scan_filter_only(query)?
-                    .iter()
-                    .map(|doc| term_posting_from_doc(doc))
-                    .collect::<ZResult<Vec<_>>>()?,
+            let postings = self
+                .terms
+                .scan_prefix(query, rows)?
+                .iter()
+                .map(|doc| term_posting_from_doc(doc))
+                .collect::<ZResult<Vec<_>>>()?;
+            let unchecked = postings
+                .iter()
+                .filter(|posting| checked.insert(posting.span_id.clone()))
+                .map(|posting| posting.span_id.clone())
+                .collect::<Vec<_>>();
+            live.extend(
+                self.fetch_spans_by_ids(scope, &unchecked, at_ms)?
+                    .into_iter()
+                    .map(|span| (span.id.clone(), span)),
             );
+            let exhausted = postings.len() < rows;
+            let prefix = live_posting_prefix(postings, live, limit);
+            let live_count = prefix
+                .iter()
+                .filter(|posting| live.contains_key(&posting.span_id))
+                .count();
+            if live_count >= limit || exhausted {
+                return Ok(prefix);
+            }
+            rows = rows.saturating_mul(2);
         }
-        Ok(chunks)
     }
 
     pub fn fetch_spans_by_ids(

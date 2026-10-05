@@ -141,6 +141,33 @@ fn expired_span_postings_consume_scan_limit_and_hide_active_span() {
 }
 
 #[test]
+fn keyword_search_reads_postings_past_a_page_of_expired_spans() {
+    // Postings are read in doubling pages; 200 expired spans fill the first pages.
+    let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("limit_after_filter_keyword_pages");
+    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let expired = (0..200).map(|i| expired_span(&format!("expired_{i}")));
+    let active = span_record("active", MemoryStatus::Active, Some(10));
+    for mut span in expired.chain(std::iter::once(active)) {
+        span.text = "beacon".to_string();
+        span.lexical_text = span.text.clone();
+        store.append_span(&span, None).unwrap();
+    }
+    let hits = store
+        .keyword_search_spans(&scope(), "beacon", 1, 1, Some(30))
+        .unwrap();
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+    drop(guard);
+    assert_eq!(
+        hits.iter()
+            .map(|hit| hit.span.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["active"]
+    );
+}
+
+#[test]
 fn context_corrections_keep_more_than_1024_claim_corrections() {
     // Context corrections must not drop the latest correction once a claim has more than 1024.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
