@@ -258,14 +258,87 @@ impl PgTable {
             .ok_or_else(|| Status::invalid_argument(format!("{} has no field {name}", self.name)))
     }
 
+    /// Writes each doc whole in one statement; a field the doc lacks is stored as null. Rows
+    /// take sequence numbers in doc order.
+    fn write(&self, docs: Vec<Doc>, replace: bool) -> ZResult<Vec<Status>> {
+        let mut statuses = vec![Status::default(); docs.len()];
+        let mut batch = WriteBatch::new(&self.columns);
+        let mut position = HashMap::<&str, usize>::new();
+        for (index, doc) in docs.iter().enumerate() {
+            if let Some(&earlier) = position.get(doc.pk.as_str()) {
+                if !replace {
+                    statuses[index] =
+                        Status::already_exists(format!("pk {} already exists", doc.pk));
+                    continue;
+                }
+                // A later upsert of the same pk replaces the earlier one, as separate writes would.
+                batch.remove(earlier);
+            }
+            match self.check_fields(doc).and_then(|()| batch.push(index, doc)) {
+                Ok(slot) => {
+                    position.insert(doc.pk.as_str(), slot);
+                }
+                Err(status) => statuses[index] = status,
+            }
+        }
+        let (indexes, mut params) = batch.finish();
+        if indexes.is_empty() {
+            return Ok(statuses);
+        }
+        let sql = self.write_sql(replace);
+        let written = self.session.with_client(|client| {
+            let count = i64::try_from(indexes.len()).unwrap_or(i64::MAX);
+            let seqs = client
+                .query(
+                    "SELECT nextval('write_seq') FROM generate_series(1, $1::bigint)",
+                    &[&count],
+                )?
+                .iter()
+                .map(|row| row.get::<_, i64>(0))
+                .collect::<Vec<_>>();
+            params.insert(1, Box::new(sorted(seqs)));
+            let refs = params.iter().map(|p| p.as_ref()).collect::<Vec<_>>();
+            client.query(&sql, &refs)
+        })?;
+        if !replace {
+            let written = written
+                .iter()
+                .map(|row| row.get::<_, String>(0))
+                .collect::<std::collections::HashSet<_>>();
+            for &index in &indexes {
+                if !written.contains(&docs[index].pk) {
+                    statuses[index] =
+                        Status::already_exists(format!("pk {} already exists", docs[index].pk));
+                }
+            }
+        }
+        Ok(statuses)
+    }
+
     fn write_sql(&self, replace: bool) -> String {
         let names = self
             .columns
             .iter()
             .map(|column| quote(&column.name))
             .collect::<Vec<_>>();
-        let values = (0..names.len())
-            .map(|i| format!("${}", i + 2))
+        let arrays = self
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, column)| format!("${}::{}", i + 3, array_param_type(column)))
+            .collect::<Vec<_>>();
+        let values = self
+            .columns
+            .iter()
+            .map(|column| match column.kind {
+                // text[] cells travel as JSON, since unnest flattens arrays of arrays.
+                ColumnKind::TextArray => format!(
+                    "CASE WHEN u.{name} IS NULL THEN NULL \
+                     ELSE ARRAY(SELECT jsonb_array_elements_text(u.{name}::jsonb)) END",
+                    name = quote(&column.name)
+                ),
+                _ => format!("u.{}", quote(&column.name)),
+            })
             .collect::<Vec<_>>();
         let on_conflict = if replace {
             format!(
@@ -279,55 +352,28 @@ impl PgTable {
             "DO NOTHING".to_string()
         };
         format!(
-            "INSERT INTO {} (pk, seq, {}) VALUES ($1, nextval('write_seq'), {}) \
-             ON CONFLICT (pk) {on_conflict}",
-            quote(&self.name),
-            names.join(", "),
-            values.join(", ")
+            "INSERT INTO {table} (pk, seq, {names}) \
+             SELECT u.pk, u.seq, {values} FROM unnest($1::text[], $2::bigint[], {arrays}) \
+             AS u(pk, seq, {names}) ON CONFLICT (pk) {on_conflict} RETURNING pk",
+            table = quote(&self.name),
+            names = names.join(", "),
+            values = values.join(", "),
+            arrays = arrays.join(", "),
         )
     }
 
-    /// Writes each doc whole; a field the doc lacks is stored as null.
-    fn write(&self, docs: Vec<Doc>, replace: bool) -> ZResult<Vec<Status>> {
-        let sql = self.write_sql(replace);
-        let rows = docs
-            .iter()
-            .map(|doc| self.row_params(doc))
-            .collect::<Vec<_>>();
-        self.session.with_client(|client| {
-            let statement = client.prepare(&sql)?;
-            rows.iter()
-                .zip(&docs)
-                .map(|(params, doc)| match params {
-                    Err(status) => Ok(status.clone()),
-                    Ok(params) => {
-                        let refs = params.iter().map(|p| p.as_ref()).collect::<Vec<_>>();
-                        Ok(match client.execute(&statement, &refs)? {
-                            0 => Status::already_exists(format!("pk {} already exists", doc.pk)),
-                            _ => Status::default(),
-                        })
-                    }
-                })
-                .collect()
-        })
-    }
-
-    fn row_params(&self, doc: &Doc) -> Result<Vec<Param>, Status> {
-        if let Some(unknown) = doc
+    fn check_fields(&self, doc: &Doc) -> Result<(), Status> {
+        match doc
             .fields
             .keys()
             .find(|field| self.columns.iter().all(|column| &column.name != *field))
         {
-            return Err(Status::invalid_argument(format!(
+            Some(unknown) => Err(Status::invalid_argument(format!(
                 "{} has no field {unknown}",
                 self.name
-            )));
+            ))),
+            None => Ok(()),
         }
-        let mut params: Vec<Param> = vec![Box::new(doc.pk.clone())];
-        for column in &self.columns {
-            params.push(column_param(column, doc.fields.get(&column.name))?);
-        }
-        Ok(params)
     }
 
     fn select_list(&self, query: Option<&VectorQuery>) -> ZResult<Vec<&Column>> {
@@ -484,18 +530,23 @@ impl MemoryTable for PgTable {
     }
 
     fn delete(&self, pks: Vec<String>) -> ZResult<Vec<Status>> {
-        let sql = format!("DELETE FROM {} WHERE pk = $1", quote(&self.name));
-        self.session.with_client(|client| {
-            let statement = client.prepare(&sql)?;
-            pks.iter()
-                .map(|pk| {
-                    Ok(match client.execute(&statement, &[pk])? {
-                        0 => Status::not_found(format!("pk {pk} not found")),
-                        _ => Status::default(),
-                    })
-                })
-                .collect()
-        })
+        let sql = format!(
+            "DELETE FROM {} WHERE pk = ANY($1) RETURNING pk",
+            quote(&self.name)
+        );
+        let deleted = self
+            .session
+            .with_client(|client| client.query(&sql, &[&pks]))?
+            .iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect::<std::collections::HashSet<_>>();
+        Ok(pks
+            .iter()
+            .map(|pk| match deleted.contains(pk) {
+                true => Status::default(),
+                false => Status::not_found(format!("pk {pk} not found")),
+            })
+            .collect())
     }
 
     fn fetch(&self, pks: Vec<String>) -> ZResult<HashMap<String, Arc<Doc>>> {
@@ -583,27 +634,147 @@ fn column_type(column: &Column) -> String {
     }
 }
 
-fn column_param(column: &Column, value: Option<&Value>) -> Result<Param, Status> {
+/// Docs to write, one array per column, with each doc's index in the caller's list.
+struct WriteBatch<'a> {
+    columns: &'a [Column],
+    indexes: Vec<Option<usize>>,
+    pks: Vec<String>,
+    cells: Vec<Vec<Cell>>,
+}
+
+enum Cell {
+    Text(Option<String>),
+    BigInt(Option<i64>),
+    Real(Option<f32>),
+    Vector(Option<Vector>),
+}
+
+// `cell` builds each column's variant from the column's kind, so another variant never appears.
+impl Cell {
+    fn into_text(self) -> Option<String> {
+        match self {
+            Cell::Text(v) => v,
+            _ => None,
+        }
+    }
+
+    fn into_i64(self) -> Option<i64> {
+        match self {
+            Cell::BigInt(v) => v,
+            _ => None,
+        }
+    }
+
+    fn into_f32(self) -> Option<f32> {
+        match self {
+            Cell::Real(v) => v,
+            _ => None,
+        }
+    }
+
+    fn into_vector(self) -> Option<Vector> {
+        match self {
+            Cell::Vector(v) => v,
+            _ => None,
+        }
+    }
+}
+
+impl<'a> WriteBatch<'a> {
+    fn new(columns: &'a [Column]) -> Self {
+        Self {
+            columns,
+            indexes: Vec::new(),
+            pks: Vec::new(),
+            cells: columns.iter().map(|_| Vec::new()).collect(),
+        }
+    }
+
+    /// Adds `doc` and returns its slot in the batch.
+    fn push(&mut self, index: usize, doc: &Doc) -> Result<usize, Status> {
+        let row = self
+            .columns
+            .iter()
+            .map(|column| cell(column, doc.fields.get(&column.name)))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (cells, cell) in self.cells.iter_mut().zip(row) {
+            cells.push(cell);
+        }
+        self.indexes.push(Some(index));
+        self.pks.push(doc.pk.clone());
+        Ok(self.indexes.len() - 1)
+    }
+
+    fn remove(&mut self, slot: usize) {
+        self.indexes[slot] = None;
+    }
+
+    /// The written docs' indexes, and the pk array followed by one array per column.
+    fn finish(self) -> (Vec<usize>, Vec<Param>) {
+        let keep = self.indexes.iter().map(Option::is_some).collect::<Vec<_>>();
+        let mut params: Vec<Param> = vec![Box::new(kept(self.pks, &keep))];
+        for (column, cells) in self.columns.iter().zip(self.cells) {
+            let cells = kept(cells, &keep).into_iter();
+            params.push(match column.kind {
+                ColumnKind::BigInt => Box::new(cells.map(Cell::into_i64).collect::<Vec<_>>()),
+                ColumnKind::Real => Box::new(cells.map(Cell::into_f32).collect::<Vec<_>>()),
+                ColumnKind::Vector => Box::new(cells.map(Cell::into_vector).collect::<Vec<_>>()),
+                ColumnKind::Text | ColumnKind::TextArray => {
+                    Box::new(cells.map(Cell::into_text).collect::<Vec<_>>())
+                }
+            });
+        }
+        (self.indexes.into_iter().flatten().collect(), params)
+    }
+}
+
+fn kept<T>(items: Vec<T>, keep: &[bool]) -> Vec<T> {
+    items
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(item, keep)| keep.then_some(item))
+        .collect()
+}
+
+fn sorted(mut values: Vec<i64>) -> Vec<i64> {
+    values.sort_unstable();
+    values
+}
+
+fn array_param_type(column: &Column) -> &'static str {
+    match column.kind {
+        ColumnKind::Text | ColumnKind::TextArray => "text[]",
+        ColumnKind::BigInt => "bigint[]",
+        ColumnKind::Real => "real[]",
+        ColumnKind::Vector => "vector[]",
+    }
+}
+
+fn cell(column: &Column, value: Option<&Value>) -> Result<Cell, Status> {
     let value = value.filter(|value| !value.is_null());
     let mismatch =
         || Status::invalid_argument(format!("field {} does not hold {:?}", column.name, value));
     Ok(match column.kind {
-        ColumnKind::Text => Box::new(
+        ColumnKind::Text => Cell::Text(
             value
                 .map(|v| v.as_str().map(str::to_string).ok_or_else(mismatch))
                 .transpose()?,
         ),
-        ColumnKind::BigInt => Box::new(value.map(|v| v.as_i64().ok_or_else(mismatch)).transpose()?),
-        ColumnKind::Real => Box::new(value.map(|v| v.as_f32().ok_or_else(mismatch)).transpose()?),
-        ColumnKind::TextArray => Box::new(
+        ColumnKind::BigInt => {
+            Cell::BigInt(value.map(|v| v.as_i64().ok_or_else(mismatch)).transpose()?)
+        }
+        ColumnKind::Real => Cell::Real(value.map(|v| v.as_f32().ok_or_else(mismatch)).transpose()?),
+        ColumnKind::TextArray => Cell::Text(
             value
                 .map(|v| match v {
-                    Value::ArrayString(items) => Ok(items.clone()),
+                    Value::ArrayString(items) => {
+                        serde_json::to_string(items).map_err(|e| Status::internal(e.to_string()))
+                    }
                     _ => Err(mismatch()),
                 })
                 .transpose()?,
         ),
-        ColumnKind::Vector => Box::new(
+        ColumnKind::Vector => Cell::Vector(
             value
                 .map(|v| match v {
                     Value::VecF32(items) if items.len() == column.dimension => {

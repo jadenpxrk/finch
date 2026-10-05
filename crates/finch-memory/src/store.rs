@@ -722,8 +722,12 @@ impl MemoryStore {
     pub fn create(path: &Path, embedding_dim: usize, options: CollectionOptions) -> ZResult<Self> {
         #[cfg(all(test, feature = "postgres"))]
         if let Some(url) = crate::postgres::test_url() {
+            // Tests clean up their store directory, so it exists for Postgres stores too.
+            fs::create_dir_all(path).map_err(|e| Status::io_error(e.to_string()))?;
             let name = crate::postgres::test_store_name(path);
-            return Self::create_postgres(&url, &name, embedding_dim, false);
+            let mut store = Self::create_postgres(&url, &name, embedding_dim, false)?;
+            store.path = path.to_path_buf();
+            return Ok(store);
         }
         Self::create_with_span_schema(path, embedding_dim, options, span_schema(embedding_dim))
     }
@@ -770,7 +774,9 @@ impl MemoryStore {
     pub fn open(path: &Path, options: CollectionOptions) -> ZResult<Self> {
         #[cfg(all(test, feature = "postgres"))]
         if let Some(url) = crate::postgres::test_url() {
-            return Self::open_postgres(&url, &crate::postgres::test_store_name(path));
+            let mut store = Self::open_postgres(&url, &crate::postgres::test_store_name(path))?;
+            store.path = path.to_path_buf();
+            return Ok(store);
         }
         Self::from_tables(path.to_path_buf(), None, |name| {
             Collection::open(&path.join(name), options.clone())
