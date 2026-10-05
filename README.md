@@ -117,7 +117,7 @@ name, question id, label, or gold answer.
 
 MEME tests whether an agent's memory keeps up with facts that change. Each of its 100 episodes
 is a conversation with 32k tokens of filler text, followed by questions in five task types.
-Finch extracted memories with `gpt-4.1-mini` and answered with `gpt-4.1-mini` under the
+Finch extracted memories with Claude Opus 5 and answered with `gpt-4.1-mini` under the
 official answer protocol. The official MEME evaluator judged the answers with `gpt-4o`.
 
 | Task | Correct | Share | What the task checks |
