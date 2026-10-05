@@ -35,6 +35,9 @@ pub(crate) struct OpenStateMutationJournal {
 
 impl MemoryStore {
     pub(crate) fn begin_state_mutation_journal(&self, scope: &MemoryScope) -> ZResult<()> {
+        if let Some(transactions) = &self.transactions {
+            return transactions.begin();
+        }
         let path = self.path.join(STATE_MUTATION_JOURNAL);
         let journal = StateMutationJournal {
             scope: scope.clone(),
@@ -66,9 +69,12 @@ impl MemoryStore {
     pub(crate) fn capture_state_mutation_documents(
         &self,
         collection_name: &str,
-        collection: &Collection,
+        collection: &dyn MemoryTable,
         pks: impl IntoIterator<Item = String>,
     ) -> ZResult<()> {
+        if self.transactions.is_some() {
+            return Ok(());
+        }
         let mut journal = self.state_mutation_journal.lock();
         let Some(journal) = journal.as_mut() else {
             return Err(Status::internal(format!(
@@ -110,7 +116,7 @@ impl MemoryStore {
     pub(crate) fn capture_state_mutation_docs(
         &self,
         collection_name: &str,
-        collection: &Collection,
+        collection: &dyn MemoryTable,
         docs: &[Doc],
     ) -> ZResult<()> {
         #[cfg(test)]
@@ -125,11 +131,17 @@ impl MemoryStore {
     }
 
     pub(crate) fn commit_state_mutation_journal(&self) -> ZResult<()> {
+        if let Some(transactions) = &self.transactions {
+            return transactions.commit();
+        }
         self.state_mutation_journal.lock().take();
         remove_journal(&self.path.join(STATE_MUTATION_JOURNAL))
     }
 
     pub(crate) fn recover_pending_state_mutation(&self) -> ZResult<()> {
+        if let Some(transactions) = &self.transactions {
+            return transactions.rollback();
+        }
         self.state_mutation_journal.lock().take();
         #[cfg(test)]
         if FAIL_NEXT_ROLLBACK.with(|fail| fail.replace(false)) {
@@ -140,7 +152,7 @@ impl MemoryStore {
             return Ok(());
         }
         let journal = read_journal(&path)?;
-        if self.claims.options().read_only {
+        if self.claims.read_only() {
             return Err(Status::invalid_argument(format!(
                 "pending state mutation requires writable recovery at {}",
                 path.display()
@@ -167,7 +179,7 @@ impl MemoryStore {
         remove_journal(&path)
     }
 
-    fn state_mutation_collections(&self) -> Vec<(&'static str, &Collection)> {
+    fn state_mutation_collections(&self) -> Vec<(&'static str, &dyn MemoryTable)> {
         vec![
             (ENTITIES_COLLECTION, self.entities.as_ref()),
             (ENTITY_ALIASES_COLLECTION, self.entity_aliases.as_ref()),
@@ -317,9 +329,9 @@ fn ensure_delete_statuses(statuses: Vec<Status>) -> ZResult<()> {
 }
 
 fn journal_collection<'a>(
-    collections: &[(&'static str, &'a Collection)],
+    collections: &[(&'static str, &'a dyn MemoryTable)],
     name: &str,
-) -> ZResult<&'a Collection> {
+) -> ZResult<&'a dyn MemoryTable> {
     collections
         .iter()
         .find(|(collection_name, _)| *collection_name == name)

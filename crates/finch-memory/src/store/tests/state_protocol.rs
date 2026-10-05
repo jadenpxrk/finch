@@ -3174,7 +3174,7 @@ fn store_with_derived_state(name: &str) -> (EvidencedStore, MemoryScope) {
     (store, scope)
 }
 
-fn corrupt_stored_row(collection: &Collection, pk: &str) {
+fn corrupt_stored_row(collection: &dyn MemoryTable, pk: &str) {
     let stored = collection.fetch(vec![pk.to_string()]).unwrap()[pk].clone();
     let corrupt = (*stored).clone().set("status", "not_a_status");
     assert!(collection.upsert(vec![corrupt]).unwrap()[0].is_ok());

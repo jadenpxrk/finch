@@ -7,12 +7,15 @@ pub mod context;
 pub mod eval;
 pub mod ingest;
 pub mod json_api;
+#[cfg(feature = "postgres")]
+mod postgres;
 pub mod retrieval;
 pub mod row;
 pub mod schema;
 pub mod source_index;
 pub mod state;
 pub mod store;
+pub mod table;
 pub mod types;
 
 pub use context::*;

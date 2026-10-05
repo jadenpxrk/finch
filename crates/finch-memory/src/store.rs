@@ -15,18 +15,17 @@ use crate::row::{
     slot_from_doc, span_doc, span_from_doc, state_record_doc, state_record_from_doc,
 };
 use crate::schema::{
-    artifact_schema, claim_schema, correction_schema, dependency_trace_schema, edge_schema,
-    entity_alias_schema, entity_schema, episode_schema, profile_schema, slot_alias_schema,
-    slot_schema, span_schema, span_schema_with_hnsw, state_record_schema, term_schema,
-    ARTIFACTS_COLLECTION, CLAIMS_COLLECTION, CORRECTIONS_COLLECTION, DEPENDENCY_TRACES_COLLECTION,
-    EDGES_COLLECTION, ENTITIES_COLLECTION, ENTITY_ALIASES_COLLECTION, EPISODES_COLLECTION,
-    PROFILES_COLLECTION, RULES_COLLECTION, SLOTS_COLLECTION, SLOT_ALIASES_COLLECTION,
-    SPANS_COLLECTION, STATE_RECORDS_COLLECTION, TERMS_COLLECTION,
+    active_collection_schemas, span_schema, span_schema_with_hnsw, ARTIFACTS_COLLECTION,
+    CLAIMS_COLLECTION, CORRECTIONS_COLLECTION, DEPENDENCY_TRACES_COLLECTION, EDGES_COLLECTION,
+    ENTITIES_COLLECTION, ENTITY_ALIASES_COLLECTION, EPISODES_COLLECTION, PROFILES_COLLECTION,
+    RULES_COLLECTION, SLOTS_COLLECTION, SLOT_ALIASES_COLLECTION, SPANS_COLLECTION,
+    STATE_RECORDS_COLLECTION, TERMS_COLLECTION,
 };
 use crate::state::{
     aggregate_support_state, AnswerSlotSupport, AnswerSupportContract, AnswerSupportState,
     BiTemporalQuery,
 };
+use crate::table::{MemoryTable, MemoryTransactions};
 use crate::types::{
     canonical_slot_part, AnswerReadyStateRequest, ArtifactRecord, CanonicalSlot,
     CanonicalSlotBindingContext, CanonicalSlotRecord, ClaimKind, ClaimPolarity, ClaimRecord,
@@ -41,8 +40,7 @@ use crate::types::{
 };
 use finch_db::Collection;
 use finch_types::{
-    CollectionOptions, CollectionSchema, CreateIndexOptions, Doc, HnswIndexParams, IndexParams,
-    Status, Value, VectorQuery, ZResult,
+    CollectionOptions, CollectionSchema, Doc, HnswIndexParams, Status, Value, VectorQuery, ZResult,
 };
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
@@ -103,21 +101,23 @@ use timeline::{reconcile_dependency_trace_intervals, reconcile_state_record_inte
 pub struct MemoryStore {
     id: u64,
     path: PathBuf,
-    pub(crate) episodes: Arc<Collection>,
-    pub(crate) spans: Arc<Collection>,
-    artifacts: Arc<Collection>,
-    pub(crate) corrections: Arc<Collection>,
-    terms: Arc<Collection>,
-    pub(crate) claims: Arc<Collection>,
-    profiles: Arc<Collection>,
-    pub(crate) entities: Arc<Collection>,
-    entity_aliases: Arc<Collection>,
-    edges: Arc<Collection>,
-    pub(crate) rules: Arc<Collection>,
-    state_records: Arc<Collection>,
-    dependency_traces: Arc<Collection>,
-    slots: Arc<Collection>,
-    pub(crate) slot_aliases: Arc<Collection>,
+    pub(crate) episodes: Arc<dyn MemoryTable>,
+    pub(crate) spans: Arc<dyn MemoryTable>,
+    artifacts: Arc<dyn MemoryTable>,
+    pub(crate) corrections: Arc<dyn MemoryTable>,
+    terms: Arc<dyn MemoryTable>,
+    pub(crate) claims: Arc<dyn MemoryTable>,
+    profiles: Arc<dyn MemoryTable>,
+    pub(crate) entities: Arc<dyn MemoryTable>,
+    entity_aliases: Arc<dyn MemoryTable>,
+    edges: Arc<dyn MemoryTable>,
+    pub(crate) rules: Arc<dyn MemoryTable>,
+    state_records: Arc<dyn MemoryTable>,
+    dependency_traces: Arc<dyn MemoryTable>,
+    slots: Arc<dyn MemoryTable>,
+    pub(crate) slot_aliases: Arc<dyn MemoryTable>,
+    // Set when the tables commit together; a state mutation is then one transaction, not a journal.
+    pub(crate) transactions: Option<Arc<dyn MemoryTransactions>>,
     state_mutation_lock: RwLock<()>,
     state_mutation_journal: Mutex<Option<mutation_journal::OpenStateMutationJournal>>,
     // Set when a failed mutation could not be rolled back; only a reopen recovers the rows.
@@ -720,6 +720,11 @@ const SLOT_OUTPUT_FIELDS: &[&str] = &[
 
 impl MemoryStore {
     pub fn create(path: &Path, embedding_dim: usize, options: CollectionOptions) -> ZResult<Self> {
+        #[cfg(all(test, feature = "postgres"))]
+        if let Some(url) = crate::postgres::test_url() {
+            let name = crate::postgres::test_store_name(path);
+            return Self::create_postgres(&url, &name, embedding_dim, false);
+        }
         Self::create_with_span_schema(path, embedding_dim, options, span_schema(embedding_dim))
     }
 
@@ -743,14 +748,8 @@ impl MemoryStore {
         concurrency: Option<usize>,
     ) -> ZResult<()> {
         self.ensure_not_poisoned()?;
-        self.spans.create_index(
-            "embedding",
-            IndexParams::Hnsw(hnsw_params),
-            CreateIndexOptions {
-                rebuild: false,
-                concurrency,
-            },
-        )
+        self.spans
+            .create_hnsw_index("embedding", hnsw_params, concurrency)
     }
 
     fn create_with_span_schema(
@@ -760,55 +759,50 @@ impl MemoryStore {
         span_collection_schema: CollectionSchema,
     ) -> ZResult<Self> {
         fs::create_dir_all(path).map_err(|e| Status::io_error(e.to_string()))?;
-        let create = |name: &str, schema: CollectionSchema| {
+        let mut schemas = collection_schemas(embedding_dim, span_collection_schema);
+        Self::from_tables(path.to_path_buf(), None, |name| {
+            let schema = take_schema(&mut schemas, name)?;
             Collection::create_and_open(&path.join(name), schema, options.clone())
-        };
-        let store = Self {
-            id: NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed),
-            path: path.to_path_buf(),
-            episodes: create(EPISODES_COLLECTION, episode_schema())?,
-            spans: create(SPANS_COLLECTION, span_collection_schema)?,
-            artifacts: create(ARTIFACTS_COLLECTION, artifact_schema())?,
-            corrections: create(CORRECTIONS_COLLECTION, correction_schema())?,
-            terms: create(TERMS_COLLECTION, term_schema())?,
-            claims: create(CLAIMS_COLLECTION, claim_schema(embedding_dim))?,
-            profiles: create(PROFILES_COLLECTION, profile_schema())?,
-            entities: create(ENTITIES_COLLECTION, entity_schema(embedding_dim))?,
-            entity_aliases: create(ENTITY_ALIASES_COLLECTION, entity_alias_schema())?,
-            edges: create(EDGES_COLLECTION, edge_schema())?,
-            rules: create(RULES_COLLECTION, crate::schema::rule_schema())?,
-            state_records: create(STATE_RECORDS_COLLECTION, state_record_schema())?,
-            dependency_traces: create(DEPENDENCY_TRACES_COLLECTION, dependency_trace_schema())?,
-            slots: create(SLOTS_COLLECTION, slot_schema())?,
-            slot_aliases: create(SLOT_ALIASES_COLLECTION, slot_alias_schema())?,
-            state_mutation_lock: RwLock::new(()),
-            state_mutation_journal: Mutex::new(None),
-            poisoned: AtomicBool::new(false),
-        };
-        store.recover_pending_state_mutation()?;
-        Ok(store)
+                .map(|collection| collection as Arc<dyn MemoryTable>)
+        })
     }
 
     pub fn open(path: &Path, options: CollectionOptions) -> ZResult<Self> {
-        let open = |name: &str| Collection::open(&path.join(name), options.clone());
+        #[cfg(all(test, feature = "postgres"))]
+        if let Some(url) = crate::postgres::test_url() {
+            return Self::open_postgres(&url, &crate::postgres::test_store_name(path));
+        }
+        Self::from_tables(path.to_path_buf(), None, |name| {
+            Collection::open(&path.join(name), options.clone())
+                .map(|collection| collection as Arc<dyn MemoryTable>)
+        })
+    }
+
+    /// Builds the store from one table per collection, then rolls back any unfinished mutation.
+    pub(crate) fn from_tables(
+        path: PathBuf,
+        transactions: Option<Arc<dyn MemoryTransactions>>,
+        mut table: impl FnMut(&'static str) -> ZResult<Arc<dyn MemoryTable>>,
+    ) -> ZResult<Self> {
         let store = Self {
             id: NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed),
-            path: path.to_path_buf(),
-            episodes: open(EPISODES_COLLECTION)?,
-            spans: open(SPANS_COLLECTION)?,
-            artifacts: open(ARTIFACTS_COLLECTION)?,
-            corrections: open(CORRECTIONS_COLLECTION)?,
-            terms: open(TERMS_COLLECTION)?,
-            claims: open(CLAIMS_COLLECTION)?,
-            profiles: open(PROFILES_COLLECTION)?,
-            entities: open(ENTITIES_COLLECTION)?,
-            entity_aliases: open(ENTITY_ALIASES_COLLECTION)?,
-            edges: open(EDGES_COLLECTION)?,
-            rules: open(RULES_COLLECTION)?,
-            state_records: open(STATE_RECORDS_COLLECTION)?,
-            dependency_traces: open(DEPENDENCY_TRACES_COLLECTION)?,
-            slots: open(SLOTS_COLLECTION)?,
-            slot_aliases: open(SLOT_ALIASES_COLLECTION)?,
+            path,
+            episodes: table(EPISODES_COLLECTION)?,
+            spans: table(SPANS_COLLECTION)?,
+            artifacts: table(ARTIFACTS_COLLECTION)?,
+            corrections: table(CORRECTIONS_COLLECTION)?,
+            terms: table(TERMS_COLLECTION)?,
+            claims: table(CLAIMS_COLLECTION)?,
+            profiles: table(PROFILES_COLLECTION)?,
+            entities: table(ENTITIES_COLLECTION)?,
+            entity_aliases: table(ENTITY_ALIASES_COLLECTION)?,
+            edges: table(EDGES_COLLECTION)?,
+            rules: table(RULES_COLLECTION)?,
+            state_records: table(STATE_RECORDS_COLLECTION)?,
+            dependency_traces: table(DEPENDENCY_TRACES_COLLECTION)?,
+            slots: table(SLOTS_COLLECTION)?,
+            slot_aliases: table(SLOT_ALIASES_COLLECTION)?,
+            transactions,
             state_mutation_lock: RwLock::new(()),
             state_mutation_journal: Mutex::new(None),
             poisoned: AtomicBool::new(false),
@@ -1003,7 +997,7 @@ impl MemoryStore {
     }
 }
 
-fn insert_one(collection: &Collection, doc: Doc) -> ZResult<()> {
+fn insert_one(collection: &dyn MemoryTable, doc: Doc) -> ZResult<()> {
     let statuses = collection.insert(vec![doc])?;
     match statuses.into_iter().next() {
         Some(status) if status.ok() => Ok(()),
@@ -1012,7 +1006,7 @@ fn insert_one(collection: &Collection, doc: Doc) -> ZResult<()> {
     }
 }
 
-pub(crate) fn insert_many(collection: &Collection, docs: Vec<Doc>) -> ZResult<()> {
+pub(crate) fn insert_many(collection: &dyn MemoryTable, docs: Vec<Doc>) -> ZResult<()> {
     for chunk in docs.chunks(1024) {
         let statuses = collection.insert(chunk.to_vec())?;
         for status in statuses {
@@ -1024,7 +1018,7 @@ pub(crate) fn insert_many(collection: &Collection, docs: Vec<Doc>) -> ZResult<()
     Ok(())
 }
 
-pub(crate) fn upsert_many(collection: &Collection, docs: Vec<Doc>) -> ZResult<()> {
+pub(crate) fn upsert_many(collection: &dyn MemoryTable, docs: Vec<Doc>) -> ZResult<()> {
     for chunk in docs.chunks(1024) {
         let statuses = collection.upsert(chunk.to_vec())?;
         for status in statuses {
@@ -1189,13 +1183,35 @@ fn unique_strings(items: Vec<String>) -> Vec<String> {
     out
 }
 
+/// Every collection's schema by name, with `spans` as the span collection's schema.
+pub(crate) fn collection_schemas(
+    embedding_dim: usize,
+    spans: CollectionSchema,
+) -> BTreeMap<String, CollectionSchema> {
+    let mut schemas = active_collection_schemas(embedding_dim)
+        .into_iter()
+        .map(|schema| (schema.name.clone(), schema))
+        .collect::<BTreeMap<_, _>>();
+    schemas.insert(SPANS_COLLECTION.to_string(), spans);
+    schemas
+}
+
+pub(crate) fn take_schema(
+    schemas: &mut BTreeMap<String, CollectionSchema>,
+    name: &str,
+) -> ZResult<CollectionSchema> {
+    schemas
+        .remove(name)
+        .ok_or_else(|| Status::internal(format!("no schema for collection {name}")))
+}
+
 fn output_fields(fields: &[&str]) -> Vec<String> {
     fields.iter().map(|field| (*field).to_string()).collect()
 }
 
 /// Scans `collection` once per chunk of `values`, each chunk small enough for one filter.
 fn scan_in_chunks<T>(
-    collection: &Collection,
+    collection: &dyn MemoryTable,
     values: &[T],
     limit: usize,
     fields: &[&str],

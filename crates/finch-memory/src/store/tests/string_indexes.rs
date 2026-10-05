@@ -1,5 +1,6 @@
 use super::*;
 use crate::schema::{active_collection_schemas, INDEXED_STRING_FIELDS};
+use finch_types::IndexParams;
 
 const DIM: usize = 3;
 
