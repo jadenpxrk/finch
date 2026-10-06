@@ -287,15 +287,12 @@ impl MemoryStore {
         )?;
         let trigger = canonicalize_claim(trigger.clone(), &trigger_registry);
         let subject_keys = self.trigger_subject_keys(scope, &trigger)?;
-        let Some(endpoint_filter) = trigger_endpoint_filter(&trigger, &subject_keys) else {
+        if trigger.slot_id.is_none() && subject_keys.is_empty() {
             return Ok(Vec::new());
-        };
-        let filter = format!(
-            "{} AND status = 'active' AND ({endpoint_filter})",
-            scope_filter(scope)
-        );
+        }
+        // One read of the scope's active rules, which a store read caches across its triggers.
         let query = VectorQuery::new("", Vec::new(), limit)
-            .with_filter(filter)
+            .with_filter(format!("{} AND status = 'active'", scope_filter(scope)))
             .with_output_fields(output_fields(RULE_OUTPUT_FIELDS));
         let rules = self
             .rules
@@ -304,7 +301,11 @@ impl MemoryStore {
             .map(|doc| rule_from_doc(&doc))
             .collect::<ZResult<Vec<_>>>()?
             .into_iter()
-            .filter(|rule| rule.scope == trigger.scope && rule_bound_and_in_force(rule, at_ms))
+            .filter(|rule| {
+                rule_at_trigger_endpoint(rule, &trigger, &subject_keys)
+                    && rule.scope == trigger.scope
+                    && rule_bound_and_in_force(rule, at_ms)
+            })
             .collect::<Vec<_>>();
         let trigger_slot = claim_slot(&trigger);
         let mut rules = self
@@ -408,21 +409,15 @@ fn latest_comparable_claims_by_slot(
 
 /// Filter clauses naming a trigger claim as a rule trigger: by its slot id, or by its subject
 /// keys and predicate. `None` when neither is known.
-fn trigger_endpoint_filter(trigger: &ClaimRecord, subject_keys: &[String]) -> Option<String> {
+/// Whether the rule's trigger names the claim's slot id, or one of its subject keys with its
+/// predicate key.
+fn rule_at_trigger_endpoint(
+    rule: &RuleRecord,
+    trigger: &ClaimRecord,
+    subject_keys: &[String],
+) -> bool {
     let predicate_key = canonical_slot_part(trigger.predicate.as_deref().unwrap_or_default());
-    let mut clauses = Vec::new();
-    if let Some(slot_id) = trigger.slot_id.as_ref() {
-        clauses.push(format!("trigger_slot_id = '{}'", sql_escape(slot_id)));
-    }
-    if !subject_keys.is_empty() {
-        clauses.push(format!(
-            "(({}) AND trigger_predicate_key = '{}')",
-            sql_or_eq_list(
-                "trigger_subject_key",
-                subject_keys.iter().map(String::as_str)
-            ),
-            sql_escape(&predicate_key),
-        ));
-    }
-    (!clauses.is_empty()).then(|| clauses.join(" OR "))
+    (trigger.slot_id.is_some() && rule.trigger_slot_id == trigger.slot_id)
+        || (subject_keys.contains(&rule.trigger_subject_key)
+            && rule.trigger_predicate_key == predicate_key)
 }

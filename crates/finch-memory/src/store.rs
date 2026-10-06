@@ -25,7 +25,7 @@ use crate::state::{
     aggregate_support_state, AnswerSlotSupport, AnswerSupportContract, AnswerSupportState,
     BiTemporalQuery,
 };
-use crate::table::{MemoryTable, MemoryTransactions};
+use crate::table::{MemoryTable, MemoryTransactions, ReadCachedTable};
 use crate::types::{
     canonical_slot_part, AnswerReadyStateRequest, ArtifactRecord, CanonicalSlot,
     CanonicalSlotBindingContext, CanonicalSlotRecord, ClaimKind, ClaimPolarity, ClaimRecord,
@@ -136,6 +136,27 @@ pub(crate) struct StateWriteGuard<'a> {
     store_id: u64,
 }
 
+pub(crate) struct StateReadGuard<'a> {
+    _lock: Option<RwLockReadGuard<'a, ()>>,
+    ends_cache: bool,
+}
+
+#[cfg(test)]
+impl StateReadGuard<'_> {
+    /// False when the calling thread already holds this store's write lock.
+    pub(crate) fn holds_lock(&self) -> bool {
+        self._lock.is_some()
+    }
+}
+
+impl Drop for StateReadGuard<'_> {
+    fn drop(&mut self) {
+        if self.ends_cache {
+            crate::table::end_read_cache();
+        }
+    }
+}
+
 impl Drop for StateWriteGuard<'_> {
     fn drop(&mut self) {
         STATE_WRITE_HELD.with(|held| held.borrow_mut().remove(&self.store_id));
@@ -152,15 +173,22 @@ impl MemoryStore {
         }
     }
 
-    /// Public reads hold this so they see a state mutation batch whole or not at all.
-    pub(crate) fn lock_state_read(&self) -> ZResult<Option<RwLockReadGuard<'_, ()>>> {
+    /// Public reads hold this so they see a state mutation batch whole or not at all. The
+    /// outermost read also serves its repeated state-table reads from memory.
+    pub(crate) fn lock_state_read(&self) -> ZResult<StateReadGuard<'_>> {
         if STATE_WRITE_HELD.with(|held| held.borrow().contains(&self.id)) {
-            return Ok(None);
+            return Ok(StateReadGuard {
+                _lock: None,
+                ends_cache: false,
+            });
         }
         // Recursive so a public read that calls another cannot deadlock behind a waiting writer.
         let guard = self.state_mutation_lock.read_recursive();
         self.ensure_not_poisoned()?;
-        Ok(Some(guard))
+        Ok(StateReadGuard {
+            _lock: Some(guard),
+            ends_cache: crate::table::begin_read_cache(),
+        })
     }
 
     /// Fails once a failed state mutation could not be rolled back, since its rows may be visible.
@@ -790,24 +818,37 @@ impl MemoryStore {
         transactions: Option<Arc<dyn MemoryTransactions>>,
         mut table: impl FnMut(&'static str) -> ZResult<Arc<dyn MemoryTable>>,
     ) -> ZResult<Self> {
+        let id = NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed);
         let store = Self {
-            id: NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed),
+            id,
             path,
             episodes: table(EPISODES_COLLECTION)?,
             spans: table(SPANS_COLLECTION)?,
             artifacts: table(ARTIFACTS_COLLECTION)?,
-            corrections: table(CORRECTIONS_COLLECTION)?,
+            corrections: read_cached(id, CORRECTIONS_COLLECTION, table(CORRECTIONS_COLLECTION)?),
             terms: table(TERMS_COLLECTION)?,
-            claims: table(CLAIMS_COLLECTION)?,
+            claims: read_cached(id, CLAIMS_COLLECTION, table(CLAIMS_COLLECTION)?),
             profiles: table(PROFILES_COLLECTION)?,
-            entities: table(ENTITIES_COLLECTION)?,
-            entity_aliases: table(ENTITY_ALIASES_COLLECTION)?,
+            entities: read_cached(id, ENTITIES_COLLECTION, table(ENTITIES_COLLECTION)?),
+            entity_aliases: read_cached(
+                id,
+                ENTITY_ALIASES_COLLECTION,
+                table(ENTITY_ALIASES_COLLECTION)?,
+            ),
             edges: table(EDGES_COLLECTION)?,
-            rules: table(RULES_COLLECTION)?,
-            state_records: table(STATE_RECORDS_COLLECTION)?,
-            dependency_traces: table(DEPENDENCY_TRACES_COLLECTION)?,
-            slots: table(SLOTS_COLLECTION)?,
-            slot_aliases: table(SLOT_ALIASES_COLLECTION)?,
+            rules: read_cached(id, RULES_COLLECTION, table(RULES_COLLECTION)?),
+            state_records: read_cached(
+                id,
+                STATE_RECORDS_COLLECTION,
+                table(STATE_RECORDS_COLLECTION)?,
+            ),
+            dependency_traces: read_cached(
+                id,
+                DEPENDENCY_TRACES_COLLECTION,
+                table(DEPENDENCY_TRACES_COLLECTION)?,
+            ),
+            slots: read_cached(id, SLOTS_COLLECTION, table(SLOTS_COLLECTION)?),
+            slot_aliases: read_cached(id, SLOT_ALIASES_COLLECTION, table(SLOT_ALIASES_COLLECTION)?),
             transactions,
             state_mutation_lock: RwLock::new(()),
             state_mutation_journal: Mutex::new(None),
@@ -1187,6 +1228,11 @@ fn unique_strings(items: Vec<String>) -> Vec<String> {
         }
     }
     out
+}
+
+// The state tables change only under the write lock, so a read may cache them.
+fn read_cached(id: u64, name: &str, table: Arc<dyn MemoryTable>) -> Arc<dyn MemoryTable> {
+    Arc::new(ReadCachedTable::new(table, id, name))
 }
 
 /// Every collection's schema by name, with `spans` as the span collection's schema.

@@ -244,8 +244,8 @@ fn a_write_on_one_store_does_not_skip_the_read_lock_of_another() {
         .map(|dir| MemoryStore::create(dir, 3, CollectionOptions::default()).unwrap());
 
     let write = a.lock_state_mutation();
-    let a_reads_locked = a.lock_state_read().unwrap().is_some();
-    let b_reads_locked = b.lock_state_read().unwrap().is_some();
+    let a_reads_locked = a.lock_state_read().unwrap().holds_lock();
+    let b_reads_locked = b.lock_state_read().unwrap().holds_lock();
     drop(write);
     drop([a, b]);
     for dir in dirs {
