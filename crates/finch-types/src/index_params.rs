@@ -79,13 +79,13 @@ impl HnswIndexParams {
         self
     }
 
-    /// Sets `ef_construction`.
+    /// Sets the candidate list size that each insert searches while it builds the graph.
     pub fn with_ef_construction(mut self, ef: usize) -> Self {
         self.ef_construction = ef;
         self
     }
 
-    /// Sets `quantize`.
+    /// Sets the encoding that stores each vector in the index.
     pub fn with_quantize(mut self, q: QuantizeType) -> Self {
         self.quantize = q;
         self
@@ -132,13 +132,13 @@ impl IvfIndexParams {
         }
     }
 
-    /// Sets `n_list`.
+    /// Sets the number of cells that the index splits vectors into.
     pub fn with_n_list(mut self, n: usize) -> Self {
         self.n_list = n;
         self
     }
 
-    /// Sets `quantize`.
+    /// Sets the encoding that stores each vector in the index.
     pub fn with_quantize(mut self, q: QuantizeType) -> Self {
         self.quantize = q;
         self
@@ -166,7 +166,7 @@ impl FlatIndexParams {
         }
     }
 
-    /// Sets `quantize`.
+    /// Sets the encoding that stores each vector in the index.
     pub fn with_quantize(mut self, q: QuantizeType) -> Self {
         self.quantize = q;
         self

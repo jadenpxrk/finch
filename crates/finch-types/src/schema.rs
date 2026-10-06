@@ -144,7 +144,7 @@ impl CollectionSchema {
         self
     }
 
-    /// Sets `max_doc_count_per_segment`.
+    /// Sets how many documents a writing segment holds before a new one starts.
     pub fn with_max_docs_per_segment(mut self, n: u64) -> Self {
         self.max_doc_count_per_segment = n;
         self
