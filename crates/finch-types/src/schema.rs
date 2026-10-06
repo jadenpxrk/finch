@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 /// Default/validation bounds for segment sizing.
 pub const MAX_DOC_COUNT_PER_SEGMENT: u64 = 10_000_000;
+/// Smallest `max_doc_count_per_segment` that validation accepts.
 pub const MAX_DOC_COUNT_PER_SEGMENT_MIN_THRESHOLD: u64 = 1_000;
 
 const COLLECTION_NAME_MIN_LEN: usize = 3;
@@ -52,8 +53,11 @@ fn is_supported_sparse_vector_type(dt: DataType) -> bool {
 /// Schema for a single document field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldSchema {
+    /// Field name: 1 to 32 letters, digits, `_`, or `-`.
     pub name: String,
+    /// Type of the field values.
     pub data_type: DataType,
+    /// Whether a document can omit the field or set it to null.
     pub nullable: bool,
     /// Vector dimension (for vector fields)
     pub dimension: Option<usize>,
@@ -62,6 +66,7 @@ pub struct FieldSchema {
 }
 
 impl FieldSchema {
+    /// A non-nullable field with no dimension and no index.
     pub fn new(name: impl Into<String>, data_type: DataType) -> Self {
         FieldSchema {
             name: name.into(),
@@ -72,34 +77,41 @@ impl FieldSchema {
         }
     }
 
+    /// Makes the field required.
     pub fn not_null(mut self) -> Self {
         self.nullable = false;
         self
     }
 
+    /// Makes the field optional.
     pub fn nullable(mut self) -> Self {
         self.nullable = true;
         self
     }
 
+    /// Sets the vector dimension.
     pub fn with_dimension(mut self, dim: usize) -> Self {
         self.dimension = Some(dim);
         self
     }
 
+    /// Sets the index parameters.
     pub fn with_index(mut self, params: IndexParams) -> Self {
         self.index_params = Some(params);
         self
     }
 
+    /// Whether the field holds dense or sparse vectors.
     pub fn is_vector(&self) -> bool {
         self.data_type.is_vector()
     }
 
+    /// Whether the field holds non-vector values.
     pub fn is_scalar(&self) -> bool {
         self.data_type.is_scalar()
     }
 
+    /// Whether the field has index parameters.
     pub fn is_indexed(&self) -> bool {
         self.index_params.is_some()
     }
@@ -108,13 +120,16 @@ impl FieldSchema {
 /// Schema for a collection (table of documents)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionSchema {
+    /// Collection name: 3 to 64 letters, digits, `_`, or `-`.
     pub name: String,
+    /// Fields in declaration order.
     pub fields: Vec<FieldSchema>,
     /// Maximum documents per segment before creating a new one
     pub max_doc_count_per_segment: u64,
 }
 
 impl CollectionSchema {
+    /// A schema with no fields and the largest segment size.
     pub fn new(name: impl Into<String>) -> Self {
         CollectionSchema {
             name: name.into(),
@@ -123,42 +138,51 @@ impl CollectionSchema {
         }
     }
 
+    /// Adds `field` at the end.
     pub fn with_field(mut self, field: FieldSchema) -> Self {
         self.fields.push(field);
         self
     }
 
+    /// Sets `max_doc_count_per_segment`.
     pub fn with_max_docs_per_segment(mut self, n: u64) -> Self {
         self.max_doc_count_per_segment = n;
         self
     }
 
+    /// The field named `name`.
     pub fn get_field(&self, name: &str) -> Option<&FieldSchema> {
         self.fields.iter().find(|f| f.name == name)
     }
 
+    /// The field named `name`, for change.
     pub fn get_field_mut(&mut self, name: &str) -> Option<&mut FieldSchema> {
         self.fields.iter_mut().find(|f| f.name == name)
     }
 
+    /// Whether a field has the name `name`.
     pub fn has_field(&self, name: &str) -> bool {
         self.fields.iter().any(|f| f.name == name)
     }
 
+    /// The vector fields, in declaration order.
     pub fn vector_fields(&self) -> impl Iterator<Item = &FieldSchema> {
         self.fields.iter().filter(|f| f.is_vector())
     }
 
+    /// The scalar fields, in declaration order.
     pub fn scalar_fields(&self) -> impl Iterator<Item = &FieldSchema> {
         self.fields.iter().filter(|f| f.is_scalar())
     }
 
+    /// The vector fields that have index parameters.
     pub fn indexed_vector_fields(&self) -> impl Iterator<Item = &FieldSchema> {
         self.fields
             .iter()
             .filter(|f| f.is_vector() && f.is_indexed())
     }
 
+    /// The fields that have an inverted index.
     pub fn inverted_index_fields(&self) -> impl Iterator<Item = &FieldSchema> {
         self.fields.iter().filter(|f| {
             f.index_params
@@ -168,6 +192,7 @@ impl CollectionSchema {
         })
     }
 
+    /// Checks the names and their uniqueness, field counts, segment size, vector types, dimensions, and index parameters.
     pub fn validate(&self) -> ZResult<()> {
         if self.name.is_empty() {
             return Err(Status::invalid_argument(
@@ -534,7 +559,8 @@ mod tests {
 
     #[test]
     fn validate_rejects_hnsw_scaling_factor_override() {
-        let p = HnswIndexParams::new(MetricType::L2).with_scaling_factor(123);
+        let mut p = HnswIndexParams::new(MetricType::L2);
+        p.scaling_factor = 123;
         let schema = CollectionSchema::new("abc").with_field(
             FieldSchema::new("vec", DataType::VectorFp32)
                 .with_dimension(8)

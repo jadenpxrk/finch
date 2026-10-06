@@ -4,10 +4,12 @@ use super::*;
 type BatchRanges = (Vec<(u64, u64)>, Vec<usize>, usize);
 
 impl MmapForwardStore {
+    /// Opens the forward file at `path` with the default options.
     pub fn open(path: &Path) -> ZResult<Self> {
         Self::open_with_options(path, ForwardStoreOpenOptions::default())
     }
 
+    /// Opens the forward file at `path`, with memory maps when `enable_mmap` is true.
     pub fn open_with_mmap(path: &Path, enable_mmap: bool) -> ZResult<Self> {
         Self::open_with_options(
             path,
@@ -18,6 +20,7 @@ impl MmapForwardStore {
         )
     }
 
+    /// Opens the forward file at `path`; the file header, not the extension, selects Parquet or Arrow IPC.
     pub fn open_with_options(path: &Path, options: ForwardStoreOpenOptions) -> ZResult<Self> {
         let i64_pk_sidecar = I64PkSidecar::open(path);
         // Sniff file header for Parquet magic bytes.
@@ -226,6 +229,7 @@ impl MmapForwardStore {
         }
     }
 
+    /// The document for each doc id, in input order; `None` for an id that the file does not hold.
     pub fn get_by_doc_ids(&self, ids: &[u64]) -> ZResult<Vec<Option<Doc>>> {
         match self.materialized_inner()? {
             ForwardStoreInner::InMemory(s) => s.get_by_doc_ids(ids),
@@ -292,6 +296,7 @@ impl MmapForwardStore {
         }
     }
 
+    /// Count of rows; 0 when the file cannot be read.
     pub fn len(&self) -> usize {
         match self.materialized_inner() {
             Ok(ForwardStoreInner::InMemory(s)) => s.len(),
@@ -300,10 +305,12 @@ impl MmapForwardStore {
         }
     }
 
+    /// Whether the store has no rows.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// The document in row `row` of `batch`, with `doc_id` as its id.
     pub fn extract_doc_from_batch(batch: &RecordBatch, row: usize, doc_id: u64) -> Doc {
         let schema = batch.schema();
 

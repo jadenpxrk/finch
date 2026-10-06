@@ -1,26 +1,8 @@
-//! Conversion between CollectionSchema and Arrow Schema
+//! Conversion of Finch field types to Arrow data types.
 
-use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-use finch_types::{CollectionSchema, DataType};
+use arrow::datatypes::{DataType as ArrowDataType, Field};
+use finch_types::DataType;
 use std::sync::Arc;
-
-/// Convert a CollectionSchema (scalar fields only) to an Arrow Schema
-pub fn collection_schema_to_arrow(schema: &CollectionSchema) -> Schema {
-    let mut fields = Vec::new();
-
-    // Always include a doc_id column
-    fields.push(Field::new("__doc_id__", ArrowDataType::UInt64, false));
-    fields.push(Field::new("__pk__", ArrowDataType::Utf8, false));
-
-    for field in schema.scalar_fields() {
-        if let Some(arrow_type) = data_type_to_arrow(&field.data_type) {
-            fields.push(Field::new(&field.name, arrow_type, field.nullable));
-        }
-        // Vector fields are stored separately in index files, not in Arrow
-    }
-
-    Schema::new(fields)
-}
 
 /// Map finch DataType to Arrow DataType (for scalar types only)
 pub fn data_type_to_arrow(dt: &DataType) -> Option<ArrowDataType> {

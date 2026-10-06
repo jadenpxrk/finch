@@ -263,9 +263,12 @@ enum ForwardStoreInner {
     LazyIpc(LazyIpcForwardStore),
 }
 
+/// How a Parquet forward file is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParquetReadMode {
+    /// Read row groups on demand through a bounded cache.
     Buffered,
+    /// Read the whole file into memory at open.
     Eager,
 }
 
@@ -276,8 +279,11 @@ pub enum ParquetReadMode {
 ///   row-group cache.
 #[derive(Debug, Clone, Copy)]
 pub struct ForwardStoreOpenOptions {
+    /// Memory-map an Arrow IPC file instead of reading it into memory.
     pub enable_mmap: bool,
+    /// Read mode for a Parquet file.
     pub parquet_read_mode: ParquetReadMode,
+    /// Defer reading an Arrow IPC file until the first access.
     pub lazy_ipc: bool,
 }
 

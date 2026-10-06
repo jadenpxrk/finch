@@ -7,32 +7,46 @@ use finch_types::HnswBuildTuning;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
+/// Failure to encode or decode a manifest.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestCodecError {
+    /// Protobuf encoding failed.
     #[error("protobuf encode error: {0}")]
     ProtobufEncode(String),
+    /// The bytes are not a valid protobuf manifest.
     #[error("protobuf decode error: {0}")]
     ProtobufDecode(String),
 }
 
+/// Persisted state of a collection: schema, segments, and file name suffixes.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Manifest {
+    /// Format version of the collection files.
     pub version: u32,
+    /// Collection schema; decoding into a collection fails when it is `None`.
     pub schema: Option<CollectionSchema>,
+    /// Whether the collection memory-maps its files.
     pub enable_mmap: bool,
+    /// Segments on disk, in order.
     pub persisted_segment_metas: Vec<SegmentMeta>,
+    /// Segment that takes new writes; only its `segment_id` is meaningful.
     pub writing_segment_meta: Option<SegmentMeta>,
+    /// Suffix of the current primary-key map file; 0 means the collection has none.
     pub id_map_path_suffix: u32,
+    /// Suffix of the current delete snapshot file.
     pub delete_snapshot_path_suffix: u32,
+    /// Id that the next new segment gets.
     pub next_segment_id: u32,
 }
 
 impl Manifest {
+    /// The manifest as protobuf bytes.
     pub fn encode(&self) -> Result<Vec<u8>, ManifestCodecError> {
         let pb = to_pb_manifest(self);
         Ok(pb.encode_to_vec())
     }
 
+    /// Reads a manifest from protobuf bytes.
     pub fn decode(data: &[u8]) -> Result<Self, ManifestCodecError> {
         pb::Manifest::decode(data)
             .map(from_pb_manifest)
@@ -40,90 +54,139 @@ impl Manifest {
     }
 }
 
+/// One segment of a collection.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SegmentMeta {
+    /// Segment id, unique in the collection.
     pub segment_id: u32,
+    /// Blocks on disk; the protobuf form carries the segment stats in a scalar block.
     pub persisted_blocks: Vec<BlockMeta>,
+    /// Forward block that takes new writes, if any.
     pub writing_forward_block: Option<BlockMeta>,
+    /// Vector fields that have an index in this segment.
     pub indexed_vector_fields: Vec<String>,
-    // Rebuilt vector indexes live in a numbered directory; a missing field means generation 0.
+    /// Directory generation of each rebuilt vector index; a missing field means generation 0.
     #[serde(default)]
     pub vector_index_generations: BTreeMap<String, u32>,
-    // Denormalized segment stats used by finch-db internals.
+    /// Smallest doc id in the segment.
     pub min_doc_id: u64,
+    /// Largest doc id in the segment.
     pub max_doc_id: u64,
+    /// Count of documents in the segment.
     pub doc_count: u64,
 }
 
+/// One stored block of a segment.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BlockMeta {
+    /// Block id in the segment.
     pub block_id: u32,
+    /// Block kind: 1 scalar, 2 scalar index, 3 vector index, 4 quantized vector index, 0 undefined.
     pub block_type: u32,
+    /// Smallest doc id in the block.
     pub min_doc_id: u64,
+    /// Largest doc id in the block.
     pub max_doc_id: u64,
+    /// Count of documents in the block.
     pub doc_count: u64,
+    /// Columns that the block holds.
     pub columns: Vec<String>,
-    // Not present in proto BlockMeta, kept for finch internal use.
-    pub field_name: String,
 }
 
+/// Encoded form of `finch_types::CollectionSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CollectionSchema {
+    /// Collection name.
     pub name: String,
+    /// Fields in declaration order.
     pub fields: Vec<FieldSchema>,
+    /// Largest document count of one segment.
     pub max_doc_count_per_segment: u64,
 }
 
+/// Encoded form of `finch_types::FieldSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FieldSchema {
+    /// Field name.
     pub name: String,
+    /// Numeric value of the field's `DataType`.
     pub data_type: u32,
+    /// Whether a document can omit the field or set it to null.
     pub nullable: bool,
+    /// Vector dimension; 0 means the field has none.
     pub dimension: u32,
+    /// Index parameters, if the field has an index.
     pub index_params: Option<FieldIndexParams>,
 }
 
+/// Encoded form of `finch_types::IndexParams`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum FieldIndexParams {
+    /// HNSW graph on a dense vector field.
     Hnsw(HnswIndexParams),
+    /// HNSW graph on a sparse vector field.
     HnswSparse(HnswIndexParams),
+    /// IVF partitions on a dense vector field.
     Ivf(IvfIndexParams),
+    /// Exact scan of a dense vector field.
     Flat(FlatIndexParams),
+    /// Exact scan of a sparse vector field.
     FlatSparse(FlatIndexParams),
+    /// Inverted index on a scalar field.
     Invert(InvertIndexParams),
 }
 
+/// Encoded form of `finch_types::HnswIndexParams`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HnswIndexParams {
+    /// Links per node.
     pub m: u32,
+    /// Candidate list size during construction.
     pub ef_construction: u32,
+    /// Factor that sets the level probabilities.
     pub scaling_factor: u32,
+    /// Numeric value of the `MetricType`.
     pub metric: u32,
+    /// Numeric value of the `QuantizeType`.
     pub quantize: u32,
+    /// Neighbor-selection heuristics of the build.
     #[serde(default)]
     pub build_tuning: HnswBuildTuning,
 }
 
+/// Encoded form of `finch_types::IvfIndexParams`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IvfIndexParams {
+    /// Count of partitions.
     pub n_list: u32,
+    /// K-means iterations.
     pub n_iters: u32,
+    /// Whether SOAR assigns vectors to a second partition.
     pub use_soar: bool,
+    /// Numeric value of the `MetricType`.
     pub metric: u32,
+    /// Numeric value of the `QuantizeType`.
     pub quantize: u32,
 }
 
+/// Encoded form of `finch_types::FlatIndexParams`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FlatIndexParams {
+    /// Numeric value of the `MetricType`.
     pub metric: u32,
+    /// Numeric value of the `QuantizeType`.
     pub quantize: u32,
+    /// Whether the vectors are stored column by column.
     pub column_major: bool,
 }
 
+/// Encoded form of `finch_types::InvertIndexParams`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InvertIndexParams {
+    /// Keep sorted storage for range queries.
     pub enable_range_optimization: bool,
+    /// Allow extended wildcard matches.
     pub enable_extended_wildcard: bool,
 }
 
@@ -179,7 +242,6 @@ fn from_pb_block_meta(b: pb::BlockMeta) -> BlockMeta {
         max_doc_id: b.max_doc_id,
         doc_count: b.doc_count,
         columns: b.columns,
-        field_name: String::new(),
     }
 }
 

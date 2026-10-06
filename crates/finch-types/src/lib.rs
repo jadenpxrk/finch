@@ -1,22 +1,26 @@
 //! Collection schemas, documents, query and index parameters, the process-wide config, and
 //! the `Status` error type. Every other Finch crate depends on it.
 
-pub mod agent;
+#![deny(missing_docs)]
+
+/// Process-wide settings: memory limit, threads, log, and WAL.
 pub mod config;
+/// Documents and field values.
 pub mod doc;
+/// Index build parameters.
 pub mod index_params;
+/// Vector queries, collection options, and statistics.
 pub mod query;
+/// Field and collection schemas and their validation.
 pub mod schema;
+/// The `Status` error type and its codes.
 pub mod status;
 pub mod system_columns;
+/// Data types, metrics, quantization, operators, and storage modes.
 pub mod types;
 
 // Re-export most commonly used items
-pub use agent::{
-    AgentContext, AgentPermissions, AuditEntry, AuditOperation, AuditResult, ContextValue,
-    DbPermissions, FsPermissions, NetworkPermissions, OperationBudget, SessionId, ToolCallRecord,
-    ToolDefinition,
-};
+
 pub use config::GlobalConfigData;
 pub use config::LogLevel;
 pub use doc::{Doc, Value};
@@ -34,11 +38,6 @@ pub use schema::{
 };
 pub use status::{Status, StatusCode, ZResult};
 pub use system_columns::{
-    FINCH_IPC_DOC_ID, FINCH_IPC_PK, SYS_GLOBAL_DOC_ID, SYS_INTERNAL_GROUP_ID,
-    SYS_INTERNAL_IS_VALID, SYS_INTERNAL_SPARSE_INDICES, SYS_INTERNAL_SPARSE_VALUES,
-    SYS_INTERNAL_VECTOR, SYS_LOCAL_ROW_ID, SYS_SCORE, SYS_USER_ID,
+    FINCH_IPC_DOC_ID, SYS_GLOBAL_DOC_ID, SYS_LOCAL_ROW_ID, SYS_SCORE, SYS_USER_ID,
 };
-pub use types::{
-    BlockType, ColumnOp, CompareOp, DataType, FileFormat, IndexType, MetricType, Operator,
-    QuantizeType, RelationOp, StorageType,
-};
+pub use types::{CompareOp, DataType, FileFormat, MetricType, Operator, QuantizeType, StorageType};

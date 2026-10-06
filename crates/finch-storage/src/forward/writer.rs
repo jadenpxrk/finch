@@ -5,13 +5,14 @@ use arrow::datatypes::{
 };
 use std::ops::Range;
 
+/// Column buffers for the documents of the segment that takes writes.
 pub struct MemoryForwardStore {
     collection_schema: CollectionSchema,
     doc_ids: Vec<u64>,
     pks: Vec<String>,
     /// Scalar field column data
     scalar_fields: HashMap<String, Vec<Option<Value>>>,
-    /// Vector field data stored as raw f32 bytes (field_name → rows of Vec<f32>)
+    /// Dense vector rows of each vector field, as 32-bit floats.
     vector_fields: HashMap<String, Vec<Option<Vec<f32>>>>,
     /// Binary vector field data stored as u32 words.
     binary_vector_fields_u32: HashMap<String, Vec<Option<Vec<u32>>>>,
@@ -24,6 +25,7 @@ pub struct MemoryForwardStore {
 }
 
 impl MemoryForwardStore {
+    /// An empty store with one column for each field of `schema`.
     pub fn new(schema: CollectionSchema) -> Self {
         let mut scalar_fields = HashMap::new();
         for f in schema.scalar_fields() {
@@ -65,6 +67,7 @@ impl MemoryForwardStore {
         }
     }
 
+    /// Appends `doc` as a row with id `doc_id`; a missing field or empty sparse vector becomes null.
     pub fn insert(&mut self, doc_id: u64, doc: &Doc) -> ZResult<()> {
         self.doc_ids.push(doc_id);
         self.pks.push(doc.pk.clone());
@@ -126,10 +129,12 @@ impl MemoryForwardStore {
         Ok(())
     }
 
+    /// Count of rows.
     pub fn len(&self) -> usize {
         self.doc_ids.len()
     }
 
+    /// Whether the store has no rows.
     pub fn is_empty(&self) -> bool {
         self.doc_ids.is_empty()
     }

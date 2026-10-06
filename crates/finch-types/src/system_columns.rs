@@ -30,22 +30,20 @@ pub const SYS_GLOBAL_DOC_ID: &str = "_finch_g_doc_id_";
 pub const SYS_SCORE: &str = "_finch_score";
 
 /// SQL engine internal: materialized vector payload column name.
-pub const SYS_INTERNAL_VECTOR: &str = "_finch_vector";
+pub(crate) const SYS_INTERNAL_VECTOR: &str = "_finch_vector";
 /// SQL engine internal: sparse indices payload column name.
-pub const SYS_INTERNAL_SPARSE_INDICES: &str = "_finch_sindices";
+pub(crate) const SYS_INTERNAL_SPARSE_INDICES: &str = "_finch_sindices";
 /// SQL engine internal: sparse values payload column name.
-pub const SYS_INTERNAL_SPARSE_VALUES: &str = "_finch_svalues";
+pub(crate) const SYS_INTERNAL_SPARSE_VALUES: &str = "_finch_svalues";
 /// SQL engine internal: per-row validity marker column name.
-pub const SYS_INTERNAL_IS_VALID: &str = "_finch_is_valid";
+pub(crate) const SYS_INTERNAL_IS_VALID: &str = "_finch_is_valid";
 /// SQL engine internal: group-by group id column name.
-pub const SYS_INTERNAL_GROUP_ID: &str = "_finch_group_id";
+pub(crate) const SYS_INTERNAL_GROUP_ID: &str = "_finch_group_id";
 
 /// Finch Arrow IPC: global doc id column (uint64).
 pub const FINCH_IPC_DOC_ID: &str = "__doc_id__";
-/// Finch Arrow IPC: primary key column (utf8).
-pub const FINCH_IPC_PK: &str = "__pk__";
 
-pub fn is_system_reserved_column(name: &str) -> bool {
+pub(crate) fn is_system_reserved_column(name: &str) -> bool {
     matches!(
         name,
         SYS_USER_ID
@@ -60,11 +58,12 @@ pub fn is_system_reserved_column(name: &str) -> bool {
     )
 }
 
+/// Whether `name` is the user id, local row id, or global doc id column.
 pub fn is_system_column(name: &str) -> bool {
     matches!(name, SYS_USER_ID | SYS_LOCAL_ROW_ID | SYS_GLOBAL_DOC_ID)
 }
 
-pub fn is_reserved_field_name(name: &str) -> bool {
+pub(crate) fn is_reserved_field_name(name: &str) -> bool {
     // Finch reserves `__*` for internal Arrow storage columns and vector payload
     // columns (e.g. `__vec__{field}`).
     if name.starts_with("__") {

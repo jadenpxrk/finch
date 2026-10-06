@@ -10,53 +10,103 @@ use std::collections::HashMap;
 /// A polymorphic value for document fields
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
+    /// No value.
     Null,
+    /// Boolean.
     Bool(bool),
+    /// Signed 8-bit integer.
     I8(i8),
+    /// Signed 16-bit integer.
     I16(i16),
+    /// Signed 32-bit integer.
     I32(i32),
+    /// Signed 64-bit integer.
     I64(i64),
+    /// Unsigned 8-bit integer.
     U8(u8),
+    /// Unsigned 16-bit integer.
     U16(u16),
+    /// Unsigned 32-bit integer.
     U32(u32),
+    /// Unsigned 64-bit integer.
     U64(u64),
+    /// 16-bit float.
     F16(f16),
+    /// 32-bit float.
     F32(f32),
+    /// 64-bit float.
     F64(f64),
+    /// Text.
     String(String),
+    /// Raw bytes.
     Bytes(Vec<u8>),
     // Dense vector types
+    /// Dense vector of booleans.
     VecBool(Vec<bool>),
+    /// Dense vector of 8-bit integers.
     VecI8(Vec<i8>),
+    /// Dense vector of 16-bit integers.
     VecI16(Vec<i16>),
+    /// Dense vector of 32-bit integers.
     VecI32(Vec<i32>),
+    /// Dense vector of 64-bit integers.
     VecI64(Vec<i64>),
+    /// Dense vector of unsigned 32-bit integers, or the words of a 32-bit binary vector.
     VecU32(Vec<u32>),
+    /// Dense vector of unsigned 64-bit integers, or the words of a 64-bit binary vector.
     VecU64(Vec<u64>),
+    /// Dense vector of 16-bit floats.
     VecF16(Vec<f16>),
+    /// Dense vector of 32-bit floats.
     VecF32(Vec<f32>),
+    /// Dense vector of 64-bit floats.
     VecF64(Vec<f64>),
+    /// List of strings that `From<Vec<String>>` builds. Validation rejects it for every field
+    /// type; a string list field takes `ArrayString`.
     VecString(Vec<String>),
     // Sparse vector types
-    SparseF16 { indices: Vec<u32>, values: Vec<f16> },
-    SparseF32 { indices: Vec<u32>, values: Vec<f32> },
+    /// Sparse vector of 16-bit floats: `values[i]` is the component at `indices[i]`.
+    SparseF16 {
+        /// Dimension of each nonzero component.
+        indices: Vec<u32>,
+        /// Nonzero components, one for each index.
+        values: Vec<f16>,
+    },
+    /// Sparse vector of 32-bit floats: `values[i]` is the component at `indices[i]`.
+    SparseF32 {
+        /// Dimension of each nonzero component.
+        indices: Vec<u32>,
+        /// Nonzero components, one for each index.
+        values: Vec<f32>,
+    },
     // Array types
+    /// List of byte strings.
     ArrayBinary(Vec<Vec<u8>>),
+    /// List of signed 32-bit integers.
     ArrayI32(Vec<i32>),
+    /// List of signed 64-bit integers.
     ArrayI64(Vec<i64>),
+    /// List of unsigned 32-bit integers.
     ArrayU32(Vec<u32>),
+    /// List of unsigned 64-bit integers.
     ArrayU64(Vec<u64>),
+    /// List of booleans.
     ArrayBool(Vec<bool>),
+    /// List of 32-bit floats.
     ArrayF32(Vec<f32>),
+    /// List of 64-bit floats.
     ArrayF64(Vec<f64>),
+    /// List of strings.
     ArrayString(Vec<String>),
 }
 
 impl Value {
+    /// Whether the value is `Null`.
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
 
+    /// The value as a 32-bit float, for float and integer variants; `None` for others.
     pub fn as_f32(&self) -> Option<f32> {
         match self {
             Value::F32(v) => Some(*v),
@@ -70,6 +120,7 @@ impl Value {
         }
     }
 
+    /// The value as a 64-bit float, for 32-bit or 64-bit float and integer variants; `None` for others.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::F64(v) => Some(*v),
@@ -82,6 +133,7 @@ impl Value {
         }
     }
 
+    /// The value as a 64-bit integer, for 32-bit or 64-bit integer variants; `None` for others.
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::I64(v) => Some(*v),
@@ -92,6 +144,7 @@ impl Value {
         }
     }
 
+    /// The text of a `String` value; `None` for others.
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::String(s) => Some(s),
@@ -99,28 +152,28 @@ impl Value {
         }
     }
 
-    pub fn as_vec_f32(&self) -> Option<&[f32]> {
+    pub(crate) fn as_vec_f32(&self) -> Option<&[f32]> {
         match self {
             Value::VecF32(v) => Some(v),
             _ => None,
         }
     }
 
-    pub fn as_vec_u32(&self) -> Option<&[u32]> {
+    pub(crate) fn as_vec_u32(&self) -> Option<&[u32]> {
         match self {
             Value::VecU32(v) => Some(v),
             _ => None,
         }
     }
 
-    pub fn as_vec_u64(&self) -> Option<&[u64]> {
+    pub(crate) fn as_vec_u64(&self) -> Option<&[u64]> {
         match self {
             Value::VecU64(v) => Some(v),
             _ => None,
         }
     }
 
-    pub fn as_sparse_f32(&self) -> Option<(&[u32], &[f32])> {
+    pub(crate) fn as_sparse_f32(&self) -> Option<(&[u32], &[f32])> {
         match self {
             Value::SparseF32 { indices, values } => Some((indices, values)),
             _ => None,
@@ -194,10 +247,15 @@ impl Value {
 /// A document with primary key, fields, and metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Doc {
+    /// Primary key: 1 to 64 characters of letters, digits, and `_!@#$%+=.-`.
     pub pk: String,
+    /// Distance or score from the query that returned the document; 0 elsewhere.
     pub score: f32,
+    /// Internal number that the collection gives this version of the document.
     pub doc_id: u64,
+    /// Write operation that the document records.
     pub op: Operator,
+    /// Field values by field name.
     pub fields: HashMap<String, Value>,
 }
 
@@ -243,7 +301,6 @@ fn value_matches_data_type(v: &Value, dt: DataType) -> bool {
         D::VectorFp64 => matches!(v, Value::VecF64(_) | Value::VecF32(_)),
         D::VectorBinary32 => matches!(v, Value::VecU32(_)),
         D::VectorBinary64 => matches!(v, Value::VecU64(_)),
-        // Other vector dtypes are currently treated as f32 at the API boundary.
         D::VectorBool | D::VectorInt32 | D::VectorInt64 | D::VectorUint32 | D::VectorUint64 => {
             matches!(v, Value::VecF32(_))
         }
@@ -276,6 +333,7 @@ fn value_matches_data_type(v: &Value, dt: DataType) -> bool {
 }
 
 impl Doc {
+    /// A document with primary key `pk` and no fields, to insert.
     pub fn new(pk: impl Into<String>) -> Self {
         Doc {
             pk: pk.into(),
@@ -286,32 +344,33 @@ impl Doc {
         }
     }
 
-    pub fn with_op(mut self, op: Operator) -> Self {
-        self.op = op;
-        self
-    }
-
+    /// Sets `field` to `value` and returns the document, for chained building.
     pub fn set(mut self, field: impl Into<String>, value: impl Into<Value>) -> Self {
         self.fields.insert(field.into(), value.into());
         self
     }
 
+    /// Sets `field` to `value`.
     pub fn set_field(&mut self, field: impl Into<String>, value: impl Into<Value>) {
         self.fields.insert(field.into(), value.into());
     }
 
+    /// The value of `field`, if the document has it.
     pub fn get(&self, field: &str) -> Option<&Value> {
         self.fields.get(field)
     }
 
+    /// Whether the document has `field`, null or not.
     pub fn has(&self, field: &str) -> bool {
         self.fields.contains_key(field)
     }
 
+    /// Whether `field` is missing or null.
     pub fn is_null(&self, field: &str) -> bool {
         self.fields.get(field).map(|v| v.is_null()).unwrap_or(true)
     }
 
+    /// The value of `field` as a 32-bit float; `None` when missing or null, and an error when not numeric.
     pub fn get_f32(&self, field: &str) -> ZResult<Option<f32>> {
         match self.fields.get(field) {
             None | Some(Value::Null) => Ok(None),
@@ -325,26 +384,33 @@ impl Doc {
         }
     }
 
+    /// The text of `field`, if it holds a string.
     pub fn get_str(&self, field: &str) -> Option<&str> {
         self.fields.get(field)?.as_str()
     }
 
+    /// The components of `field`, if it holds a 32-bit float vector.
     pub fn get_vec_f32(&self, field: &str) -> Option<&[f32]> {
         self.fields.get(field)?.as_vec_f32()
     }
 
+    /// The words of `field`, if it holds an unsigned 32-bit vector.
     pub fn get_vec_u32(&self, field: &str) -> Option<&[u32]> {
         self.fields.get(field)?.as_vec_u32()
     }
 
+    /// The words of `field`, if it holds an unsigned 64-bit vector.
     pub fn get_vec_u64(&self, field: &str) -> Option<&[u64]> {
         self.fields.get(field)?.as_vec_u64()
     }
 
+    /// The indices and values of `field`, if it holds a 32-bit float sparse vector.
     pub fn get_sparse_f32(&self, field: &str) -> Option<(&[u32], &[f32])> {
         self.fields.get(field)?.as_sparse_f32()
     }
 
+    /// Checks the document against `schema`: a valid primary key, no unknown fields, and valid values.
+    /// Every non-nullable field must hold a value, except in an update (`is_update`), which can omit fields.
     pub fn validate(&self, schema: &CollectionSchema, is_update: bool) -> ZResult<()> {
         if self.pk.is_empty() {
             return Err(Status::invalid_argument(

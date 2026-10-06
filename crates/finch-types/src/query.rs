@@ -20,10 +20,7 @@ pub struct QueryParams {
     /// When set, finch will resolve PKs -> doc_ids and compute exact distances
     /// only over that candidate set.
     pub bf_pks: Option<Vec<String>>,
-    /// Search radius threshold. `None` or `<= 0` disables radius filtering.
-    ///
-    /// Note: Finch currently applies this as a post-filter on the distance/score
-    /// used for ranking (lower is better).
+    /// Largest distance a result can have; `None` or a value of 0 or less keeps every result.
     pub radius: Option<f32>,
     /// Force linear (brute-force) search even if an index exists.
     pub is_linear: Option<bool>,
@@ -46,10 +43,12 @@ pub struct QueryParams {
 }
 
 impl QueryParams {
+    /// Whether the query scans every vector; false when unset.
     pub fn effective_is_linear(&self) -> bool {
         self.is_linear.unwrap_or(false)
     }
 
+    /// The radius when it is finite and above 0; `None` otherwise.
     pub fn effective_radius(&self) -> Option<f32> {
         let r = self.radius?;
         if !r.is_finite() || r <= 0.0 {
@@ -59,6 +58,8 @@ impl QueryParams {
         }
     }
 
+    /// Count of candidates to rerank with exact distances, from `topk` to 10000.
+    /// Without the refiner it is `topk`; else `refiner_k`, else `topk * refiner_scale_factor`, else `10 * topk`.
     pub fn effective_refiner_k(&self, topk: usize) -> u32 {
         if !self.use_refiner {
             return topk as u32;
@@ -118,6 +119,7 @@ pub struct VectorQuery {
 }
 
 impl VectorQuery {
+    /// A dense query for the `topk` nearest documents, with no filter, all fields, and default parameters.
     pub fn new(field_name: impl Into<String>, query_vector: Vec<f32>, topk: usize) -> Self {
         VectorQuery {
             topk,
@@ -136,65 +138,19 @@ impl VectorQuery {
         }
     }
 
-    pub fn new_binary32(
-        field_name: impl Into<String>,
-        query_vector: Vec<u32>,
-        topk: usize,
-    ) -> Self {
-        VectorQuery {
-            topk,
-            field_name: field_name.into(),
-            id: None,
-            query_vector: Vec::new(),
-            query_vector_u32: query_vector,
-            query_vector_u64: Vec::new(),
-            sparse_indices: Vec::new(),
-            sparse_values: Vec::new(),
-            filter: None,
-            include_vector: false,
-            include_doc_id: false,
-            output_fields: None,
-            query_params: QueryParams::default(),
-        }
-    }
-
-    pub fn new_binary64(
-        field_name: impl Into<String>,
-        query_vector: Vec<u64>,
-        topk: usize,
-    ) -> Self {
-        VectorQuery {
-            topk,
-            field_name: field_name.into(),
-            id: None,
-            query_vector: Vec::new(),
-            query_vector_u32: Vec::new(),
-            query_vector_u64: query_vector,
-            sparse_indices: Vec::new(),
-            sparse_values: Vec::new(),
-            filter: None,
-            include_vector: false,
-            include_doc_id: false,
-            output_fields: None,
-            query_params: QueryParams::default(),
-        }
-    }
-
+    /// Sets the SQL filter.
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = Some(filter.into());
         self
     }
 
-    pub fn with_id(mut self, id: impl Into<String>) -> Self {
-        self.id = Some(id.into());
-        self
-    }
-
+    /// Returns only `fields`.
     pub fn with_output_fields(mut self, fields: Vec<String>) -> Self {
         self.output_fields = Some(fields);
         self
     }
 
+    /// Sets the runtime parameters.
     pub fn with_params(mut self, params: QueryParams) -> Self {
         self.query_params = params;
         self
@@ -256,6 +212,7 @@ mod tests {
 /// A group-by vector search query
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupByVectorQuery {
+    /// Vector query that finds the candidates.
     pub base: VectorQuery,
     /// Field to group results by
     pub group_by_field: String,
@@ -268,22 +225,26 @@ pub struct GroupByVectorQuery {
 /// Result from a group-by query
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupResult {
+    /// Value of the group-by field that the group shares.
     pub group_value: Value,
+    /// Documents in the group, nearest first.
     pub docs: Vec<crate::doc::Doc>,
 }
 
 /// Collection open options
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionOptions {
+    /// Open the collection without write access.
     #[serde(default)]
     pub read_only: bool,
+    /// Memory-map the stored files; false reads them into memory.
     #[serde(default = "CollectionOptions::default_enable_mmap")]
     pub enable_mmap: bool,
     /// Optional storage mode for vector index files.
     ///
     /// - `None`: `enable_mmap` decides
     /// - `Some(Mmap|Memory)`: overrides `enable_mmap` for index loading
-    /// - `Some(BufferPool)`: currently unsupported for vector indexes
+    /// - `Some(BufferPool)`: vector indexes reject it
     /// - `Some(None)`: treated like unset
     #[serde(default)]
     pub index_storage: Option<crate::types::StorageType>,
@@ -297,9 +258,7 @@ pub struct CollectionOptions {
     /// Maximum in-memory write buffer size in bytes.
     #[serde(default = "CollectionOptions::default_max_buffer_size")]
     pub max_buffer_size: u32,
-    /// Persisted forward-store file format (finch-only).
-    ///
-    /// `None` means "use the default" (currently Arrow IPC).
+    /// File format of the forward store; `None` selects Arrow IPC.
     #[serde(default)]
     pub forward_file_format: Option<FileFormat>,
 }
@@ -311,6 +270,7 @@ impl Default for CollectionOptions {
 }
 
 impl CollectionOptions {
+    /// Write buffer size in bytes: 64 MiB.
     pub const DEFAULT_MAX_BUFFER_SIZE: u32 = 64 * 1024 * 1024;
 
     const fn default_enable_mmap() -> bool {
@@ -321,7 +281,7 @@ impl CollectionOptions {
         Self::DEFAULT_MAX_BUFFER_SIZE
     }
 
-    pub fn read_write() -> Self {
+    pub(crate) fn read_write() -> Self {
         CollectionOptions {
             read_only: false,
             enable_mmap: true,
@@ -332,6 +292,7 @@ impl CollectionOptions {
         }
     }
 
+    /// Options that open the collection read-only with memory maps.
     pub fn read_only() -> Self {
         CollectionOptions {
             read_only: true,
@@ -342,34 +303,35 @@ impl CollectionOptions {
             forward_file_format: None,
         }
     }
-
-    pub fn with_mmap(mut self) -> Self {
-        self.enable_mmap = true;
-        self
-    }
 }
 
 /// Statistics for a single vector field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorFieldStats {
+    /// Name of the vector field.
     pub field_name: String,
+    /// Count of live documents in the collection.
     pub doc_count: u64,
+    /// Whether the field has index parameters.
     pub indexed: bool,
 }
 
 /// Collection statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionStats {
+    /// Count of live documents.
     pub doc_count: u64,
+    /// Count of segments.
     pub segment_count: usize,
+    /// Statistics for each vector field, in schema order.
     pub vector_field_stats: Vec<VectorFieldStats>,
-    /// per-vector-field completeness ratio in [0,1].
-    /// 1.0 means all live docs are covered by an index for that field.
+    /// Fraction of live documents, from 0 to 1, that an index covers, for each vector field.
     #[serde(default)]
     pub index_completeness: HashMap<String, f32>,
 }
 
 impl CollectionStats {
+    /// The counts and index completeness as indented lines, with fields in name order.
     pub fn to_string_formatted(&self, indent_level: usize) -> String {
         let indent = " ".repeat(indent_level);
         let mut out = String::new();
@@ -399,14 +361,18 @@ pub struct CreateIndexOptions {
 /// Options for add_column DDL
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AddColumnOptions {
+    /// Request to rebuild indexes; column DDL ignores it.
     pub rebuild_index: bool,
+    /// Thread limit; column DDL ignores it.
     pub concurrency: Option<usize>,
 }
 
 /// Options for alter_column DDL
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AlterColumnOptions {
+    /// Request to rebuild indexes; column DDL ignores it.
     pub rebuild_index: bool,
+    /// Thread limit; column DDL ignores it.
     pub concurrency: Option<usize>,
 }
 

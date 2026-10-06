@@ -3,23 +3,30 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_MEMORY_LIMIT_RATIO: f64 = 0.8;
 const MIN_MEMORY_LIMIT_BYTES: u64 = 100 * 1024 * 1024;
 
+/// Smallest log file size in MB that config validation accepts.
 pub const MIN_LOG_FILE_SIZE_MB: u32 = 128;
-pub const DEFAULT_LOG_FILE_SIZE_MB: u32 = 2048;
-pub const DEFAULT_LOG_OVERDUE_DAYS: u32 = 7;
-pub const DEFAULT_LOG_DIR: &str = "./logs";
-pub const DEFAULT_LOG_BASENAME: &str = "finch.log";
+pub(crate) const DEFAULT_LOG_FILE_SIZE_MB: u32 = 2048;
+pub(crate) const DEFAULT_LOG_OVERDUE_DAYS: u32 = 7;
+pub(crate) const DEFAULT_LOG_DIR: &str = "./logs";
+pub(crate) const DEFAULT_LOG_BASENAME: &str = "finch.log";
 
-pub const DEFAULT_WAL_FLUSH_EVERY_DOCS: u32 = 1;
-pub const DEFAULT_WAL_FSYNC_EVERY_DOCS: u32 = 0;
+pub(crate) const DEFAULT_WAL_FLUSH_EVERY_DOCS: u32 = 1;
+pub(crate) const DEFAULT_WAL_FSYNC_EVERY_DOCS: u32 = 0;
 
+/// Lowest severity that the log writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum LogLevel {
+    /// Debug messages and above.
     Debug = 0,
+    /// Information messages and above.
     Info = 1,
+    /// Warnings and above.
     #[default]
     Warn = 2,
+    /// Errors only.
     Error = 3,
+    /// Errors only; the log treats it as `Error`.
     Fatal = 4,
 }
 
@@ -158,7 +165,7 @@ fn detect_cpu_limit() -> Option<u32> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GlobalConfigData {
-    /// Soft memory budget in bytes (currently advisory; must be at least 100 MiB).
+    /// Soft memory budget in bytes (advisory; at least 100 MiB).
     pub memory_limit_bytes: u64,
 
     /// Log level (used only when `RUST_LOG` is not set).
@@ -177,16 +184,12 @@ pub struct GlobalConfigData {
     /// Default query parallelism (Rayon global thread-pool size).
     pub query_thread_count: u32,
 
-    /// Planner heuristic: convert invert range lookups to forward scan when
-    /// the estimated match ratio is high.
-    ///
-    /// Used as a threshold in [0,1]. Larger => keep invert more often.
+    /// Match ratio, from 0 to 1, above which a range filter scans the forward store
+    /// instead of the inverted index. A larger value keeps the inverted index more often.
     pub invert_to_forward_scan_ratio: f32,
 
-    /// Planner heuristic: when an inverted allowlist is very small, run
-    /// brute-force only over those doc IDs.
-    ///
-    /// Used as a threshold in [0,1]. Larger => use bf-by-keys more often.
+    /// Match ratio, from 0 to 1, below which a search scans only the doc ids that the
+    /// inverted index matched. A larger value selects this scan more often.
     pub brute_force_by_keys_ratio: f32,
 
     /// Default optimize (compaction) parallelism.

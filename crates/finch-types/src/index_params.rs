@@ -10,7 +10,9 @@ pub struct HnswIndexParams {
     pub ef_construction: usize,
     /// Scaling factor controlling level probabilities (default: 50)
     pub scaling_factor: usize,
+    /// Distance that the index ranks by.
     pub metric: MetricType,
+    /// Compression of the stored vectors.
     pub quantize: QuantizeType,
     /// Number of threads for parallel HNSW construction.
     /// `None` = all available cores, `Some(1)` = sequential.
@@ -56,6 +58,7 @@ impl Default for HnswBuildTuning {
 }
 
 impl HnswIndexParams {
+    /// Parameters with `m` 50, `ef_construction` 500, no quantization, and default tuning.
     pub fn new(metric: MetricType) -> Self {
         let m = 50;
         HnswIndexParams {
@@ -69,27 +72,26 @@ impl HnswIndexParams {
         }
     }
 
+    /// Sets `m` and sets `scaling_factor` to the same value.
     pub fn with_m(mut self, m: usize) -> Self {
         self.m = m;
         self.scaling_factor = m;
         self
     }
 
+    /// Sets `ef_construction`.
     pub fn with_ef_construction(mut self, ef: usize) -> Self {
         self.ef_construction = ef;
         self
     }
 
-    pub fn with_scaling_factor(mut self, scaling_factor: usize) -> Self {
-        self.scaling_factor = scaling_factor;
-        self
-    }
-
+    /// Sets `quantize`.
     pub fn with_quantize(mut self, q: QuantizeType) -> Self {
         self.quantize = q;
         self
     }
 
+    /// Sets the build thread count.
     pub fn with_build_concurrency(mut self, c: usize) -> Self {
         self.build_concurrency = Some(c);
         self
@@ -111,11 +113,14 @@ pub struct IvfIndexParams {
     /// IVF layout (outer IVF partitions, inner IVF partitions within each cell).
     #[serde(default)]
     pub l1_index: Option<Box<IndexParams>>,
+    /// Distance that the index ranks by.
     pub metric: MetricType,
+    /// Compression of the stored vectors.
     pub quantize: QuantizeType,
 }
 
 impl IvfIndexParams {
+    /// Parameters with 1024 cells, 10 iterations, no SOAR, and no quantization.
     pub fn new(metric: MetricType) -> Self {
         IvfIndexParams {
             n_list: 1024,
@@ -127,11 +132,13 @@ impl IvfIndexParams {
         }
     }
 
+    /// Sets `n_list`.
     pub fn with_n_list(mut self, n: usize) -> Self {
         self.n_list = n;
         self
     }
 
+    /// Sets `quantize`.
     pub fn with_quantize(mut self, q: QuantizeType) -> Self {
         self.quantize = q;
         self
@@ -141,13 +148,16 @@ impl IvfIndexParams {
 /// Parameters for FLAT (brute-force) index
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlatIndexParams {
+    /// Distance that the index ranks by.
     pub metric: MetricType,
+    /// Compression of the stored vectors.
     pub quantize: QuantizeType,
     /// Use column-major storage for batch distance computation
     pub column_major: bool,
 }
 
 impl FlatIndexParams {
+    /// Row-major parameters with no quantization.
     pub fn new(metric: MetricType) -> Self {
         FlatIndexParams {
             metric,
@@ -156,6 +166,7 @@ impl FlatIndexParams {
         }
     }
 
+    /// Sets `quantize`.
     pub fn with_quantize(mut self, q: QuantizeType) -> Self {
         self.quantize = q;
         self
@@ -174,15 +185,22 @@ pub struct InvertIndexParams {
 /// Index parameters (enum variant per algorithm)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IndexParams {
+    /// HNSW graph on a dense vector field.
     Hnsw(HnswIndexParams),
+    /// HNSW graph on a sparse vector field.
     HnswSparse(HnswIndexParams),
+    /// IVF partitions on a dense vector field.
     Ivf(IvfIndexParams),
+    /// Exact scan of a dense vector field.
     Flat(FlatIndexParams),
+    /// Exact scan of a sparse vector field.
     FlatSparse(FlatIndexParams),
+    /// Inverted index on a scalar field.
     Invert(InvertIndexParams),
 }
 
 impl IndexParams {
+    /// The vector metric; `None` for an inverted index.
     pub fn metric(&self) -> Option<MetricType> {
         match self {
             IndexParams::Hnsw(p) | IndexParams::HnswSparse(p) => Some(p.metric),
@@ -192,6 +210,7 @@ impl IndexParams {
         }
     }
 
+    /// The vector quantization; `None` for an inverted index.
     pub fn quantize(&self) -> Option<QuantizeType> {
         match self {
             IndexParams::Hnsw(p) | IndexParams::HnswSparse(p) => Some(p.quantize),
