@@ -19,17 +19,39 @@ use std::thread::{self, ThreadId};
 
 type Param = Box<dyn ToSql + Sync>;
 
+/// Where a memory store lives in Postgres, and how many connections it may hold at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostgresStore {
+    /// Connection URL of the server, for example `postgres://user:password@host:5432/db`.
+    pub url: String,
+    /// Schema that holds the store: 1 to 63 characters of a-z, 0-9, or _.
+    pub name: String,
+    /// Most connections the store holds at once. Each read or write holds one until it ends.
+    pub max_connections: usize,
+}
+
+impl PostgresStore {
+    /// The store `name` at `url`, holding at most 8 connections.
+    pub fn new(url: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            name: name.into(),
+            max_connections: 8,
+        }
+    }
+}
+
 impl MemoryStore {
-    /// Creates a store in the new Postgres schema `name`; fails if that schema exists.
+    /// Creates a store in the new schema `store.name`; fails if that schema exists.
     /// `vector_index` builds an HNSW index on each embedding column; without it searches are
     /// exact.
     pub fn create(
-        url: &str,
-        name: &str,
+        store: &PostgresStore,
         embedding_dim: usize,
         vector_index: bool,
     ) -> ZResult<Self> {
-        let session = Arc::new(PgSession::connect(url, name)?);
+        let name = &store.name;
+        let session = Arc::new(PgSession::connect(store)?);
         let created = session.with_client(|client| {
             client.batch_execute(&format!(
                 "CREATE SCHEMA {schema}; CREATE SEQUENCE {schema}.write_seq;",
@@ -52,9 +74,10 @@ impl MemoryStore {
         })
     }
 
-    /// Opens the store in the Postgres schema `name`.
-    pub fn open(url: &str, name: &str) -> ZResult<Self> {
-        let session = Arc::new(PgSession::connect(url, name)?);
+    /// Opens the store in the schema `store.name`.
+    pub fn open(store: &PostgresStore) -> ZResult<Self> {
+        let name = &store.name;
+        let session = Arc::new(PgSession::connect(store)?);
         if !session.schema_exists()? {
             return Err(Status::not_found(format!(
                 "postgres store {name} does not exist"
@@ -70,16 +93,19 @@ impl MemoryStore {
     }
 }
 
-/// Deletes the store in the Postgres schema `name` and every row it holds.
-pub fn drop_store(url: &str, name: &str) -> ZResult<()> {
-    PgSession::connect(url, name)?.with_client(|client| {
-        client.batch_execute(&format!("DROP SCHEMA IF EXISTS {} CASCADE", quote(name)))
+/// Deletes the store in the schema `store.name` and every row it holds.
+pub fn drop_store(store: &PostgresStore) -> ZResult<()> {
+    PgSession::connect(store)?.with_client(|client| {
+        client.batch_execute(&format!(
+            "DROP SCHEMA IF EXISTS {} CASCADE",
+            quote(&store.name)
+        ))
     })
 }
 
 /// Connections to one store's schema. A thread inside a transaction, a write or a snapshot read,
 /// uses the connection bound to it; every other operation autocommits on a pooled connection.
-/// The pool opens connections on demand, up to `POOL_CONNECTIONS`, and a closed pooled
+/// The pool opens connections on demand, up to `max_connections`, and a closed pooled
 /// connection opens again before its next use.
 pub(crate) struct PgSession {
     url: String,
@@ -88,12 +114,17 @@ pub(crate) struct PgSession {
     open: Mutex<usize>,
     released: Condvar,
     bound: Mutex<HashMap<ThreadId, Client>>,
+    max_connections: usize,
 }
 
-const POOL_CONNECTIONS: usize = 8;
-
 impl PgSession {
-    fn connect(url: &str, schema: &str) -> ZResult<Self> {
+    fn connect(store: &PostgresStore) -> ZResult<Self> {
+        let (url, schema) = (store.url.as_str(), store.name.as_str());
+        if store.max_connections == 0 {
+            return Err(Status::invalid_argument(
+                "a postgres store needs at least one connection",
+            ));
+        }
         if schema.is_empty()
             || schema.len() > 63
             || !schema
@@ -112,6 +143,7 @@ impl PgSession {
             open: Mutex::new(1),
             released: Condvar::new(),
             bound: Mutex::new(HashMap::new()),
+            max_connections: store.max_connections,
         })
     }
 
@@ -139,7 +171,7 @@ impl PgSession {
             .map_err(|_| Status::internal(format!("memory_spans.embedding has dimension {dim}")))
     }
 
-    /// An idle connection, a new one while fewer than `POOL_CONNECTIONS` are open, or the next
+    /// An idle connection, a new one while fewer than `max_connections` are open, or the next
     /// one another thread releases.
     fn checkout(&self) -> ZResult<Client> {
         let mut idle = self.idle.lock();
@@ -148,7 +180,7 @@ impl PgSession {
                 return Ok(client);
             }
             let mut open = self.open.lock();
-            if *open < POOL_CONNECTIONS {
+            if *open < self.max_connections {
                 *open += 1;
                 drop(open);
                 drop(idle);
@@ -1111,13 +1143,14 @@ mod tests {
     fn create_refuses_an_existing_store_and_keeps_its_rows() {
         let url = crate::test_postgres_url();
         let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
-        drop_store(&url, "t_existing").unwrap();
-        let store = MemoryStore::create(&url, "t_existing", 3, false).unwrap();
+        let location = PostgresStore::new(&url, "t_existing");
+        drop_store(&location).unwrap();
+        let store = MemoryStore::create(&location, 3, false).unwrap();
         store.claims.insert(vec![Doc::new("kept")]).unwrap();
         drop(store);
-        let again = MemoryStore::create(&url, "t_existing", 3, false);
+        let again = MemoryStore::create(&location, 3, false);
         assert!(again.is_err_and(|status| status.is_already_exists()));
-        let reopened = MemoryStore::open(&url, "t_existing").unwrap();
+        let reopened = MemoryStore::open(&location).unwrap();
         assert!(reopened
             .claims
             .fetch(vec!["kept".to_string()])
@@ -1129,8 +1162,9 @@ mod tests {
     fn reads_reconnect_after_the_server_drops_every_pooled_connection() {
         let url = crate::test_postgres_url();
         let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
-        drop_store(&url, "t_reconnect").unwrap();
-        let store = MemoryStore::create(&url, "t_reconnect", 3, false).unwrap();
+        let location = PostgresStore::new(&url, "t_reconnect");
+        drop_store(&location).unwrap();
+        let store = MemoryStore::create(&location, 3, false).unwrap();
         let mut admin = Client::connect(&url, NoTls).unwrap();
         admin
             .execute(
@@ -1139,7 +1173,7 @@ mod tests {
                 &[],
             )
             .unwrap();
-        for _ in 0..POOL_CONNECTIONS + 1 {
+        for _ in 0..location.max_connections + 1 {
             assert!(store
                 .scan_claims(&MemoryScope::new("s"), 10, None)
                 .unwrap()

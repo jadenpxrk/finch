@@ -31,8 +31,9 @@ fn new_store(dir: &std::path::Path, embedding_dim: usize) -> finch_types::ZResul
         "t_{}",
         finch_memory::stable_hash_hex(&[&dir.to_string_lossy()])
     );
-    finch_memory::drop_store(&url, &name)?;
-    MemoryStore::create(&url, &name, embedding_dim, false)
+    let store = finch_memory::PostgresStore::new(url, name);
+    finch_memory::drop_store(&store)?;
+    MemoryStore::create(&store, embedding_dim, false)
 }
 
 fn scope(user_id: &str) -> MemoryScope {

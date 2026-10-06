@@ -249,16 +249,23 @@ class FinchMemory:
         self.evals = _EvalApi(self)
 
     @classmethod
-    def create(cls, url: str, name: str, embedding_dim: int, vector_index: bool = False) -> "FinchMemory":
+    def create(
+        cls,
+        url: str,
+        name: str,
+        embedding_dim: int,
+        vector_index: bool = False,
+        max_connections: int = 8,
+    ) -> "FinchMemory":
         """Create a store in the new Postgres schema `name` at `url`."""
         store_type = _native_memory_store()
-        return cls(store_type.create(url, name, embedding_dim, vector_index))
+        return cls(store_type.create(url, name, embedding_dim, vector_index, max_connections))
 
     @classmethod
-    def open(cls, url: str, name: str) -> "FinchMemory":
+    def open(cls, url: str, name: str, max_connections: int = 8) -> "FinchMemory":
         """Open the store in the Postgres schema `name` at `url`."""
         store_type = _native_memory_store()
-        return cls(store_type.open(url, name))
+        return cls(store_type.open(url, name, max_connections))
 
     def apply_state_mutation_batch(self, batch: Mapping[str, Any]) -> Dict[str, Any]:
         return _parse(self._store.apply_state_mutation_batch_json(_json(dict(batch))))

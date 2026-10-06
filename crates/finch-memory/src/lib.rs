@@ -10,7 +10,7 @@ mod eval;
 mod ingest;
 mod json_api;
 mod postgres;
-pub use postgres::drop_store;
+pub use postgres::{drop_store, PostgresStore};
 mod retrieval;
 mod row;
 mod schema;
@@ -46,15 +46,18 @@ pub(crate) fn test_store(
     embedding_dim: usize,
 ) -> finch_types::ZResult<MemoryStore> {
     std::fs::create_dir_all(dir).map_err(|e| finch_types::Status::io_error(e.to_string()))?;
-    let name = test_store_name(dir);
-    drop_store(&test_postgres_url(), &name)?;
-    MemoryStore::create(&test_postgres_url(), &name, embedding_dim, false)
+    let store = PostgresStore::new(test_postgres_url(), test_store_name(dir));
+    drop_store(&store)?;
+    MemoryStore::create(&store, embedding_dim, false)
 }
 
 /// The store `test_store` created for `dir`.
 #[cfg(test)]
 pub(crate) fn reopen_test_store(dir: &std::path::Path) -> finch_types::ZResult<MemoryStore> {
-    MemoryStore::open(&test_postgres_url(), &test_store_name(dir))
+    MemoryStore::open(&PostgresStore::new(
+        test_postgres_url(),
+        test_store_name(dir),
+    ))
 }
 
 #[cfg(test)]

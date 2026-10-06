@@ -322,8 +322,8 @@ export declare class FinchMemory {
   readonly raw: MemoryRawApi
   readonly experimental: MemoryRawApi
   readonly evals: MemoryEvalApi
-  static create(input: { url: string; name: string; embeddingDim: number; vectorIndex?: boolean }): Promise<FinchMemory>
-  static open(input: { url: string; name: string }): Promise<FinchMemory>
+  static create(input: { url: string; name: string; embeddingDim: number; vectorIndex?: boolean; maxConnections?: number }): Promise<FinchMemory>
+  static open(input: { url: string; name: string; maxConnections?: number }): Promise<FinchMemory>
   ingestEpisode(input: EpisodeInput): Promise<Record<string, unknown>>
   ingestArtifact(input: ArtifactInput): Promise<Record<string, unknown>>
   addClaim(input: ClaimInput): Promise<Record<string, unknown>>
@@ -343,9 +343,9 @@ export declare class FinchMemory {
 
 export declare class MemoryStore {
   /** Creates a store in the new Postgres schema `name` at `url`. */
-  static create(url: string, name: string, embeddingDim: number, vectorIndex?: boolean): Promise<MemoryStore>
+  static create(url: string, name: string, embeddingDim: number, vectorIndex?: boolean, maxConnections?: number): Promise<MemoryStore>
   /** Opens the store in the Postgres schema `name` at `url`. */
-  static open(url: string, name: string): Promise<MemoryStore>
+  static open(url: string, name: string, maxConnections?: number): Promise<MemoryStore>
   applyStateMutationBatchJson(batchJson: string): Promise<string>
   /** JSON of `AnswerReadyStateJsonRequest`. */
   projectAnswerReadyStateJson(requestJson: string): string

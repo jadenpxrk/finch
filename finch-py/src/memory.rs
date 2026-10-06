@@ -1,5 +1,5 @@
 use crate::{to_py_err, PyResult};
-use finch_memory::MemoryStore;
+use finch_memory::{MemoryStore, PostgresStore};
 use pyo3::prelude::*;
 
 #[pyclass(module = "finch._finch")]
@@ -22,24 +22,34 @@ impl PyMemoryStore {
 #[pymethods]
 impl PyMemoryStore {
     #[staticmethod]
-    #[pyo3(signature = (url, name, embedding_dim, vector_index=false))]
+    #[pyo3(signature = (url, name, embedding_dim, vector_index=false, max_connections=8))]
     fn create(
         py: Python<'_>,
         url: &str,
         name: &str,
         embedding_dim: usize,
         vector_index: bool,
+        max_connections: usize,
     ) -> PyResult<Self> {
+        let store = PostgresStore {
+            max_connections,
+            ..PostgresStore::new(url, name)
+        };
         let inner = py
-            .allow_threads(|| MemoryStore::create(url, name, embedding_dim, vector_index))
+            .allow_threads(|| MemoryStore::create(&store, embedding_dim, vector_index))
             .map_err(to_py_err)?;
         Ok(Self { inner })
     }
 
     #[staticmethod]
-    fn open(py: Python<'_>, url: &str, name: &str) -> PyResult<Self> {
+    #[pyo3(signature = (url, name, max_connections=8))]
+    fn open(py: Python<'_>, url: &str, name: &str, max_connections: usize) -> PyResult<Self> {
+        let store = PostgresStore {
+            max_connections,
+            ..PostgresStore::new(url, name)
+        };
         let inner = py
-            .allow_threads(|| MemoryStore::open(url, name))
+            .allow_threads(|| MemoryStore::open(&store))
             .map_err(to_py_err)?;
         Ok(Self { inner })
     }

@@ -1,9 +1,18 @@
 use crate::{finch_err, BlockingTask};
-use finch_memory::MemoryStore as RustMemoryStore;
+use finch_memory::{MemoryStore as RustMemoryStore, PostgresStore};
 use finch_types::ZResult;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::sync::Arc;
+
+/// The store `name` at `url`, holding at most `max_connections` connections (default 8).
+fn postgres_store(url: String, name: String, max_connections: Option<u32>) -> PostgresStore {
+    let mut store = PostgresStore::new(url, name);
+    if let Some(max_connections) = max_connections {
+        store.max_connections = max_connections as usize;
+    }
+    store
+}
 
 #[napi]
 pub struct MemoryStore {
@@ -36,11 +45,12 @@ impl MemoryStore {
         name: String,
         embedding_dim: u32,
         vector_index: Option<bool>,
+        max_connections: Option<u32>,
     ) -> AsyncTask<BlockingTask<MemoryStore>> {
+        let store = postgres_store(url, name, max_connections);
         BlockingTask::spawn(move || {
             let store = RustMemoryStore::create(
-                &url,
-                &name,
+                &store,
                 embedding_dim as usize,
                 vector_index.unwrap_or(false),
             )?;
@@ -52,9 +62,14 @@ impl MemoryStore {
 
     /// Opens the store in the Postgres schema `name` at `url`.
     #[napi]
-    pub fn open(url: String, name: String) -> AsyncTask<BlockingTask<MemoryStore>> {
+    pub fn open(
+        url: String,
+        name: String,
+        max_connections: Option<u32>,
+    ) -> AsyncTask<BlockingTask<MemoryStore>> {
+        let store = postgres_store(url, name, max_connections);
         BlockingTask::spawn(move || {
-            let store = RustMemoryStore::open(&url, &name)?;
+            let store = RustMemoryStore::open(&store)?;
             Ok(Self {
                 inner: Some(Arc::new(store)),
             })

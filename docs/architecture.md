@@ -342,14 +342,15 @@ tombstone. With the same records and the same hits, the packer writes the same c
 
 ## 14. Memory storage in Postgres
 
-A memory store keeps its records in Postgres with the pgvector extension.
-`MemoryStore::create(url, name, dim, vector_index)` creates a store in the new schema `name`, and
-fails if that schema exists. `MemoryStore::open(url, name)` opens it. `drop_store(url, name)`
-deletes it with all its rows.
+A memory store keeps its records in Postgres with the pgvector extension. A `PostgresStore`
+gives the server URL, the schema name, and the maximum number of connections, which is 8 by default.
+`MemoryStore::create(&store, dim, vector_index)` creates the store in a new schema, and fails if
+that schema exists. `MemoryStore::open(&store)` opens it. `drop_store(&store)` deletes it with all
+its rows.
 
 A write holds a Postgres advisory lock on its exact scope. Writes of one scope therefore run one
 at a time, in every process, and writes of different scopes run in parallel. A store opens
-connections as it needs them, up to eight, and a connection that the server closes opens again.
+connections as it needs them, up to its maximum, and a connection that the server closes opens again.
 
 With `vector_index`, each embedding column gets an HNSW index on its halfvec form. That index
 accepts up to 4,000 dimensions and is half the size of a full-precision index. Without it,
