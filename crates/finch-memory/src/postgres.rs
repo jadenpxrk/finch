@@ -9,7 +9,7 @@ use finch_types::{
     CollectionSchema, CompareOp, DataType, Doc, HnswIndexParams, Status, Value, VectorQuery,
     ZResult,
 };
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use pgvector::Vector;
 use postgres::types::ToSql;
 use postgres::{Client, NoTls, Row};
@@ -77,15 +77,17 @@ pub fn drop_store(url: &str, name: &str) -> ZResult<()> {
     })
 }
 
-/// The thread running a state mutation uses the connection that holds its transaction; every
-/// other operation autocommits on a free connection of the pool. A closed connection reconnects
-/// before its next use.
+/// Connections to one store's schema. A thread inside a transaction, a write or a snapshot read,
+/// uses the connection bound to it; every other operation autocommits on a pooled connection.
+/// The pool opens connections on demand, up to `POOL_CONNECTIONS`, and a closed pooled
+/// connection opens again before its next use.
 pub(crate) struct PgSession {
     url: String,
     schema: String,
-    pool: Vec<Mutex<Client>>,
-    transaction: Mutex<Client>,
-    transaction_owner: Mutex<Option<ThreadId>>,
+    idle: Mutex<Vec<Client>>,
+    open: Mutex<usize>,
+    released: Condvar,
+    bound: Mutex<HashMap<ThreadId, Client>>,
 }
 
 const POOL_CONNECTIONS: usize = 8;
@@ -102,15 +104,14 @@ impl PgSession {
                 "postgres store name {schema:?} must be 1-63 characters of a-z, 0-9, or _"
             )));
         }
-        let pool = (0..POOL_CONNECTIONS)
-            .map(|_| open_connection(url, schema).map(Mutex::new))
-            .collect::<ZResult<Vec<_>>>()?;
+        let first = open_connection(url, schema)?;
         Ok(Self {
             url: url.to_string(),
             schema: schema.to_string(),
-            pool,
-            transaction: Mutex::new(open_connection(url, schema)?),
-            transaction_owner: Mutex::new(None),
+            idle: Mutex::new(vec![first]),
+            open: Mutex::new(1),
+            released: Condvar::new(),
+            bound: Mutex::new(HashMap::new()),
         })
     }
 
@@ -138,34 +139,150 @@ impl PgSession {
             .map_err(|_| Status::internal(format!("memory_spans.embedding has dimension {dim}")))
     }
 
+    /// An idle connection, a new one while fewer than `POOL_CONNECTIONS` are open, or the next
+    /// one another thread releases.
+    fn checkout(&self) -> ZResult<Client> {
+        let mut idle = self.idle.lock();
+        loop {
+            if let Some(client) = idle.pop() {
+                return Ok(client);
+            }
+            let mut open = self.open.lock();
+            if *open < POOL_CONNECTIONS {
+                *open += 1;
+                drop(open);
+                drop(idle);
+                return open_connection(&self.url, &self.schema).inspect_err(|_| {
+                    *self.open.lock() -= 1;
+                });
+            }
+            drop(open);
+            self.released.wait(&mut idle);
+        }
+    }
+
+    fn checkin(&self, client: Client) {
+        if client.is_closed() {
+            *self.open.lock() -= 1;
+        } else {
+            self.idle.lock().push(client);
+        }
+        self.released.notify_one();
+    }
+
     fn with_client<T>(
         &self,
         mut run: impl FnMut(&mut Client) -> Result<T, postgres::Error>,
     ) -> ZResult<T> {
-        let in_transaction = *self.transaction_owner.lock() == Some(thread::current().id());
-        let mut client = if in_transaction {
-            self.transaction.lock()
-        } else {
-            self.pool
-                .iter()
-                .find_map(|client| client.try_lock())
-                .unwrap_or_else(|| self.pool[pool_slot(self.pool.len())].lock())
-        };
-        // A transaction's connection must not reconnect: its uncommitted writes are gone.
-        if in_transaction {
-            return run(&mut client).map_err(pg_error);
+        let thread = thread::current().id();
+        // A bound connection must not reconnect: its transaction's work would be gone. The lookup
+        // is its own statement so the map's lock is free while the statement runs.
+        let bound = self.bound.lock().remove(&thread);
+        if let Some(mut client) = bound {
+            let result = run(&mut client);
+            self.bound.lock().insert(thread, client);
+            return result.map_err(pg_error);
         }
+        let mut client = self.checkout()?;
         if client.is_closed() {
-            *client = open_connection(&self.url, &self.schema)?;
+            client = open_connection(&self.url, &self.schema)?;
         }
-        match run(&mut client) {
+        let result = match run(&mut client) {
             // A closed or terminated connection never ran the statement, so it runs once more.
             Err(error) if connection_lost(&error) => {
-                *client = open_connection(&self.url, &self.schema)?;
-                run(&mut client).map_err(pg_error)
+                match open_connection(&self.url, &self.schema) {
+                    Ok(fresh) => {
+                        client = fresh;
+                        run(&mut client).map_err(pg_error)
+                    }
+                    Err(status) => Err(status),
+                }
             }
             result => result.map_err(pg_error),
+        };
+        self.checkin(client);
+        result
+    }
+
+    /// Whether the calling thread is inside a transaction of this session.
+    pub(crate) fn in_transaction(&self) -> bool {
+        self.bound.lock().contains_key(&thread::current().id())
+    }
+
+    /// Starts a write transaction that the calling thread's operations join. It waits for any
+    /// other write of the same scope, in any process, to finish.
+    pub(crate) fn begin_write(&self, scope_key: i64) -> ZResult<()> {
+        self.begin("BEGIN", Some(scope_key))
+    }
+
+    /// Starts a read-only transaction whose reads all see one snapshot.
+    pub(crate) fn begin_snapshot(&self) -> ZResult<()> {
+        self.begin("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", None)
+    }
+
+    fn begin(&self, statement: &str, scope_key: Option<i64>) -> ZResult<()> {
+        if self.in_transaction() {
+            return Err(Status::internal("a postgres transaction is already open"));
         }
+        let mut client = self.checkout()?;
+        if client.is_closed() {
+            client = open_connection(&self.url, &self.schema)?;
+        }
+        let start = |client: &mut Client| {
+            client.batch_execute(statement)?;
+            if let Some(key) = scope_key {
+                client.execute("SELECT pg_advisory_xact_lock($1)", &[&key])?;
+            }
+            Ok(())
+        };
+        let mut started = start(&mut client);
+        // A lost connection started no transaction, so it starts once more on a new one.
+        if started.as_ref().is_err_and(connection_lost) {
+            match open_connection(&self.url, &self.schema) {
+                Ok(fresh) => {
+                    client = fresh;
+                    started = start(&mut client);
+                }
+                Err(status) => {
+                    self.checkin(client);
+                    return Err(status);
+                }
+            }
+        }
+        if let Err(error) = started {
+            self.checkin(client);
+            return Err(pg_error(error));
+        }
+        self.bound.lock().insert(thread::current().id(), client);
+        Ok(())
+    }
+
+    pub(crate) fn commit(&self) -> ZResult<()> {
+        self.end("COMMIT")
+    }
+
+    /// Discards the calling thread's transaction, if it has one.
+    pub(crate) fn rollback(&self) -> ZResult<()> {
+        if !self.in_transaction() {
+            return Ok(());
+        }
+        self.end("ROLLBACK")
+    }
+
+    fn end(&self, statement: &str) -> ZResult<()> {
+        let mut client = self
+            .bound
+            .lock()
+            .remove(&thread::current().id())
+            .ok_or_else(|| Status::internal("no postgres transaction to end"))?;
+        let ended = client.batch_execute(statement).map_err(pg_error);
+        self.checkin(client);
+        ended
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_connections(&self) -> usize {
+        *self.open.lock()
     }
 }
 
@@ -182,52 +299,6 @@ fn open_connection(url: &str, schema: &str) -> ZResult<Client> {
         ))
         .map_err(pg_error)?;
     Ok(client)
-}
-
-/// A pool slot for a caller that found every connection busy, spread by thread.
-fn pool_slot(len: usize) -> usize {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    thread::current().id().hash(&mut hasher);
-    (hasher.finish() % len as u64) as usize
-}
-
-impl PgSession {
-    /// Starts a transaction that the calling thread's table operations join.
-    pub(crate) fn begin(&self) -> ZResult<()> {
-        let mut owner = self.transaction_owner.lock();
-        if owner.is_some() {
-            return Err(Status::internal("a postgres transaction is already open"));
-        }
-        let mut client = self.transaction.lock();
-        if client.is_closed() {
-            *client = open_connection(&self.url, &self.schema)?;
-        }
-        client.batch_execute("BEGIN").map_err(pg_error)?;
-        *owner = Some(thread::current().id());
-        Ok(())
-    }
-
-    pub(crate) fn commit(&self) -> ZResult<()> {
-        if self.transaction_owner.lock().take().is_none() {
-            return Err(Status::internal("no postgres transaction to commit"));
-        }
-        self.transaction
-            .lock()
-            .batch_execute("COMMIT")
-            .map_err(pg_error)
-    }
-
-    /// Discards the open transaction, if there is one.
-    pub(crate) fn rollback(&self) -> ZResult<()> {
-        if self.transaction_owner.lock().take().is_none() {
-            return Ok(());
-        }
-        self.transaction
-            .lock()
-            .batch_execute("ROLLBACK")
-            .map_err(pg_error)
-    }
 }
 
 #[derive(Clone, Copy, PartialEq)]

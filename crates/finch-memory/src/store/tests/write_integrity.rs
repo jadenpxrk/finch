@@ -230,30 +230,77 @@ fn crash_during_refresh_state_projection_is_restored_on_reopen() {
 }
 
 #[test]
-fn a_write_on_one_store_does_not_skip_the_read_lock_of_another() {
+fn a_write_on_one_store_does_not_skip_the_snapshot_of_another() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
-    let dirs = [
-        temp_dir("reentrancy_store_a"),
-        temp_dir("reentrancy_store_b"),
-    ];
+    let dirs = [temp_dir("snapshot_store_a"), temp_dir("snapshot_store_b")];
     let [a, b] = dirs
         .each_ref()
         .map(|dir| crate::test_store(dir, 3).unwrap());
 
-    let write = a.lock_state_mutation();
-    let a_reads_locked = a.lock_state_read().unwrap().holds_lock();
-    let b_reads_locked = b.lock_state_read().unwrap().holds_lock();
-    drop(write);
+    a.session.begin_write(0).unwrap();
+    let a_snapshot = a.lock_state_read().unwrap().takes_snapshot();
+    let b_snapshot = b.lock_state_read().unwrap().takes_snapshot();
+    a.session.rollback().unwrap();
     drop([a, b]);
     for dir in dirs {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    assert!(!a_reads_locked, "a write must not relock its own store");
     assert!(
-        b_reads_locked,
-        "another store's write must not skip this store's lock"
+        !a_snapshot,
+        "a read inside a write must use the write's transaction"
     );
+    assert!(
+        b_snapshot,
+        "another store's write must not skip this store's snapshot"
+    );
+}
+
+#[test]
+fn writes_of_different_scopes_do_not_wait_for_each_other() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("parallel_scope_writes");
+    let store = crate::test_store(&dir, 3).unwrap();
+    let alice = MemoryScope {
+        user_id: Some("alice".to_string()),
+        ..scope()
+    };
+    let bob = MemoryScope {
+        user_id: Some("bob".to_string()),
+        ..scope()
+    };
+    let (started, held) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    std::thread::scope(|threads| {
+        let store = &store;
+        let alice = &alice;
+        threads.spawn(move || {
+            store
+                .with_state_mutation(alice, || {
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        held.recv().unwrap();
+        // Alice's write is open; Bob's must commit without waiting for it.
+        store.with_state_mutation(&bob, || Ok(())).unwrap();
+        release.send(()).unwrap();
+    });
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_idle_store_holds_one_connection() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("idle_connections");
+    let store = crate::test_store(&dir, 3).unwrap();
+    let open = store.session.open_connections();
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(open, 1);
 }
 
 /// Runs `write` on a store holding one claim and asserts it left every row unchanged.

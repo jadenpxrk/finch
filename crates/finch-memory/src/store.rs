@@ -39,9 +39,7 @@ use crate::types::{
     StateRecordScan, Visibility,
 };
 use finch_types::{CollectionSchema, Doc, HnswIndexParams, Status, Value, VectorQuery, ZResult};
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -93,7 +91,6 @@ use state_records::{
 use timeline::{reconcile_dependency_trace_intervals, reconcile_state_record_intervals};
 
 pub struct MemoryStore {
-    id: u64,
     pub(crate) episodes: Arc<dyn MemoryTable>,
     pub(crate) spans: Arc<dyn MemoryTable>,
     artifacts: Arc<dyn MemoryTable>,
@@ -110,31 +107,22 @@ pub struct MemoryStore {
     slots: Arc<dyn MemoryTable>,
     pub(crate) slot_aliases: Arc<dyn MemoryTable>,
     session: Arc<PgSession>,
-    state_mutation_lock: RwLock<()>,
 }
 
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(0);
 
-thread_local! {
-    // Stores whose write lock this thread holds; a write calls public reads, which must not relock.
-    static STATE_WRITE_HELD: RefCell<BTreeSet<u64>> = const { RefCell::new(BTreeSet::new()) };
-}
-
-pub(crate) struct StateWriteGuard<'a> {
-    _lock: RwLockWriteGuard<'a, ()>,
-    store_id: u64,
-}
-
+/// Held by a public read. The outermost read runs in one snapshot transaction, so it sees each
+/// state mutation whole or not at all, and serves its repeated state-table reads from memory.
 pub(crate) struct StateReadGuard<'a> {
-    _lock: Option<RwLockReadGuard<'a, ()>>,
+    session: Option<&'a PgSession>,
     ends_cache: bool,
 }
 
 #[cfg(test)]
 impl StateReadGuard<'_> {
-    /// False when the calling thread already holds this store's write lock.
-    pub(crate) fn holds_lock(&self) -> bool {
-        self._lock.is_some()
+    /// False when the calling thread is already inside a transaction of the store.
+    pub(crate) fn takes_snapshot(&self) -> bool {
+        self.session.is_some()
     }
 }
 
@@ -143,51 +131,36 @@ impl Drop for StateReadGuard<'_> {
         if self.ends_cache {
             crate::table::end_read_cache();
         }
-    }
-}
-
-impl Drop for StateWriteGuard<'_> {
-    fn drop(&mut self) {
-        STATE_WRITE_HELD.with(|held| held.borrow_mut().remove(&self.store_id));
+        if let Some(session) = self.session {
+            // A read-only snapshot holds no writes, so ending it cannot lose data.
+            let _ = session.rollback();
+        }
     }
 }
 
 impl MemoryStore {
-    pub(crate) fn lock_state_mutation(&self) -> StateWriteGuard<'_> {
-        let lock = self.state_mutation_lock.write();
-        STATE_WRITE_HELD.with(|held| held.borrow_mut().insert(self.id));
-        StateWriteGuard {
-            _lock: lock,
-            store_id: self.id,
-        }
-    }
-
-    /// Public reads hold this so they see a state mutation batch whole or not at all. The
-    /// outermost read also serves its repeated state-table reads from memory.
     pub(crate) fn lock_state_read(&self) -> ZResult<StateReadGuard<'_>> {
-        if STATE_WRITE_HELD.with(|held| held.borrow().contains(&self.id)) {
+        if self.session.in_transaction() {
             return Ok(StateReadGuard {
-                _lock: None,
+                session: None,
                 ends_cache: false,
             });
         }
-        // Recursive so a public read that calls another cannot deadlock behind a waiting writer.
-        let guard = self.state_mutation_lock.read_recursive();
+        self.session.begin_snapshot()?;
         Ok(StateReadGuard {
-            _lock: Some(guard),
+            session: Some(&self.session),
             ends_cache: crate::table::begin_read_cache(),
         })
     }
 
-    /// The one entry point of a state mutation: holds the write lock and runs every write of
-    /// `mutate` in one transaction, committing on success and rolling back on error.
+    /// The one entry point of a state mutation: runs every write of `mutate` in one transaction,
+    /// after any other write of the same scope, and commits on success or rolls back on error.
     pub(crate) fn with_state_mutation<T>(
         &self,
-        _scope: &MemoryScope,
+        scope: &MemoryScope,
         mutate: impl FnOnce() -> ZResult<T>,
     ) -> ZResult<T> {
-        let _mutation_guard = self.lock_state_mutation();
-        self.session.begin()?;
+        self.session.begin_write(scope_lock_key(scope))?;
         match mutate() {
             Ok(value) => {
                 self.session.commit()?;
@@ -201,6 +174,24 @@ impl MemoryStore {
             },
         }
     }
+}
+
+/// The advisory lock key of a scope: writes of one exact scope run one at a time.
+fn scope_lock_key(scope: &MemoryScope) -> i64 {
+    let fields = [
+        Some(scope.space_id.as_str()),
+        scope.tenant_id.as_deref(),
+        scope.user_id.as_deref(),
+        scope.agent_id.as_deref(),
+        scope.project_id.as_deref(),
+        scope.thread_id.as_deref(),
+    ];
+    let parts = fields
+        .iter()
+        .map(|field| field.unwrap_or("\u{0}"))
+        .collect::<Vec<_>>();
+    let hash = crate::ingest::stable_hash_hex(&parts);
+    u64::from_str_radix(&hash, 16).map_or(0, |key| key as i64)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -735,7 +726,6 @@ impl MemoryStore {
     ) -> ZResult<Self> {
         let id = NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed);
         Ok(Self {
-            id,
             episodes: table(EPISODES_COLLECTION)?,
             spans: table(SPANS_COLLECTION)?,
             artifacts: table(ARTIFACTS_COLLECTION)?,
@@ -764,7 +754,6 @@ impl MemoryStore {
             slots: read_cached(id, SLOTS_COLLECTION, table(SLOTS_COLLECTION)?),
             slot_aliases: read_cached(id, SLOT_ALIASES_COLLECTION, table(SLOT_ALIASES_COLLECTION)?),
             session,
-            state_mutation_lock: RwLock::new(()),
         })
     }
 

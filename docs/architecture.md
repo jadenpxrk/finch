@@ -302,10 +302,10 @@ it as a tombstone. The stored row stays. Any rule that depends on the affected s
 so a derived value falls with its source.
 
 Every state write changes several tables: the batch write API, the single writes of a claim,
-correction, rule, entity, or slot alias, and the scope rebuild. Each one takes the store's write
-lock and runs as one Postgres transaction. When the write completes, the transaction commits.
-When it fails, or the process dies first, Postgres discards every change of the write. A read
-therefore sees the whole write or none of it.
+correction, rule, entity, or slot alias, and the scope rebuild. Each one runs as one Postgres
+transaction. When the write completes, the transaction commits. When it fails, or the process
+dies first, Postgres discards every change of the write. A read runs in one read-only snapshot,
+so it sees the whole write or none of it.
 
 ## 13. The memory read path
 
@@ -347,8 +347,9 @@ A memory store keeps its records in Postgres with the pgvector extension.
 fails if that schema exists. `MemoryStore::open(url, name)` opens it. `drop_store(url, name)`
 deletes it with all its rows.
 
-Reads use a pool of eight connections. A connection that the server closes opens again on its
-next use.
+A write holds a Postgres advisory lock on its exact scope. Writes of one scope therefore run one
+at a time, in every process, and writes of different scopes run in parallel. A store opens
+connections as it needs them, up to eight, and a connection that the server closes opens again.
 
 With `vector_index`, each embedding column gets an HNSW index on its halfvec form. That index
 accepts up to 4,000 dimensions and is half the size of a full-precision index. Without it,
