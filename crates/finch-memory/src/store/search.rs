@@ -689,15 +689,14 @@ impl MemoryStore {
             return Ok(Vec::new());
         }
         let fetch_k = expanded_claim_slot_vector_fetch_k(k);
-        let scan = StateRecordScan {
-            limit: usize::MAX,
-            temporal: BiTemporalQuery {
-                valid_at_ms: at_ms,
-                transaction_at_ms: None,
-            },
+        let temporal = BiTemporalQuery {
+            valid_at_ms: at_ms,
+            transaction_at_ms: None,
         };
+        // Only records sharing a usable term with the query can score by term overlap.
+        let terms = lexical_query_terms(query_text);
         let mut scored = self
-            .scan_state_records(scope, scan)?
+            .scan_state_records_sharing_terms(scope, &terms, temporal)?
             .into_iter()
             .filter_map(|record| {
                 let slot_id = record.slot_id.clone()?;
@@ -1305,22 +1304,6 @@ impl MemoryStore {
         });
         Ok(profiles)
     }
-}
-
-/// Lexical fields of a state; lifecycle states that hide their value expose only its slot.
-fn state_lexical_fields(record: &StateRecord) -> Vec<&str> {
-    let mut fields = vec![
-        record.subject.as_deref().unwrap_or(""),
-        record.predicate.as_deref().unwrap_or(""),
-    ];
-    if !matches!(
-        record.state_kind,
-        StateRecordKind::Tombstone | StateRecordKind::Unsupported
-    ) {
-        fields.push(record.object_value.as_deref().unwrap_or(""));
-        fields.push(record.state_text.as_str());
-    }
-    fields
 }
 
 /// A neighbor span's score decays with its distance from the hit it completes.

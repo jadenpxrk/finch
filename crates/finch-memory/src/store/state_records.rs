@@ -830,7 +830,35 @@ pub(super) fn current_state_query_overlap(query_text: &str, fields: &[&str]) -> 
     score
 }
 
-fn lexical_query_terms(query_text: &str) -> BTreeSet<String> {
+/// Lexical fields of a state; lifecycle states that hide their value expose only its slot.
+pub(crate) fn state_lexical_fields(record: &StateRecord) -> Vec<&str> {
+    let mut fields = vec![
+        record.subject.as_deref().unwrap_or(""),
+        record.predicate.as_deref().unwrap_or(""),
+    ];
+    if !matches!(
+        record.state_kind,
+        StateRecordKind::Tombstone | StateRecordKind::Unsupported
+    ) {
+        fields.push(record.object_value.as_deref().unwrap_or(""));
+        fields.push(record.state_text.as_str());
+    }
+    fields
+}
+
+/// The usable terms of the record's lexical fields: a record shares one with every query it
+/// overlaps by term.
+pub(crate) fn state_lexical_terms(record: &StateRecord) -> Vec<String> {
+    state_lexical_fields(record)
+        .into_iter()
+        .flat_map(lexical_terms)
+        .filter(|term| usable_query_term(term))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+pub(super) fn lexical_query_terms(query_text: &str) -> BTreeSet<String> {
     lexical_terms(query_text)
         .into_iter()
         .filter(|term| usable_query_term(term))

@@ -282,6 +282,11 @@ impl PgTable {
                     ddl.push_str(&hnsw_index_ddl(&self.name, column, None));
                     self.hnsw_fields.lock().insert(column.name.clone());
                 }
+            } else if column.kind == ColumnKind::TextArray {
+                ddl.push_str(&format!(
+                    "CREATE INDEX ON {table} USING gin ({});",
+                    quote(&column.name)
+                ));
             } else if column.name != "space_id" {
                 ddl.push_str(&format!(
                     "CREATE INDEX ON {table} ({});",

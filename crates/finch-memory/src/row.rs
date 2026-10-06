@@ -34,6 +34,10 @@ pub fn state_record_doc(record: &StateRecord) -> Result<Doc, serde_json::Error> 
         .set("slot_id", opt_string(&record.slot_id))
         .set("slot_facet", opt_string(&record.slot_facet))
         .set("state_text", Value::String(record.state_text.clone()))
+        .set(
+            "lexical_terms",
+            Value::ArrayString(crate::store::state_records::state_lexical_terms(record)),
+        )
         .set("members_json", json_string(&record.members)?)
         .set("claim_ids_json", json_string(&record.claim_ids)?)
         .set("correction_ids_json", json_string(&record.correction_ids)?)

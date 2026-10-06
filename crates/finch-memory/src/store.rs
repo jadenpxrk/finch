@@ -61,7 +61,7 @@ mod projection;
 mod records;
 mod rules;
 mod search;
-mod state_records;
+pub(crate) mod state_records;
 mod timeline;
 
 pub use search::{
@@ -85,11 +85,11 @@ pub(crate) use projection::StateProjectionFrontier;
 pub(crate) use state_records::ProjectionWrite;
 use state_records::{
     assess_state_records, claim_state_record_kind, current_state_query_overlap,
-    dependency_trace_from_application, dependency_trace_id, mentioned_entity_ids,
-    merge_slot_identity_records, merge_trace_rule_ids, normalized_phrase_present,
-    prepare_slot_identity_revisions, proof_span_ids_for_claims,
+    dependency_trace_from_application, dependency_trace_id, lexical_query_terms,
+    mentioned_entity_ids, merge_slot_identity_records, merge_trace_rule_ids,
+    normalized_phrase_present, prepare_slot_identity_revisions, proof_span_ids_for_claims,
     reconcile_set_states_with_slot_lifecycle, select_state_records, slot_records_from_projection,
-    sorted_unique_ids, state_record_priority, state_record_recorded_at,
+    sorted_unique_ids, state_lexical_fields, state_record_priority, state_record_recorded_at,
     state_record_sets_semantically_equal, state_record_valid_at, state_record_visible_at,
     state_records_from_claims, state_records_semantically_equal, state_records_to_projection,
     state_records_to_slot_histories, support_contract_for_claims, support_state_for_claim_refs,

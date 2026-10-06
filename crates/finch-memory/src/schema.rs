@@ -329,6 +329,7 @@ pub fn state_record_schema() -> CollectionSchema {
         .with_field(string_field("slot_id"))
         .with_field(string_field("slot_facet"))
         .with_field(string_field("state_text"))
+        .with_field(array_string_field("lexical_terms").with_index(string_index_params()))
         .with_field(string_field("members_json"))
         .with_field(string_field("claim_ids_json"))
         .with_field(string_field("correction_ids_json"))

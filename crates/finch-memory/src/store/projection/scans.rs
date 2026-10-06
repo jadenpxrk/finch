@@ -28,6 +28,39 @@ impl MemoryStore {
         Ok(records)
     }
 
+    /// State records visible at `temporal` whose lexical terms include one of `terms`.
+    pub(crate) fn scan_state_records_sharing_terms(
+        &self,
+        scope: &MemoryScope,
+        terms: &BTreeSet<String>,
+        temporal: BiTemporalQuery,
+    ) -> ZResult<Vec<StateRecord>> {
+        let terms = terms.iter().map(String::as_str).collect::<Vec<_>>();
+        let docs = scan_in_chunks(
+            &self.state_records,
+            &terms,
+            usize::MAX,
+            STATE_RECORD_OUTPUT_FIELDS,
+            |chunk| {
+                format!(
+                    "{} AND lexical_terms contain_any ({})",
+                    scope_filter(scope),
+                    sql_string_list(chunk.iter().copied())
+                )
+            },
+        )?;
+        let mut seen = BTreeSet::new();
+        docs.iter()
+            .filter(|doc| seen.insert(doc.pk.clone()))
+            .map(|doc| state_record_from_doc(doc))
+            .filter(|record| {
+                record.as_ref().map_or(true, |record| {
+                    state_record_visible_at(record, scope, temporal)
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn scan_state_records_bitemporal_for_slot_ids(
         &self,
         scope: &MemoryScope,
