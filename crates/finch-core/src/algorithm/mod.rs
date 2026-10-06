@@ -10,15 +10,8 @@ use finch_types::ZResult;
 
 /// Document filter trait for vector search
 pub trait DocFilter: Send + Sync {
+    /// Returns true when a search may return `doc_id`.
     fn is_valid(&self, doc_id: u64) -> ZResult<bool>;
-}
-
-/// Allow-all filter (no filtering)
-pub struct AllowAllFilter;
-impl DocFilter for AllowAllFilter {
-    fn is_valid(&self, _doc_id: u64) -> ZResult<bool> {
-        Ok(true)
-    }
 }
 
 pub(crate) fn check_query_dim(query_len: usize, dim: usize) -> ZResult<()> {
@@ -50,6 +43,7 @@ pub(crate) fn doc_filter_allows(filter: Option<&dyn DocFilter>, doc_id: u64) -> 
 
 /// Top-K result accumulator using a bounded max-heap
 pub struct TopkHeap {
+    /// Maximum number of results the heap keeps.
     pub k: usize,
     heap: std::collections::BinaryHeap<OrderedPair>,
 }
@@ -74,6 +68,7 @@ impl Ord for OrderedPair {
 }
 
 impl TopkHeap {
+    /// Creates an empty heap that keeps at most `k` results.
     pub fn new(k: usize) -> Self {
         TopkHeap {
             k,
@@ -81,6 +76,7 @@ impl TopkHeap {
         }
     }
 
+    /// Empties the heap and sets its capacity to `k`.
     pub fn reset(&mut self, k: usize) {
         self.k = k;
         self.heap.clear();
@@ -90,6 +86,7 @@ impl TopkHeap {
         }
     }
 
+    /// Adds a result and drops the farthest one when the heap is full.
     pub fn push(&mut self, dist: f32, key: u64) {
         if self.heap.len() < self.k {
             self.heap.push(OrderedPair(dist, key));
@@ -101,10 +98,6 @@ impl TopkHeap {
         }
     }
 
-    pub fn top_dist(&self) -> f32 {
-        self.heap.peek().map(|p| p.0).unwrap_or(f32::INFINITY)
-    }
-
     /// Drain into sorted (ascending distance) result list
     pub fn into_sorted(self) -> Vec<(u64, f32)> {
         let mut v: Vec<(u64, f32)> = self.heap.into_iter().map(|p| (p.1, p.0)).collect();
@@ -112,7 +105,7 @@ impl TopkHeap {
         v
     }
 
-    pub fn drain_sorted(&mut self) -> Vec<(u64, f32)> {
+    pub(crate) fn drain_sorted(&mut self) -> Vec<(u64, f32)> {
         let mut v: Vec<(u64, f32)> = self.heap.drain().map(|p| (p.1, p.0)).collect();
         v.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         v

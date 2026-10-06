@@ -8,6 +8,7 @@ struct UpperSegments {
 }
 
 impl HnswBuilder {
+    /// Writes the graph segments to `storage`.
     pub fn dump(&self, storage: &mut dyn StorageWriter) -> ZResult<()> {
         let n = self.keys.len();
         storage.write_segment(SEG_HEADER, &self.encode_header())?;

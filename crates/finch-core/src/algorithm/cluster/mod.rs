@@ -6,9 +6,9 @@ use rand::Rng;
 use rayon::prelude::*;
 
 /// K-means clustering result
-pub struct KmeansCluster {
+pub(crate) struct KmeansCluster {
     /// Flat centroid storage: n_list × dim contiguous f32s
-    pub centroids: Vec<f32>,
+    pub(crate) centroids: Vec<f32>,
     pub dim: usize,
     pub n_list: usize,
 }
@@ -23,7 +23,7 @@ struct KmeansShape {
 
 impl KmeansCluster {
     /// Access centroid `i` as a slice
-    pub fn centroid(&self, i: usize) -> &[f32] {
+    pub(crate) fn centroid(&self, i: usize) -> &[f32] {
         &self.centroids[i * self.dim..(i + 1) * self.dim]
     }
 
@@ -72,7 +72,7 @@ impl KmeansCluster {
     }
 
     /// Find nearest centroid to a query vector
-    pub fn find_nearest(&self, query: &[f32], metric: &dyn Metric) -> usize {
+    pub(crate) fn find_nearest(&self, query: &[f32], metric: &dyn Metric) -> usize {
         let mut best = (0, f32::INFINITY);
         for i in 0..self.n_list {
             let c = self.centroid(i);
@@ -82,31 +82,6 @@ impl KmeansCluster {
             }
         }
         best.0
-    }
-
-    /// Find n_probe nearest centroids using partial sort (O(n) instead of O(n log n))
-    pub fn find_nearest_n(&self, query: &[f32], n_probe: usize, metric: &dyn Metric) -> Vec<usize> {
-        let mut dists: Vec<(usize, f32)> = (0..self.n_list)
-            .map(|i| (i, metric.distance(query, self.centroid(i))))
-            .collect();
-
-        let k = n_probe.min(dists.len());
-        if k == 0 {
-            return Vec::new();
-        }
-        if k >= dists.len() {
-            dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            return dists.iter().map(|&(i, _)| i).collect();
-        }
-
-        // Partial sort: O(n) to find top-k, then O(k log k) to sort those
-        let nth = k - 1;
-        dists.select_nth_unstable_by(nth, |a, b| {
-            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        dists.truncate(k);
-        dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        dists.iter().map(|&(i, _)| i).collect()
     }
 }
 

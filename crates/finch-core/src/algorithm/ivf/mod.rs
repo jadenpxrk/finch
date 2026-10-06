@@ -23,6 +23,7 @@ const SEG_META: &str = "IVF_META";
 const SEG_L1_CENTROIDS: &str = "IVF_L1_CENTROIDS";
 const SEG_L1_OFFSETS: &str = "IVF_L1_OFFSETS";
 
+/// Builds an IVF index: it trains list centroids, then assigns each vector to its nearest list.
 pub struct IvfBuilder {
     params: IvfIndexParams,
     dim: usize,
@@ -53,6 +54,7 @@ fn push_zero_f32s(buf: &mut Vec<u8>, count: usize) {
 }
 
 impl IvfBuilder {
+    /// Creates an empty builder for `dim`-dimensional vectors.
     pub fn new(dim: usize, params: IvfIndexParams) -> Self {
         IvfBuilder {
             params,
@@ -67,6 +69,7 @@ impl IvfBuilder {
         &self.vectors[i * self.dim..(i + 1) * self.dim]
     }
 
+    /// Adds `vectors` under `keys`, one key for each vector.
     pub fn add_batch(&mut self, keys: &[u64], vectors: &[&[f32]]) -> ZResult<()> {
         if keys.len() != vectors.len() {
             return Err(Status::invalid_argument(
@@ -81,6 +84,7 @@ impl IvfBuilder {
         Ok(())
     }
 
+    /// Trains the list centroids on the added vectors.
     pub fn train(&mut self) -> ZResult<()> {
         let n = self.keys.len();
         if n == 0 {
@@ -97,6 +101,7 @@ impl IvfBuilder {
         Ok(())
     }
 
+    /// Writes the index segments to `storage`.
     pub fn dump(&self, storage: &mut dyn StorageWriter) -> ZResult<()> {
         let cluster = self
             .cluster
@@ -353,6 +358,7 @@ struct IvfList {
     end: usize,
 }
 
+/// Searches an IVF index by scanning the lists nearest to the query.
 pub struct IvfSearcher {
     centroids: SegmentArray<f32>, // flat: n_list × dim
     n_list: usize,
@@ -467,6 +473,7 @@ struct L1Index<'a> {
 }
 
 impl IvfSearcher {
+    /// Loads the index from `storage`.
     pub fn load(storage: &dyn StorageReader, params: &IvfIndexParams) -> ZResult<Self> {
         let meta = IvfMeta::parse(storage.read_segment(SEG_META)?.as_slice())?;
         meta.check_params(params)?;
@@ -589,6 +596,7 @@ impl IvfSearcher {
         Self::topk_by_distance(dists, n_probe)
     }
 
+    /// Returns up to `topk` keys and distances that pass `filter`, nearest first, from the `n_probe` nearest lists.
     pub fn search(
         &self,
         query: &[f32],
@@ -703,10 +711,12 @@ impl IvfSearcher {
         Ok(())
     }
 
+    /// Returns the number of indexed vectors.
     pub fn len(&self) -> usize {
         self.count
     }
 
+    /// Returns true when the index holds no vector.
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }

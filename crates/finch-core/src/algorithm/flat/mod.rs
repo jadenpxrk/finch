@@ -18,14 +18,19 @@ const SEGMENT_KEYS: &str = "KEYS";
 const SEGMENT_VECTORS: &str = "FEATURES";
 const SEGMENT_META: &str = "META";
 
+/// The bytes of one index segment: owned, shared, or memory-mapped.
 #[derive(Clone)]
 pub enum SegmentBytes {
+    /// Bytes the segment owns.
     Owned(Vec<u8>),
+    /// Bytes shared with other readers.
     Shared(Arc<Vec<u8>>),
+    /// Bytes of a memory-mapped file.
     Mmap(Arc<Mmap>),
 }
 
 impl SegmentBytes {
+    /// Returns the segment bytes.
     pub fn as_slice(&self) -> &[u8] {
         match self {
             SegmentBytes::Owned(v) => v.as_slice(),
@@ -35,7 +40,7 @@ impl SegmentBytes {
     }
 }
 
-pub enum SegmentArray<T> {
+pub(crate) enum SegmentArray<T> {
     Borrowed {
         bytes: SegmentBytes,
         len: usize,
@@ -50,10 +55,6 @@ impl<T: Copy> SegmentArray<T> {
             SegmentArray::Borrowed { len, .. } => *len,
             SegmentArray::Owned(v) => v.len(),
         }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub fn as_slice(&self) -> &[T] {
@@ -100,7 +101,7 @@ fn parse_le_f32(bytes: &[u8]) -> ZResult<Vec<f32>> {
     Ok(u32s.into_iter().map(f32::from_bits).collect())
 }
 
-pub fn segment_array_u64(bytes: SegmentBytes) -> ZResult<SegmentArray<u64>> {
+pub(crate) fn segment_array_u64(bytes: SegmentBytes) -> ZResult<SegmentArray<u64>> {
     let raw = bytes.as_slice();
     if !raw.len().is_multiple_of(8) {
         return Err(Status::io_error("invalid u64 segment length"));
@@ -117,7 +118,7 @@ pub fn segment_array_u64(bytes: SegmentBytes) -> ZResult<SegmentArray<u64>> {
     Ok(SegmentArray::Owned(parse_le_u64(raw)?))
 }
 
-pub fn segment_array_u32(bytes: SegmentBytes) -> ZResult<SegmentArray<u32>> {
+pub(crate) fn segment_array_u32(bytes: SegmentBytes) -> ZResult<SegmentArray<u32>> {
     let raw = bytes.as_slice();
     if !raw.len().is_multiple_of(4) {
         return Err(Status::io_error("invalid u32 segment length"));
@@ -134,7 +135,7 @@ pub fn segment_array_u32(bytes: SegmentBytes) -> ZResult<SegmentArray<u32>> {
     Ok(SegmentArray::Owned(parse_le_u32(raw)?))
 }
 
-pub fn segment_array_f32(bytes: SegmentBytes) -> ZResult<SegmentArray<f32>> {
+pub(crate) fn segment_array_f32(bytes: SegmentBytes) -> ZResult<SegmentArray<f32>> {
     let raw = bytes.as_slice();
     if !raw.len().is_multiple_of(4) {
         return Err(Status::io_error("invalid f32 segment length"));
@@ -154,10 +155,15 @@ pub fn segment_array_f32(bytes: SegmentBytes) -> ZResult<SegmentArray<f32>> {
 /// Serializable index metadata
 #[derive(Debug, Clone)]
 pub struct IndexMeta {
+    /// Vector dimension.
     pub dim: usize,
+    /// Number of vectors.
     pub count: usize,
+    /// True when the vectors are stored column by column.
     pub column_major: bool,
+    /// Encoding of the stored vectors.
     pub quantize: QuantizeType,
+    /// Bytes of one encoded vector.
     pub vec_bytes: usize,
     /// Storage kind discriminator for the FEATURES segment.
     ///
@@ -166,6 +172,7 @@ pub struct IndexMeta {
 }
 
 impl IndexMeta {
+    /// Encodes the metadata as META segment bytes.
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&(self.dim as u64).to_le_bytes());
@@ -177,6 +184,7 @@ impl IndexMeta {
         buf
     }
 
+    /// Decodes metadata from META segment bytes.
     pub fn deserialize(data: &[u8]) -> ZResult<Self> {
         let mut cur = Cursor::new(data);
         let dim = read_u64(&mut cur)? as usize;
@@ -198,12 +206,15 @@ impl IndexMeta {
 
 /// Trait for reading index segments
 pub trait StorageReader: Send + Sync {
+    /// Returns the bytes of the segment `name`.
     fn read_segment(&self, name: &str) -> ZResult<SegmentBytes>;
+    /// Returns true when the segment `name` exists.
     fn exists(&self, name: &str) -> bool;
 }
 
 /// Trait for writing index segments
 pub trait StorageWriter: Send + Sync {
+    /// Writes `data` as the segment `name`.
     fn write_segment(&mut self, name: &str, data: &[u8]) -> ZResult<()>;
 }
 
@@ -214,6 +225,7 @@ pub struct MemoryStorage {
 }
 
 impl MemoryStorage {
+    /// Creates an empty storage.
     pub fn new() -> Self {
         MemoryStorage {
             data: std::collections::HashMap::new(),
@@ -251,6 +263,7 @@ pub struct FlatBuilder {
 }
 
 impl FlatBuilder {
+    /// Creates an empty builder for `dim`-dimensional vectors.
     pub fn new(dim: usize, params: FlatIndexParams) -> Self {
         FlatBuilder {
             params,
@@ -260,6 +273,7 @@ impl FlatBuilder {
         }
     }
 
+    /// Adds `vector` under `key`; fails if its length differs from the dimension.
     pub fn add(&mut self, key: u64, vector: &[f32]) -> ZResult<()> {
         if vector.len() != self.dim {
             return Err(Status::invalid_argument(format!(
@@ -273,14 +287,17 @@ impl FlatBuilder {
         Ok(())
     }
 
+    /// Returns the number of vectors added.
     pub fn len(&self) -> usize {
         self.keys.len()
     }
 
+    /// Returns true when no vector was added.
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
 
+    /// Writes the index segments to `storage`.
     pub fn dump(&self, storage: &mut dyn StorageWriter) -> ZResult<()> {
         storage.write_segment(SEGMENT_KEYS, &u64s_to_le(&self.keys))?;
 
@@ -315,6 +332,7 @@ pub struct FlatBinary32Builder {
 }
 
 impl FlatBinary32Builder {
+    /// Creates an empty builder for binary vectors of dimension `dim`.
     pub fn new(dim: usize, params: FlatIndexParams) -> Self {
         FlatBinary32Builder {
             params,
@@ -324,6 +342,7 @@ impl FlatBinary32Builder {
         }
     }
 
+    /// Adds the binary vector `vector` under `key`.
     pub fn add(&mut self, key: u64, vector: &[u32]) -> ZResult<()> {
         if self.params.quantize != QuantizeType::Undefined {
             return Err(Status::invalid_argument(
@@ -347,6 +366,7 @@ impl FlatBinary32Builder {
         Ok(())
     }
 
+    /// Writes the index segments to `storage`.
     pub fn dump(&self, storage: &mut dyn StorageWriter) -> ZResult<()> {
         storage.write_segment(SEGMENT_KEYS, &u64s_to_le(&self.keys))?;
 
@@ -380,6 +400,7 @@ pub struct FlatBinary64Builder {
 }
 
 impl FlatBinary64Builder {
+    /// Creates an empty builder for binary vectors of dimension `dim`.
     pub fn new(dim: usize, params: FlatIndexParams) -> Self {
         FlatBinary64Builder {
             params,
@@ -389,6 +410,7 @@ impl FlatBinary64Builder {
         }
     }
 
+    /// Adds the binary vector `vector` under `key`.
     pub fn add(&mut self, key: u64, vector: &[u64]) -> ZResult<()> {
         if self.params.quantize != QuantizeType::Undefined {
             return Err(Status::invalid_argument(
@@ -412,6 +434,7 @@ impl FlatBinary64Builder {
         Ok(())
     }
 
+    /// Writes the index segments to `storage`.
     pub fn dump(&self, storage: &mut dyn StorageWriter) -> ZResult<()> {
         storage.write_segment(SEGMENT_KEYS, &u64s_to_le(&self.keys))?;
 
@@ -445,6 +468,7 @@ pub struct FlatBinary32Searcher {
 }
 
 impl FlatBinary32Searcher {
+    /// Loads the index from `storage`.
     pub fn load(storage: &dyn StorageReader, params: &FlatIndexParams) -> ZResult<Self> {
         if params.quantize != QuantizeType::Undefined {
             return Err(Status::invalid_argument(
@@ -486,6 +510,7 @@ impl FlatBinary32Searcher {
         })
     }
 
+    /// Returns up to `topk` keys and distances that pass `filter`, nearest first.
     pub fn search(
         &self,
         query: &[u32],
@@ -524,6 +549,7 @@ pub struct FlatBinary64Searcher {
 }
 
 impl FlatBinary64Searcher {
+    /// Loads the index from `storage`.
     pub fn load(storage: &dyn StorageReader, params: &FlatIndexParams) -> ZResult<Self> {
         if params.quantize != QuantizeType::Undefined {
             return Err(Status::invalid_argument(
@@ -565,6 +591,7 @@ impl FlatBinary64Searcher {
         })
     }
 
+    /// Returns up to `topk` keys and distances that pass `filter`, nearest first.
     pub fn search(
         &self,
         query: &[u64],
@@ -663,6 +690,7 @@ pub struct FlatSearcher {
 }
 
 impl FlatSearcher {
+    /// Loads the index from `storage`.
     pub fn load(storage: &dyn StorageReader, params: &FlatIndexParams) -> ZResult<Self> {
         let meta_data = storage.read_segment(SEGMENT_META)?;
         let meta = IndexMeta::deserialize(meta_data.as_slice())?;
@@ -693,6 +721,7 @@ impl FlatSearcher {
         })
     }
 
+    /// Returns up to `topk` keys and distances that pass `filter`, nearest first.
     pub fn search(
         &self,
         query: &[f32],
@@ -802,6 +831,7 @@ impl FlatSearcher {
         Ok(heap.into_sorted())
     }
 
+    /// Searches only the vectors stored under `keys`.
     pub fn search_by_keys(
         &self,
         query: &[f32],
@@ -813,14 +843,12 @@ impl FlatSearcher {
         self.search(query, topk, Some(&filter))
     }
 
-    pub fn key_to_index(&self, key: u64) -> Option<usize> {
-        self.keys.as_slice().iter().position(|&k| k == key)
-    }
-
+    /// Returns the number of indexed vectors.
     pub fn len(&self) -> usize {
         self.count
     }
 
+    /// Returns true when the index holds no vector.
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }

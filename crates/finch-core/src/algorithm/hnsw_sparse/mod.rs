@@ -243,6 +243,7 @@ where
     ep
 }
 
+/// Builds an HNSW graph over sparse vectors.
 pub struct HnswSparseBuilder {
     params: HnswIndexParams,
     keys: Vec<u64>,
@@ -256,6 +257,7 @@ pub struct HnswSparseBuilder {
 }
 
 impl HnswSparseBuilder {
+    /// Creates an empty builder with the graph parameters in `params`.
     pub fn new(params: HnswIndexParams) -> Self {
         Self {
             params,
@@ -438,6 +440,7 @@ impl HnswSparseBuilder {
         self.set_neighbors(node, level, &scratch.backlink_selected);
     }
 
+    /// Adds `vec` under `key` and links it into the graph.
     pub fn add(&mut self, key: u64, vec: SparseVector) -> ZResult<()> {
         let vec = match self.params.quantize {
             QuantizeType::Undefined => vec,
@@ -530,6 +533,7 @@ impl HnswSparseBuilder {
         }
     }
 
+    /// Writes the graph segments to `storage`.
     pub fn dump(&self, storage: &mut dyn StorageWriter) -> ZResult<()> {
         let n = self.keys.len();
         dump_sparse_rows(

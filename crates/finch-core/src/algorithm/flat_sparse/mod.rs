@@ -8,13 +8,18 @@ use std::io::Cursor;
 /// A sparse vector with sorted indices
 #[derive(Debug, Clone)]
 pub struct SparseVector {
+    /// Dimension indices of the nonzero values, in ascending order.
     pub indices: Vec<u32>,
+    /// The nonzero values, one for each index.
     pub values: SparseValues,
 }
 
+/// The nonzero values of a sparse vector, at full or half precision.
 #[derive(Debug, Clone)]
 pub enum SparseValues {
+    /// Full-precision values.
     F32(Vec<f32>),
+    /// Half-precision values.
     F16(Vec<f16>),
 }
 
@@ -35,6 +40,7 @@ fn f16_bits_at(values: &SparseValues, i: usize) -> u16 {
 }
 
 impl SparseVector {
+    /// Creates a sparse vector from sorted indices and their f32 values.
     pub fn new(indices: Vec<u32>, values: Vec<f32>) -> Self {
         SparseVector {
             indices,
@@ -42,13 +48,14 @@ impl SparseVector {
         }
     }
 
-    pub fn new_f16(indices: Vec<u32>, values: Vec<f16>) -> Self {
+    pub(crate) fn new_f16(indices: Vec<u32>, values: Vec<f16>) -> Self {
         SparseVector {
             indices,
             values: SparseValues::F16(values),
         }
     }
 
+    /// Returns a copy that holds its values at half precision.
     pub fn quantize_to_f16(&self) -> Self {
         match &self.values {
             SparseValues::F16(v) => SparseVector::new_f16(self.indices.clone(), v.clone()),
@@ -79,7 +86,7 @@ impl SparseVector {
     }
 
     #[inline]
-    pub fn dot_encoded(&self, encoded: &[u8], quantize: QuantizeType) -> f32 {
+    pub(crate) fn dot_encoded(&self, encoded: &[u8], quantize: QuantizeType) -> f32 {
         self.dot_encoded_checked(encoded, quantize).unwrap_or(0.0)
     }
 
@@ -151,7 +158,7 @@ impl SparseVector {
     }
 
     /// Serialize to bytes: [count: u32][indices: u32*count][values: {f32|f16}*count]
-    pub fn serialize_with_quantize(&self, quantize: QuantizeType) -> ZResult<Vec<u8>> {
+    pub(crate) fn serialize_with_quantize(&self, quantize: QuantizeType) -> ZResult<Vec<u8>> {
         let n = self.indices.len();
         let mut buf = Vec::with_capacity(4 + n * 8);
         buf.extend_from_slice(&(n as u32).to_le_bytes());
@@ -179,7 +186,7 @@ impl SparseVector {
         Ok(buf)
     }
 
-    pub fn deserialize_with_quantize(
+    pub(crate) fn deserialize_with_quantize(
         data: &[u8],
         quantize: QuantizeType,
     ) -> ZResult<(Self, usize)> {
@@ -213,11 +220,13 @@ impl SparseVector {
         }
     }
 
+    /// Encodes the vector at full precision; a vector it cannot encode gives an empty buffer.
     pub fn serialize(&self) -> Vec<u8> {
         self.serialize_with_quantize(QuantizeType::Undefined)
             .unwrap_or_else(|_| Vec::new())
     }
 
+    /// Decodes one vector and returns it with the number of bytes it used.
     pub fn deserialize(data: &[u8]) -> ZResult<(Self, usize)> {
         Self::deserialize_with_quantize(data, QuantizeType::Undefined)
     }
@@ -361,6 +370,7 @@ fn validate_vector_encoding(
     Ok(())
 }
 
+/// Builds a flat index of sparse vectors, which a search scans in full.
 #[derive(Default)]
 pub struct FlatSparseBuilder {
     keys: Vec<u64>,
@@ -369,6 +379,7 @@ pub struct FlatSparseBuilder {
 }
 
 impl FlatSparseBuilder {
+    /// Creates an empty builder that stores values at full precision.
     pub fn new() -> Self {
         FlatSparseBuilder {
             keys: Vec::new(),
@@ -377,6 +388,7 @@ impl FlatSparseBuilder {
         }
     }
 
+    /// Creates an empty builder that stores values in the quantization of `params`.
     pub fn new_with_params(params: FlatIndexParams) -> Self {
         FlatSparseBuilder {
             keys: Vec::new(),
@@ -385,6 +397,7 @@ impl FlatSparseBuilder {
         }
     }
 
+    /// Adds `vec` under `key`.
     pub fn add(&mut self, key: u64, vec: SparseVector) -> ZResult<()> {
         self.keys.push(key);
         let v = match self.quantize {
@@ -400,6 +413,7 @@ impl FlatSparseBuilder {
         Ok(())
     }
 
+    /// Writes the index segments to `storage`.
     pub fn dump(&self, storage: &mut dyn StorageWriter) -> ZResult<()> {
         dump_sparse_rows(
             storage,
@@ -417,10 +431,12 @@ impl FlatSparseBuilder {
         Ok(())
     }
 
+    /// Returns the number of vectors added.
     pub fn len(&self) -> usize {
         self.keys.len()
     }
 
+    /// Returns true when no vector was added.
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
@@ -441,12 +457,14 @@ impl SparseMeta {
     }
 }
 
+/// Searches a flat sparse index by scanning every row.
 pub struct FlatSparseSearcher {
     rows: SparseRows,
     quantize: QuantizeType,
 }
 
 impl FlatSparseSearcher {
+    /// Loads the index from `storage`; fails if its quantization differs from `params`.
     pub fn load_with_params(
         storage: &dyn StorageReader,
         params: &FlatIndexParams,
@@ -463,6 +481,7 @@ impl FlatSparseSearcher {
         })
     }
 
+    /// Returns up to `topk` keys that pass `filter`, nearest first; the distance is the negative inner product.
     pub fn search(
         &self,
         query: &SparseVector,

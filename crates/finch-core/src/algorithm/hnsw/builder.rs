@@ -1,5 +1,6 @@
 use super::*;
 
+/// Builds an HNSW graph over dense f32 vectors.
 pub struct HnswBuilder {
     pub(super) params: HnswIndexParams,
     pub(super) dim: usize,
@@ -169,6 +170,7 @@ impl L0RepairState {
 }
 
 impl HnswBuilder {
+    /// Creates an empty builder for `dim`-dimensional vectors.
     pub fn new(dim: usize, params: HnswIndexParams) -> Self {
         let metric_type = params.metric;
         let heuristic_dim = heuristic_dim(&params.build_tuning, dim);
@@ -261,6 +263,7 @@ impl HnswBuilder {
         })
     }
 
+    /// Adds `vector` under `key` and links it into the graph.
     pub fn add(&mut self, key: u64, vector: &[f32]) -> ZResult<()> {
         check_vector_dim(vector.len(), self.dim)?;
 

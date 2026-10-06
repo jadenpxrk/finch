@@ -3,20 +3,7 @@
 use finch_types::{MetricType, QuantizeType};
 use half::f16;
 
-/// Convert f32 vectors to quantized bytes
-pub trait Converter: Send + Sync {
-    fn convert(&self, input: &[f32]) -> Vec<u8>;
-    fn convert_batch(&self, input: &[f32], dim: usize, n: usize) -> Vec<u8>;
-    fn output_bytes_per_vector(&self, dim: usize) -> usize;
-}
-
-/// Reconstruct f32 from quantized bytes
-pub trait Reformer: Send + Sync {
-    fn reform(&self, input: &[u8], dim: usize) -> Vec<f32>;
-    fn reform_batch(&self, input: &[u8], dim: usize, n: usize) -> Vec<f32>;
-}
-
-pub fn quantize_type_from_u32(v: u32) -> QuantizeType {
+pub(crate) fn quantize_type_from_u32(v: u32) -> QuantizeType {
     match v {
         1 => QuantizeType::Fp16,
         2 => QuantizeType::Int8,
@@ -25,6 +12,7 @@ pub fn quantize_type_from_u32(v: u32) -> QuantizeType {
     }
 }
 
+/// Returns the bytes of one `dim`-dimensional vector in the `quantize` encoding.
 pub fn bytes_per_vector(quantize: QuantizeType, dim: usize) -> usize {
     match quantize {
         QuantizeType::Undefined => dim * 4,
@@ -119,7 +107,7 @@ pub(crate) fn query_sq_norm(metric: MetricType, query: &[f32], dim: usize) -> f3
 
 /// Like `distance_to_quantized`, but allows callers to precompute `query_sq_norm`
 /// (sum of squares over the first `dim` elements) to avoid O(dim) work per candidate.
-pub fn distance_to_quantized_with_query_sq_norm(
+pub(crate) fn distance_to_quantized_with_query_sq_norm(
     metric: MetricType,
     query: &[f32],
     query_sq_norm: f32,
@@ -234,94 +222,6 @@ fn accumulate_quantized<F: FnMut(usize, f32)>(
     }
 }
 
-pub struct HalfFloatConverter;
-pub struct HalfFloatReformer;
-
-impl Converter for HalfFloatConverter {
-    fn convert(&self, input: &[f32]) -> Vec<u8> {
-        input
-            .iter()
-            .flat_map(|&x| f16::from_f32(x).to_le_bytes())
-            .collect()
-    }
-
-    fn convert_batch(&self, input: &[f32], dim: usize, n: usize) -> Vec<u8> {
-        assert_eq!(input.len(), dim * n);
-        self.convert(input)
-    }
-
-    fn output_bytes_per_vector(&self, dim: usize) -> usize {
-        dim * 2
-    }
-}
-
-impl Reformer for HalfFloatReformer {
-    fn reform(&self, input: &[u8], dim: usize) -> Vec<f32> {
-        assert_eq!(input.len(), dim * 2);
-        decode_f16_le(input, dim)
-    }
-
-    fn reform_batch(&self, input: &[u8], dim: usize, n: usize) -> Vec<f32> {
-        decode_f16_le(input, dim * n)
-    }
-}
-
-/// INT8 linear quantizer: stores scale + bias per block, then quantized bytes
-#[derive(Default)]
-pub struct Int8Quantizer {
-    pub symmetric: bool,
-}
-
-impl Converter for Int8Quantizer {
-    fn convert(&self, input: &[f32]) -> Vec<u8> {
-        let min = input.iter().cloned().fold(f32::INFINITY, f32::min);
-        let max = input.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let range = max - min;
-        let scale = if range > 1e-10 { 254.0 / range } else { 1.0 };
-        let bias = min;
-
-        // Header: scale (4 bytes) + bias (4 bytes) + quantized bytes
-        let mut out = Vec::with_capacity(8 + input.len());
-        out.extend_from_slice(&scale.to_le_bytes());
-        out.extend_from_slice(&bias.to_le_bytes());
-        for &x in input {
-            let q = ((x - bias) * scale).round().clamp(-127.0, 127.0) as i8;
-            out.push(q as u8);
-        }
-        out
-    }
-
-    fn convert_batch(&self, input: &[f32], dim: usize, n: usize) -> Vec<u8> {
-        assert_eq!(input.len(), dim * n);
-        let mut out = Vec::with_capacity((8 + dim) * n);
-        for i in 0..n {
-            let vec = &input[i * dim..(i + 1) * dim];
-            out.extend_from_slice(&self.convert(vec));
-        }
-        out
-    }
-
-    fn output_bytes_per_vector(&self, dim: usize) -> usize {
-        8 + dim // scale + bias + quantized bytes
-    }
-}
-
-pub struct Int8Dequantizer;
-
-fn encode_f32_le(input: &[f32]) -> Vec<u8> {
-    input.iter().flat_map(|x| x.to_le_bytes()).collect()
-}
-
-fn decode_f32_le(input: &[u8], count: usize) -> Vec<f32> {
-    let chunks = input.as_chunks::<4>().0.iter().take(count);
-    chunks.map(|c| f32::from_le_bytes(*c)).collect()
-}
-
-fn decode_f16_le(input: &[u8], count: usize) -> Vec<f32> {
-    let chunks = input.as_chunks::<2>().0.iter().take(count);
-    chunks.map(|c| f16::from_le_bytes(*c).to_f32()).collect()
-}
-
 // Reads the two little-endian f32 values that open int8, int4, and SQ8 encodings.
 #[inline]
 pub(crate) fn f32_pair_header(data: &[u8]) -> (f32, f32) {
@@ -330,200 +230,6 @@ pub(crate) fn f32_pair_header(data: &[u8]) -> (f32, f32) {
         f32::from_le_bytes([h[0], h[1], h[2], h[3]]),
         f32::from_le_bytes([h[4], h[5], h[6], h[7]]),
     )
-}
-
-impl Reformer for Int8Dequantizer {
-    fn reform(&self, input: &[u8], dim: usize) -> Vec<f32> {
-        assert!(input.len() >= 8 + dim);
-        let (scale, bias) = f32_pair_header(input);
-        input[8..8 + dim]
-            .iter()
-            .map(|&b| (b as i8 as f32) / scale + bias)
-            .collect()
-    }
-
-    fn reform_batch(&self, input: &[u8], dim: usize, n: usize) -> Vec<f32> {
-        let stride = 8 + dim;
-        let mut out = Vec::with_capacity(dim * n);
-        for i in 0..n {
-            let chunk = &input[i * stride..(i + 1) * stride];
-            out.extend_from_slice(&self.reform(chunk, dim));
-        }
-        out
-    }
-}
-
-/// INT4 quantizer: 2 values per byte, 4-bit packing
-pub struct Int4Quantizer;
-
-impl Converter for Int4Quantizer {
-    fn convert(&self, input: &[f32]) -> Vec<u8> {
-        let min = input.iter().cloned().fold(f32::INFINITY, f32::min);
-        let max = input.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let range = max - min;
-        let scale = if range > 1e-10 { 14.0 / range } else { 1.0 };
-        let bias = min;
-
-        let packed_len = input.len().div_ceil(2);
-        let mut out = Vec::with_capacity(8 + packed_len);
-        out.extend_from_slice(&scale.to_le_bytes());
-        out.extend_from_slice(&bias.to_le_bytes());
-
-        for chunk in input.chunks(2) {
-            let q0 = ((chunk[0] - bias) * scale).round().clamp(0.0, 15.0) as u8;
-            let q1 = if chunk.len() > 1 {
-                ((chunk[1] - bias) * scale).round().clamp(0.0, 15.0) as u8
-            } else {
-                0
-            };
-            out.push((q0 & 0x0F) | ((q1 & 0x0F) << 4));
-        }
-        out
-    }
-
-    fn convert_batch(&self, input: &[f32], dim: usize, n: usize) -> Vec<u8> {
-        assert_eq!(input.len(), dim * n);
-        let mut out = Vec::new();
-        for i in 0..n {
-            out.extend_from_slice(&self.convert(&input[i * dim..(i + 1) * dim]));
-        }
-        out
-    }
-
-    fn output_bytes_per_vector(&self, dim: usize) -> usize {
-        8 + dim.div_ceil(2)
-    }
-}
-
-pub struct Int4Dequantizer;
-
-impl Reformer for Int4Dequantizer {
-    fn reform(&self, input: &[u8], dim: usize) -> Vec<f32> {
-        assert!(input.len() >= 8);
-        let (scale, bias) = f32_pair_header(input);
-        let mut out = Vec::with_capacity(dim);
-        for byte in &input[8..] {
-            if out.len() < dim {
-                out.push((byte & 0x0F) as f32 / scale + bias);
-            }
-            if out.len() < dim {
-                out.push(((byte >> 4) & 0x0F) as f32 / scale + bias);
-            }
-        }
-        out.truncate(dim);
-        out
-    }
-
-    fn reform_batch(&self, input: &[u8], dim: usize, n: usize) -> Vec<f32> {
-        let stride = 8 + dim.div_ceil(2);
-        let mut out = Vec::with_capacity(dim * n);
-        for i in 0..n {
-            let chunk = &input[i * stride..(i + 1) * stride];
-            out.extend_from_slice(&self.reform(chunk, dim));
-        }
-        out
-    }
-}
-
-/// Normalize vectors to unit sphere before storage
-pub struct CosineConverter;
-
-impl Converter for CosineConverter {
-    fn convert(&self, input: &[f32]) -> Vec<u8> {
-        let norm: f32 = input.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let normalized: Vec<f32> = if norm > 1e-10 {
-            input.iter().map(|x| x / norm).collect()
-        } else {
-            input.to_vec()
-        };
-        encode_f32_le(&normalized)
-    }
-
-    fn convert_batch(&self, input: &[f32], dim: usize, n: usize) -> Vec<u8> {
-        let mut out = Vec::with_capacity(input.len() * 4);
-        for i in 0..n {
-            out.extend_from_slice(&self.convert(&input[i * dim..(i + 1) * dim]));
-        }
-        out
-    }
-
-    fn output_bytes_per_vector(&self, dim: usize) -> usize {
-        dim * 4
-    }
-}
-
-/// Spherical injection for MIPS: append sqrt(M² - ||x||²) dimension
-pub struct MipsConverter {
-    pub max_norm: f32,
-}
-
-impl MipsConverter {
-    pub fn new(max_norm: f32) -> Self {
-        MipsConverter { max_norm }
-    }
-}
-
-impl Converter for MipsConverter {
-    fn convert(&self, input: &[f32]) -> Vec<u8> {
-        let norm_sq: f32 = input.iter().map(|x| x * x).sum();
-        let extra = (self.max_norm * self.max_norm - norm_sq).max(0.0).sqrt();
-        let mut extended = input.to_vec();
-        extended.push(extra);
-        encode_f32_le(&extended)
-    }
-
-    fn convert_batch(&self, input: &[f32], dim: usize, n: usize) -> Vec<u8> {
-        let mut out = Vec::new();
-        for i in 0..n {
-            out.extend_from_slice(&self.convert(&input[i * dim..(i + 1) * dim]));
-        }
-        out
-    }
-
-    fn output_bytes_per_vector(&self, dim: usize) -> usize {
-        (dim + 1) * 4
-    }
-}
-
-/// Make a converter from quantize type
-pub fn make_converter(quantize: finch_types::QuantizeType) -> Box<dyn Converter> {
-    match quantize {
-        finch_types::QuantizeType::Fp16 => Box::new(HalfFloatConverter),
-        finch_types::QuantizeType::Int8 => Box::new(Int8Quantizer::default()),
-        finch_types::QuantizeType::Int4 => Box::new(Int4Quantizer),
-        finch_types::QuantizeType::Undefined => Box::new(NullConverter),
-    }
-}
-
-/// Identity converter (no quantization)
-pub struct NullConverter;
-
-impl Converter for NullConverter {
-    fn convert(&self, input: &[f32]) -> Vec<u8> {
-        encode_f32_le(input)
-    }
-
-    fn convert_batch(&self, input: &[f32], _dim: usize, _n: usize) -> Vec<u8> {
-        encode_f32_le(input)
-    }
-
-    fn output_bytes_per_vector(&self, dim: usize) -> usize {
-        dim * 4
-    }
-}
-
-/// Identity reformer
-pub struct NullReformer;
-
-impl Reformer for NullReformer {
-    fn reform(&self, input: &[u8], dim: usize) -> Vec<f32> {
-        assert_eq!(input.len(), dim * 4);
-        decode_f32_le(input, dim)
-    }
-
-    fn reform_batch(&self, input: &[u8], dim: usize, n: usize) -> Vec<f32> {
-        decode_f32_le(input, dim * n)
-    }
 }
 
 #[cfg(test)]

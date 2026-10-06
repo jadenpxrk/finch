@@ -3,6 +3,7 @@ use std::hash::Hash;
 
 use finch_types::MetricType;
 
+/// Fuses ranked lists by reciprocal rank fusion.
 #[derive(Debug, Clone)]
 pub struct RrfReducer {
     /// RRF rank constant `k`. The default is 60.
@@ -55,8 +56,10 @@ impl RrfReducer {
     }
 }
 
+/// Fuses ranked lists by their weighted, normalized scores.
 #[derive(Debug, Clone)]
 pub struct WeightedReducer {
+    /// Metric of the scores, which sets how a score normalizes.
     pub metric: MetricType,
     /// Per-list weight keyed by list name (vector field name). Default weight is 1.0.
     pub weights: HashMap<String, f32>,
@@ -64,7 +67,7 @@ pub struct WeightedReducer {
 
 impl WeightedReducer {
     /// Maps a raw distance or similarity into [0, 1], where higher is better.
-    pub fn normalize_score(&self, score: f32) -> f32 {
+    pub(crate) fn normalize_score(&self, score: f32) -> f32 {
         match self.metric {
             MetricType::L2 => 1.0 - 2.0 * score.atan() / std::f32::consts::PI,
             MetricType::InnerProduct => 0.5 + score.atan() / std::f32::consts::PI,

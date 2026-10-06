@@ -5,11 +5,13 @@ use finch_types::MetricType;
 
 /// Trait for computing distances between vectors
 pub trait Metric: Send + Sync {
+    /// Returns the distance between `a` and `b`.
     fn distance(&self, a: &[f32], b: &[f32]) -> f32;
 
     /// Batch distances: matrix rows vs query, results in `out`
     fn batch_distance(&self, matrix: &[f32], query: &[f32], m: usize, dim: usize, out: &mut [f32]);
 
+    /// Returns the metric this implementation computes.
     fn metric_type(&self) -> MetricType;
 
     /// Whether a smaller distance is better (true for L2; false for IP)
@@ -18,11 +20,11 @@ pub trait Metric: Send + Sync {
     }
 }
 
-pub struct L2Metric;
-pub struct IpMetric;
-pub struct CosineMetric;
-pub struct HammingMetric;
-pub struct MipsL2Metric;
+pub(crate) struct L2Metric;
+pub(crate) struct IpMetric;
+pub(crate) struct CosineMetric;
+pub(crate) struct HammingMetric;
+pub(crate) struct MipsL2Metric;
 
 impl Metric for L2Metric {
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
@@ -131,7 +133,7 @@ pub fn make_metric(metric_type: MetricType) -> Box<dyn Metric> {
 }
 
 /// Normalize an f32 vector to unit length in-place
-pub fn normalize_l2(v: &mut [f32]) {
+pub(crate) fn normalize_l2(v: &mut [f32]) {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 1e-10 {
         let inv_norm = 1.0 / norm;
@@ -139,11 +141,6 @@ pub fn normalize_l2(v: &mut [f32]) {
             *x *= inv_norm;
         }
     }
-}
-
-/// Compute L2 norm
-pub fn l2_norm(v: &[f32]) -> f32 {
-    v.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
 
 #[cfg(test)]

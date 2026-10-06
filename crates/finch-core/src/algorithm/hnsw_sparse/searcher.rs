@@ -2,6 +2,7 @@ use super::*;
 use crate::algorithm::codec::{read_u32, read_u64, scan_upper_runs, u32_slice_at, UpperScanErrors};
 use crate::quantizer::quantize_type_from_u32;
 
+/// Searches an HNSW graph of sparse vectors.
 pub struct HnswSparseSearcher {
     rows: SparseRows,
     l0_neighbors: SegmentArray<u32>, // flat: count × (2*m)
@@ -102,6 +103,7 @@ impl HnswSparseSearcher {
         self.rows.vector(node as usize)
     }
 
+    /// Loads the graph from `storage` for the parameters in `params`.
     pub fn load_with_params(
         storage: &dyn StorageReader,
         params: &HnswIndexParams,
@@ -182,6 +184,7 @@ impl HnswSparseSearcher {
         });
     }
 
+    /// Returns up to `topk` keys and distances that pass `filter`, nearest first; `ef` sets the beam width.
     pub fn search(
         &self,
         query: &SparseVector,

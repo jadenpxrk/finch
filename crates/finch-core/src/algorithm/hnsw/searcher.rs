@@ -39,6 +39,7 @@ pub struct HnswSearchParams {
 }
 
 impl HnswSearchParams {
+    /// Search parameters with beam width `ef` and the default level-0 seeds.
     pub fn new(ef: usize) -> Self {
         HnswSearchParams {
             ef,
@@ -53,6 +54,7 @@ struct UpperLevelIndex {
     fixed_len: u32,
 }
 
+/// Searches an HNSW graph of dense vectors.
 pub struct HnswSearcher {
     keys: SegmentArray<u64>,
     vectors: HnswVectorStorage,
@@ -67,8 +69,8 @@ pub struct HnswSearcher {
     metric_type: MetricType,
     cosine_normalized: bool,
     vec_stride: usize,
+    /// Beam width a search uses when the caller gives none.
     pub default_ef: usize,
-    pub bruteforce_threshold: usize,
 }
 
 enum HnswVectorStorage {
@@ -256,6 +258,7 @@ fn check_upper_neighbor_ids(levels: &[UpperLevelIndex], upper: &[u8], count: usi
 }
 
 impl HnswSearcher {
+    /// Loads the graph from `storage` for the parameters in `params`.
     pub fn load(storage: &dyn StorageReader, params: &HnswIndexParams) -> ZResult<Self> {
         check_header(storage, params)?;
         let meta = HnswMeta::parse(storage.read_segment(SEG_META)?.as_slice())?;
@@ -310,7 +313,6 @@ impl HnswSearcher {
             vec_stride: meta.vec_stride,
             // default ef_search is 300 (independent of ef_construction).
             default_ef: 300,
-            bruteforce_threshold: 100,
         })
     }
 
@@ -656,6 +658,7 @@ impl HnswSearcher {
         }
     }
 
+    /// Returns up to `topk` keys and distances that pass `filter`, nearest first.
     pub fn search(
         &self,
         query: &[f32],
@@ -842,10 +845,12 @@ impl HnswSearcher {
         Ok(result)
     }
 
+    /// Returns the number of indexed vectors.
     pub fn len(&self) -> usize {
         self.count
     }
 
+    /// Returns true when the graph holds no vector.
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
