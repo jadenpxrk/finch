@@ -5,7 +5,7 @@ const RULE_ID: &str = "rule_owner_reviewer_window";
 /// A store whose owner-to-reviewer rule is in force from 10 to 20, with an owner claim valid
 /// from `trigger_from_ms`.
 fn windowed_rule_store(name: &str, trigger_from_ms: i64) -> EvidencedStore {
-    let store = EvidencedStore::create(&temp_dir(name), 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&temp_dir(name), 3).unwrap();
     let mut rule = make_derived_rule_inputs();
     rule.id = Some(RULE_ID.to_string());
     rule.valid_from_ms = Some(10);
@@ -62,7 +62,6 @@ fn read_time_rules_are_evaluated_at_the_read_time() {
 
     assert!(!read_shows_derived_reviewer(&store, 30));
     assert!(read_shows_derived_reviewer(&store, 15));
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
@@ -72,5 +71,4 @@ fn read_after_a_rule_ends_does_not_show_its_derivation() {
 
     assert!(!read_shows_derived_reviewer(&store, 30));
     assert!(read_shows_derived_reviewer(&store, 15));
-    let _ = std::fs::remove_dir_all(&store.path);
 }

@@ -4,7 +4,7 @@ use super::*;
 fn memory_store_persists_active_records() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("persist");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let ingested = store
         .ingest_episode(
             EpisodeInput {
@@ -59,16 +59,19 @@ fn memory_store_persists_active_records() {
     store.add_correction(&correction).unwrap();
     drop(store);
 
-    let reopened = MemoryStore::open(&dir, CollectionOptions::default()).unwrap();
-    assert_eq!(reopened.path, dir);
-    let _ = std::fs::remove_dir_all(&reopened.path);
+    let reopened = crate::reopen_test_store(&dir).unwrap();
+    assert!(reopened
+        .episodes
+        .fetch(vec!["ep_store".to_string()])
+        .unwrap()
+        .contains_key("ep_store"));
 }
 
 #[test]
 fn memory_store_preserves_episode_actor_in_retrieved_provenance() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("retrieved_actor_provenance");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     store
         .ingest_episode(
             EpisodeInput {
@@ -107,14 +110,13 @@ fn memory_store_preserves_episode_actor_in_retrieved_provenance() {
         },
     );
     assert!(context.body.contains("source_actor: assistant"));
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_ingests_artifact_text_as_keyword_searchable_spans() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("artifact_text");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let artifact = ArtifactRecord {
         id: "artifact_text".to_string(),
         scope: scope(),
@@ -154,14 +156,13 @@ fn memory_store_ingests_artifact_text_as_keyword_searchable_spans() {
         .unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].span.source_id, "artifact_text");
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_appends_persistent_vector_only_spans() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("vector_only_spans");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let ingested = ingest_episode(
         EpisodeInput {
             id: Some("external_document".to_string()),
@@ -188,7 +189,7 @@ fn memory_store_appends_persistent_vector_only_spans() {
         .unwrap();
     drop(store);
 
-    let reopened = MemoryStore::open(&dir, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&dir).unwrap();
     let vector_hits = reopened
         .query_spans(&scope(), vec![1.0, 0.0, 0.0], 1, None)
         .unwrap();
@@ -197,14 +198,13 @@ fn memory_store_appends_persistent_vector_only_spans() {
         .keyword_search_spans(&scope(), "external", 10, 100, None)
         .unwrap()
         .is_empty());
-    let _ = std::fs::remove_dir_all(&reopened.path);
 }
 
 #[test]
 fn memory_store_artifact_limit_applies_after_scope_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("artifact_limit_after_filtering");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut other_scope = scope();
@@ -262,14 +262,13 @@ fn memory_store_artifact_limit_applies_after_scope_filtering() {
     let artifacts = store.scan_artifacts(&target_scope, 1, Some(30)).unwrap();
     assert_eq!(artifacts.len(), 1);
     assert_eq!(artifacts[0].id, "artifact_target_runbook");
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_keyword_search_chunks_large_term_queries() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("keyword_many_terms");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
 
     let mut span = span_record("many_terms_span", MemoryStatus::Active, Some(1));
     span.text = "term39 should be found".to_string();
@@ -286,14 +285,13 @@ fn memory_store_keyword_search_chunks_large_term_queries() {
 
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].span.id, "many_terms_span");
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_keyword_search_chunks_large_span_id_fetches() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("keyword_many_ids");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
 
     for i in 0..40 {
         let mut span = span_record(
@@ -311,14 +309,13 @@ fn memory_store_keyword_search_chunks_large_span_id_fetches() {
         .unwrap();
 
     assert_eq!(hits.len(), 40);
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_completes_span_evidence_with_neighbors() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("span_neighbors");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
 
     let mut before = span_record("span_before", MemoryStatus::Active, Some(1));
     before.span_index = 0;
@@ -348,14 +345,13 @@ fn memory_store_completes_span_evidence_with_neighbors() {
         .map(|hit| hit.span.id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(ids, vec!["span_before", "span_middle", "span_after"]);
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_source_diverse_search_limits_repeated_documents() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("source_diverse_search");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
 
     for (id, source_id, embedding) in [
         ("alpha_0", "document_alpha", [1.0, 0.0, 0.0]),
@@ -373,14 +369,13 @@ fn memory_store_source_diverse_search_limits_repeated_documents() {
         .unwrap();
     assert_eq!(hits.len(), 2);
     assert_ne!(hits[0].span.source_id, hits[1].span.source_id);
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_hybrid_source_diverse_search_fuses_lexical_sources_and_hydrates_spans() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("hybrid_source_diverse_search");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
 
     // document_alpha is close in vector space; document_beta only matches lexically.
     for (id, source_id, span_index, text, embedding) in [
@@ -481,7 +476,6 @@ fn memory_store_hybrid_source_diverse_search_fuses_lexical_sources_and_hydrates_
     assert!(hits.iter().any(|hit| hit.span.id == "beta_0"));
     // Round-robin interleave: first spans of every source come first.
     assert_ne!(hits[0].span.source_id, hits[1].span.source_id);
-    let _ = std::fs::remove_dir_all(&store.path);
     let _ = std::fs::remove_dir_all(&index_dir);
 }
 
@@ -489,7 +483,7 @@ fn memory_store_hybrid_source_diverse_search_fuses_lexical_sources_and_hydrates_
 fn memory_store_hybrid_source_diverse_search_fuses_expansion_lexical_sources() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("hybrid_source_diverse_expansion_search");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
 
     for (id, source_id, text, embedding) in [
         (
@@ -602,7 +596,6 @@ fn memory_store_hybrid_source_diverse_search_fuses_expansion_lexical_sources() {
         .any(|hit| hit.span.source_id == "document_release"));
     assert!(with_expansion.iter().any(|hit| hit.span.id == "release_0"));
 
-    let _ = std::fs::remove_dir_all(&store.path);
     let _ = std::fs::remove_dir_all(&index_dir);
 }
 
@@ -610,7 +603,7 @@ fn memory_store_hybrid_source_diverse_search_fuses_expansion_lexical_sources() {
 fn memory_store_hybrid_source_diverse_search_appends_supplemental_sources() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("hybrid_source_diverse_supplemental_search");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
 
     for (id, source_id, text, embedding) in [
         (
@@ -766,7 +759,6 @@ fn memory_store_hybrid_source_diverse_search_appends_supplemental_sources() {
         "document_release"
     );
 
-    let _ = std::fs::remove_dir_all(&store.path);
     let _ = std::fs::remove_dir_all(&index_dir);
 }
 
@@ -774,7 +766,7 @@ fn memory_store_hybrid_source_diverse_search_appends_supplemental_sources() {
 fn memory_store_searches_matching_passages_inside_selected_sources() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("query_matched_passages");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let index_dir = temp_dir("query_matched_passages_index");
     let mut builder = crate::source_index::SourceLexicalIndexBuilder::new();
     let mut dense_hits = Vec::new();
@@ -898,7 +890,6 @@ fn memory_store_searches_matching_passages_inside_selected_sources() {
         )
         .unwrap()
         .is_empty());
-    let _ = std::fs::remove_dir_all(&store.path);
     let _ = std::fs::remove_dir_all(&index_dir);
 }
 
@@ -906,7 +897,7 @@ fn memory_store_searches_matching_passages_inside_selected_sources() {
 fn memory_store_hydrates_explicit_source_selections_in_round_robin_order() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("explicit_source_hydration");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
 
     for (source_id, span_count) in [
         ("document_alpha", 4),
@@ -1011,7 +1002,6 @@ fn memory_store_hydrates_explicit_source_selections_in_round_robin_order() {
         ]
     );
 
-    let _ = std::fs::remove_dir_all(&store.path);
     let _ = std::fs::remove_dir_all(&index_dir);
 }
 
@@ -1019,7 +1009,7 @@ fn memory_store_hydrates_explicit_source_selections_in_round_robin_order() {
 fn memory_store_scan_span_limit_applies_after_scope_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("span_scan_limit_after_filtering");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut other_scope = scope();
@@ -1037,14 +1027,13 @@ fn memory_store_scan_span_limit_applies_after_scope_filtering() {
     let spans = store.scan_spans(&target_scope, 1, Some(2)).unwrap();
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].id, "span_target_proof");
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_queries_persisted_spans_and_applies_corrections() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("query_spans");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let mut query_scope = scope();
     query_scope.user_id = Some("user_1".to_string());
     let mut other_scope = scope();
@@ -1067,7 +1056,7 @@ fn memory_store_queries_persisted_spans_and_applies_corrections() {
         .unwrap();
     drop(store);
 
-    let reopened = MemoryStore::open(&dir, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&dir).unwrap();
     let hits = reopened
         .query_spans(&query_scope, vec![1.0, 0.0, 0.0], 10, Some(10))
         .unwrap();
@@ -1170,14 +1159,13 @@ fn memory_store_queries_persisted_spans_and_applies_corrections() {
         )
         .unwrap();
     assert!(hits.is_empty());
-    let _ = std::fs::remove_dir_all(&reopened.path);
 }
 
 #[test]
 fn memory_store_vector_span_limit_applies_after_scope_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("span_vector_limit_after_filtering");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut other_scope = scope();
@@ -1197,14 +1185,13 @@ fn memory_store_vector_span_limit_applies_after_scope_filtering() {
         .unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].span.id, "span_target_vector");
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_span_selector_tombstone_survives_future_correction_saturation() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("span_selector_future_saturation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut target = span_record("span_target_selector", MemoryStatus::Active, Some(1));
@@ -1270,7 +1257,6 @@ fn memory_store_span_selector_tombstone_survives_future_correction_saturation() 
         .query_spans(&target_scope, vec![1.0, 0.0, 0.0], 10, Some(12))
         .unwrap();
     assert!(current.is_empty());
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
@@ -1278,7 +1264,7 @@ fn evidence_completion_skips_forgotten_neighbor_text() {
     // Evidence expansion must honor the same Forget correction as direct retrieval.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("forgotten_neighbor");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let ingested = store
         .ingest_episode(
             EpisodeInput {
@@ -1332,7 +1318,7 @@ fn evidence_completion_skips_forgotten_neighbor_text() {
     );
     store.add_correction(&correction).unwrap();
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let direct = reopened
         .keyword_search_spans(&scope(), "obsolete", 10, 100, Some(30))
         .unwrap();
@@ -1359,7 +1345,7 @@ fn selected_source_hydration_skips_forgotten_span() {
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("forgotten_source");
     let index_path = temp_dir("forgotten_source_index");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let span = span_record("forgotten", MemoryStatus::Active, Some(10));
     store
         .append_vector_spans(&[(span.clone(), vec![1.0, 0.0, 0.0])])
@@ -1393,7 +1379,7 @@ fn selected_source_hydration_skips_forgotten_span() {
     );
     store.add_correction(&correction).unwrap();
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let direct = reopened
         .query_spans(&scope(), vec![1.0, 0.0, 0.0], 10, Some(30))
         .unwrap();

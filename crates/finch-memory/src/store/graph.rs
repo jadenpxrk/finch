@@ -10,11 +10,6 @@ impl MemoryStore {
         self.with_state_mutation(&scope, || {
             let record = self.build_slot_alias_record(input, recorded_at_ms, &BTreeSet::new())?;
             let alias_docs = vec![slot_alias_doc(&record).map_err(json_error)?];
-            self.capture_state_mutation_docs(
-                SLOT_ALIASES_COLLECTION,
-                &self.slot_aliases,
-                &alias_docs,
-            )?;
             upsert_many(&self.slot_aliases, alias_docs)?;
             self.rebind_rules_for_scope(&record.scope, record.valid_from_ms)?;
             self.rebuild_state_projection(&record.scope, record.valid_from_ms)?;
@@ -227,7 +222,6 @@ impl MemoryStore {
             .map(entity_alias_doc)
             .collect::<Result<Vec<_>, _>>()
             .map_err(json_error)?;
-        self.capture_state_mutation_docs(ENTITY_ALIASES_COLLECTION, &self.entity_aliases, &docs)?;
         upsert_many(&self.entity_aliases, docs)?;
         Ok(aliases)
     }

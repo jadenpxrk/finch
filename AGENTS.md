@@ -32,6 +32,15 @@ cargo fmt --all -- --check
 cargo run -q --example quickstart -p finch-db
 ```
 
+The `finch-memory` tests keep their stores in Postgres with pgvector. Start a server and name it
+in `FINCH_MEMORY_TEST_POSTGRES_URL`:
+
+```bash
+docker run -d --name finch-pg -p 55432:5432 -e POSTGRES_USER=finch -e POSTGRES_PASSWORD=finch \
+  -e POSTGRES_DB=finch pgvector/pgvector:pg17
+export FINCH_MEMORY_TEST_POSTGRES_URL=postgres://finch:finch@localhost:55432/finch
+```
+
 Code under `cfg(target_arch = "x86_64")` does not compile on an ARM machine. Before you touch
 `crates/finch-core/src/simd`, run clippy for that target too:
 

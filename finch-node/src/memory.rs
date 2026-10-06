@@ -3,31 +3,7 @@ use finch_memory::MemoryStore as RustMemoryStore;
 use finch_types::ZResult;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use std::path::Path;
 use std::sync::Arc;
-
-#[napi(object)]
-pub struct MemoryStoreOptions {
-    pub read_only: Option<bool>,
-    pub enable_mmap: Option<bool>,
-    pub max_buffer_size: Option<u32>,
-}
-
-fn options_from_node(options: Option<MemoryStoreOptions>) -> finch_types::CollectionOptions {
-    let mut out = finch_types::CollectionOptions::default();
-    if let Some(options) = options {
-        if let Some(read_only) = options.read_only {
-            out.read_only = read_only;
-        }
-        if let Some(enable_mmap) = options.enable_mmap {
-            out.enable_mmap = enable_mmap;
-        }
-        if let Some(max_buffer_size) = options.max_buffer_size {
-            out.max_buffer_size = max_buffer_size;
-        }
-    }
-    out
-}
 
 #[napi]
 pub struct MemoryStore {
@@ -53,29 +29,32 @@ impl MemoryStore {
 
 #[napi]
 impl MemoryStore {
+    /// Creates a store in the new Postgres schema `name` at `url`.
     #[napi]
     pub fn create(
-        path: String,
+        url: String,
+        name: String,
         embedding_dim: u32,
-        options: Option<MemoryStoreOptions>,
+        vector_index: Option<bool>,
     ) -> AsyncTask<BlockingTask<MemoryStore>> {
-        let options = options_from_node(options);
         BlockingTask::spawn(move || {
-            let store = RustMemoryStore::create(Path::new(&path), embedding_dim as usize, options)?;
+            let store = RustMemoryStore::create(
+                &url,
+                &name,
+                embedding_dim as usize,
+                vector_index.unwrap_or(false),
+            )?;
             Ok(Self {
                 inner: Some(Arc::new(store)),
             })
         })
     }
 
+    /// Opens the store in the Postgres schema `name` at `url`.
     #[napi]
-    pub fn open(
-        path: String,
-        options: Option<MemoryStoreOptions>,
-    ) -> AsyncTask<BlockingTask<MemoryStore>> {
-        let options = options_from_node(options);
+    pub fn open(url: String, name: String) -> AsyncTask<BlockingTask<MemoryStore>> {
         BlockingTask::spawn(move || {
-            let store = RustMemoryStore::open(Path::new(&path), options)?;
+            let store = RustMemoryStore::open(&url, &name)?;
             Ok(Self {
                 inner: Some(Arc::new(store)),
             })

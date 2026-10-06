@@ -145,7 +145,6 @@ impl MemoryStore {
         span_ids: &[String],
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanRecord>> {
-        self.ensure_not_poisoned()?;
         if span_ids.is_empty() {
             return Ok(Vec::new());
         }

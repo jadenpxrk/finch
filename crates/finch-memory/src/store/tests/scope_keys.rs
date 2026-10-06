@@ -56,13 +56,11 @@ fn write_owners_then_space(store: &MemoryStore) -> [MemoryScope; 3] {
 }
 
 fn open_store(name: &str) -> EvidencedStore {
-    EvidencedStore::create(&temp_dir(name), 3, CollectionOptions::default()).unwrap()
+    EvidencedStore::create(&temp_dir(name), 3).unwrap()
 }
 
 fn close_store(store: EvidencedStore) {
-    let path = store.path.clone();
     drop(store);
-    std::fs::remove_dir_all(path).unwrap();
 }
 
 /// Claim ids of each active state `scope` itself owns.
@@ -755,7 +753,7 @@ fn tenant_selector_correction_leaves_another_tenants_span_visible() {
     // A tenant's selector correction must not affect another tenant in a space-wide read.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("correction_scope");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let mut a = span_record("span_a", MemoryStatus::Active, Some(10));
     a.scope.tenant_id = Some("tenant_a".to_string());
     a.text = "shared note".to_string();
@@ -792,7 +790,7 @@ fn tenant_selector_correction_leaves_another_tenants_span_visible() {
     );
     store.add_correction(&correction).unwrap();
     drop(store);
-    let store = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let store = crate::reopen_test_store(&path).unwrap();
     let a_hits = store
         .query_spans(&a.scope, vec![1.0, 0.0, 0.0], 10, Some(30))
         .unwrap();
@@ -821,7 +819,7 @@ fn space_level_claim_leaves_tenant_state_current() {
     // Writing a space-level claim must not retire state owned by a narrower tenant scope.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("scope_projection");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let mut tenant = scope();
     tenant.tenant_id = Some("tenant_a".to_string());
     for (claim_scope, id, value, at) in [
@@ -851,7 +849,7 @@ fn space_level_claim_leaves_tenant_state_current() {
         }
     }
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let tenant_states = reopened
         .scan_state_records(&tenant, state_scan(10, Some(30)))
         .unwrap();
@@ -870,7 +868,7 @@ fn space_wide_current_claim_read_keeps_tenant_claims_apart() {
     // Newest-wins resolution must not discard another tenant's current claim.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("current_claim_scope");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     for (tenant, id, value, at) in [
         ("tenant_a", "claim_a", "Rust", 10),
         ("tenant_b", "claim_b", "Python", 20),
@@ -896,7 +894,7 @@ fn space_wide_current_claim_read_keeps_tenant_claims_apart() {
         assert_eq!(current[0].id, id);
     }
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let raw = reopened.scan_claims(&scope(), 10, Some(30)).unwrap();
     let current = reopened
         .scan_current_claims(&scope(), 10, Some(30))
@@ -919,14 +917,14 @@ fn apostrophe_in_tenant_id_keeps_stored_spans_searchable() {
     // Scope values accepted at ingestion must round-trip through the generated filter dialect.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("quoted_scope");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let mut span = span_record("quoted_tenant_span", MemoryStatus::Active, Some(10));
     span.scope.tenant_id = Some("o'brien".to_string());
     store
         .append_vector_spans(&[(span.clone(), vec![1.0, 0.0, 0.0])])
         .unwrap();
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let fetched = reopened
         .fetch_spans_by_ids(&span.scope, std::slice::from_ref(&span.id), Some(20))
         .unwrap();
@@ -946,14 +944,14 @@ fn trailing_backslash_in_project_scope_keeps_stored_spans_searchable() {
     // A project path accepted on write must remain usable as a scope filter.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("backslash_scope");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let mut span = span_record("project_span", MemoryStatus::Active, Some(10));
     span.scope.project_id = Some("C:\\notes\\".to_string());
     store
         .append_vector_spans(&[(span.clone(), vec![1.0, 0.0, 0.0])])
         .unwrap();
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let fetched = reopened
         .fetch_spans_by_ids(&span.scope, std::slice::from_ref(&span.id), Some(20))
         .unwrap();

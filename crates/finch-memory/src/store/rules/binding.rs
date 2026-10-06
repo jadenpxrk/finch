@@ -104,7 +104,6 @@ impl MemoryStore {
             .iter()
             .map(|rule| rule_doc(rule).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(RULES_COLLECTION, &self.rules, &rule_docs)?;
         upsert_many(&self.rules, rule_docs)?;
         Ok(rebound)
     }

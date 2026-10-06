@@ -292,7 +292,6 @@ impl MemoryStore {
             .iter()
             .map(|entity| entity_doc(entity, None).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(ENTITIES_COLLECTION, &self.entities, &entity_docs)?;
         upsert_many(&self.entities, entity_docs)?;
         self.upsert_entity_aliases(&entities, transaction_time_ms)?;
         Ok(entities)
@@ -347,7 +346,6 @@ impl MemoryStore {
         }
         self.extend_claim_embeddings_from_sources(scope, &claims, claim_embeddings)?;
         let claim_docs = claim_docs_with_embeddings(&claims, claim_embeddings)?;
-        self.capture_state_mutation_docs(CLAIMS_COLLECTION, &self.claims, &claim_docs)?;
         insert_many(&self.claims, claim_docs)?;
         Ok(claims)
     }
@@ -371,11 +369,6 @@ impl MemoryStore {
             .map(slot_alias_doc)
             .collect::<Result<Vec<_>, _>>()
             .map_err(json_error)?;
-        self.capture_state_mutation_docs(
-            SLOT_ALIASES_COLLECTION,
-            &self.slot_aliases,
-            &slot_alias_docs,
-        )?;
         upsert_many(&self.slot_aliases, slot_alias_docs)?;
         Ok(slot_aliases)
     }
@@ -414,7 +407,6 @@ impl MemoryStore {
             .iter()
             .map(|rule| rule_doc(rule).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(RULES_COLLECTION, &self.rules, &rule_docs)?;
         insert_many(&self.rules, rule_docs)?;
         let rules_before_rebind = self
             .scan_rules(scope, usize::MAX, None)?
@@ -466,11 +458,6 @@ impl MemoryStore {
             .iter()
             .map(|correction| correction_doc(correction).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(
-            CORRECTIONS_COLLECTION,
-            &self.corrections,
-            &correction_docs,
-        )?;
         insert_many(&self.corrections, correction_docs)?;
         Ok(corrections)
     }

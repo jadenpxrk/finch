@@ -26,14 +26,12 @@ impl MemoryStore {
             )?;
             let record = self.sequence_and_bind_rule(record.clone())?;
             let rule_docs = vec![rule_doc(&record).map_err(json_error)?];
-            self.capture_state_mutation_docs(RULES_COLLECTION, &self.rules, &rule_docs)?;
             insert_many(&self.rules, rule_docs)?;
             self.propagate_new_rule(&record)
         })
     }
 
     pub fn add_rule(&self, input: RuleInput) -> ZResult<RuleRecord> {
-        self.ensure_not_poisoned()?;
         let record = self.build_rule_record(input)?;
         self.append_rule(&record)?;
         Ok(record)

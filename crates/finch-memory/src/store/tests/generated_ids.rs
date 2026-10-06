@@ -77,7 +77,7 @@ fn generated_correction_ids_collide_between_tenants() {
     // Corrections created independently in different tenant scopes must coexist.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("generated_correction_scope");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let scopes = tenant_scopes();
     let corrections = scopes.each_ref().map(|scope| {
         crate::ingest::add_correction(correction_input(scope.clone(), Some("note")), 20)
@@ -86,7 +86,7 @@ fn generated_correction_ids_collide_between_tenants() {
         .each_ref()
         .map(|correction| store.add_correction(correction));
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let stored = scopes
         .each_ref()
         .map(|scope| reopened.scan_corrections(scope, 10).unwrap());
@@ -112,7 +112,7 @@ fn generated_rule_ids_collide_between_tenants() {
     // Rules created independently in different tenant scopes must coexist.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("generated_rule_scope");
-    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3).unwrap();
     let scopes = tenant_scopes();
     // Identical inputs in two tenants still generate two ids.
     let built_ids = scopes.each_ref().map(|scope| {
@@ -125,7 +125,7 @@ fn generated_rule_ids_collide_between_tenants() {
         .each_ref()
         .map(|scope| store.add_rule(tenant_rule_input(scope)));
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let rules = scopes
         .each_ref()
         .map(|scope| reopened.scan_rules(scope, 10, Some(20)).unwrap());
@@ -239,7 +239,7 @@ fn space_only_generated_ids_keep_their_stored_values() {
     });
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("space_only_generated_ids");
-    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3).unwrap();
     let rule = store.add_rule(rule_input(scope())).unwrap();
     drop(store);
     std::fs::remove_dir_all(path).unwrap();
@@ -276,7 +276,7 @@ fn identical_tenant_writes_project_distinct_derived_ids() {
     // Ids derived from generated ids (state, trace, and derived claim versions) inherit their scope.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("generated_derived_scope");
-    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3).unwrap();
     let scopes = tenant_scopes();
     for scope in &scopes {
         store.add_rule(tenant_rule_input(scope)).unwrap();
@@ -334,7 +334,7 @@ fn generated_profile_ids_differ_between_tenants() {
     // Profiles generated independently in different tenant scopes must coexist.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("profile_scope");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let scopes = ["tenant_a", "tenant_b"].map(|tenant| {
         let mut scope = scope();
         scope.tenant_id = Some(tenant.to_string());
@@ -363,7 +363,7 @@ fn generated_profile_ids_differ_between_tenants() {
         })
     });
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let profiles = scopes
         .each_ref()
         .map(|scope| reopened.scan_profiles(scope, 10, Some(20)).unwrap());
@@ -389,7 +389,7 @@ fn generated_episode_ids_differ_between_tenants() {
     // Independent tenants must be able to ingest identical events without an ID conflict.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("episode_scope");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let mut tenant_a = scope();
     tenant_a.tenant_id = Some("tenant_a".to_string());
     let mut tenant_b = scope();
@@ -423,7 +423,7 @@ fn generated_episode_ids_differ_between_tenants() {
         &ChunkOptions::default(),
     );
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let a = reopened.scan_spans(&tenant_a, 10, Some(20)).unwrap();
     let b = reopened.scan_spans(&tenant_b, 10, Some(20)).unwrap();
     drop(reopened);
@@ -440,7 +440,7 @@ fn generated_manual_claim_ids_differ_between_tenants() {
     // Identical manual facts in independent tenants must not contend for one generated ID.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("manual_claim_ids");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let mut tenant_a = scope();
     tenant_a.tenant_id = Some("tenant_a".to_string());
     let mut tenant_b = scope();
@@ -473,7 +473,7 @@ fn generated_manual_claim_ids_differ_between_tenants() {
         None,
     );
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let a = reopened
         .scan_current_claims(&tenant_a, 10, Some(20))
         .unwrap();
@@ -495,7 +495,7 @@ fn distinct_selector_corrections_created_together_get_distinct_ids() {
     // Independent selector corrections in one millisecond must retain distinct identities.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("selector_correction_ids");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let a = span_record("alpha_note", MemoryStatus::Active, Some(10));
     let b = span_record("beta_note", MemoryStatus::Active, Some(10));
     store
@@ -528,7 +528,7 @@ fn distinct_selector_corrections_created_together_get_distinct_ids() {
     store.add_correction(&corrections[0]).unwrap();
     let second = store.add_correction(&corrections[1]);
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let stored = reopened.scan_corrections(&scope(), 10).unwrap();
     let visible = reopened
         .query_spans(&scope(), vec![1.0, 0.0, 0.0], 10, Some(30))

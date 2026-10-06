@@ -4,7 +4,7 @@ use super::*;
 fn memory_store_persists_profile_views_by_scope_and_time() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("profiles");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let mut user_1 = scope();
     user_1.user_id = Some("user_1".to_string());
     store
@@ -51,19 +51,18 @@ fn memory_store_persists_profile_views_by_scope_and_time() {
         .unwrap();
     drop(store);
 
-    let reopened = MemoryStore::open(&dir, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&dir).unwrap();
     let profiles = reopened.scan_profiles(&user_1, 100, Some(40)).unwrap();
     assert_eq!(profiles.len(), 1);
     assert_eq!(profiles[0].id, "profile_user_1");
     assert!(profiles[0].profile_text.contains("compact"));
-    let _ = std::fs::remove_dir_all(&reopened.path);
 }
 
 #[test]
 fn memory_store_profile_limit_applies_after_scope_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("profile_scope_limit");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut other_scope = scope();
@@ -115,15 +114,13 @@ fn memory_store_profile_limit_applies_after_scope_filtering() {
     assert_eq!(profiles.len(), 1);
     assert_eq!(profiles[0].id, "profile_target_style");
     assert!(profiles[0].profile_text.contains("concise"));
-
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_persists_entities_and_expands_edges_one_hop() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("graph");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let mut user_1 = scope();
     user_1.user_id = Some("user_1".to_string());
     store
@@ -214,7 +211,7 @@ fn memory_store_persists_entities_and_expands_edges_one_hop() {
         .unwrap();
     drop(store);
 
-    let reopened = MemoryStore::open(&dir, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&dir).unwrap();
     let entities = reopened.scan_entities(&user_1, 100).unwrap();
     assert_eq!(entities.len(), 3);
     let edges = reopened
@@ -230,14 +227,13 @@ fn memory_store_persists_entities_and_expands_edges_one_hop() {
     assert_eq!(ranked[0].depth, 1);
     assert_eq!(ranked[1].edge.id, "edge_feature_concept");
     assert_eq!(ranked[1].depth, 2);
-    let _ = std::fs::remove_dir_all(&reopened.path);
 }
 
 #[test]
 fn memory_store_edge_limit_applies_after_scope_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("edge_scope_limit");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut other_scope = scope();
@@ -283,14 +279,13 @@ fn memory_store_edge_limit_applies_after_scope_filtering() {
         .unwrap();
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0].id, "edge_target_relation");
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn memory_store_entity_limit_applies_after_scope_filtering() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("entity_scope_limit");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let mut target_scope = scope();
     target_scope.user_id = Some("target_user".to_string());
     let mut other_scope = scope();
@@ -340,15 +335,13 @@ fn memory_store_entity_limit_applies_after_scope_filtering() {
     assert_eq!(entities.len(), 1);
     assert_eq!(entities[0].id, "entity_finch_memory");
     assert_eq!(entities[0].aliases, vec!["memory substrate".to_string()]);
-
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn entity_upsert_does_not_overwrite_another_tenant() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("tenant_entity");
-    let store = MemoryStore::create(&path, 4, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 4).unwrap();
     let mut scope_a = MemoryScope::new("shared-space");
     scope_a.tenant_id = Some("tenant-a".into());
     let mut scope_b = scope_a.clone();
@@ -418,7 +411,7 @@ fn entity_upsert_does_not_overwrite_another_tenant() {
 fn explicit_entity_id_cannot_take_over_another_scope() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("entity_id_scope");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let entity = |tenant: &str| {
         let mut scope = scope();
         scope.tenant_id = Some(tenant.to_string());
@@ -441,15 +434,13 @@ fn explicit_entity_id_cannot_take_over_another_scope() {
     let err = store.add_entity(entity("tenant-b"), None).unwrap_err();
     assert!(err.is_already_exists(), "{}", err.message);
     assert_eq!(store.scan_entities(&owner.scope, 10).unwrap().len(), 1);
-
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn explicit_slot_alias_id_cannot_take_over_another_scope() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("slot_alias_id_scope");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let add_alias = |tenant: &str| {
         let mut scope = scope();
         scope.tenant_id = Some(tenant.to_string());
@@ -502,8 +493,6 @@ fn explicit_slot_alias_id_cannot_take_over_another_scope() {
         1,
         "tenant A's alias was overwritten"
     );
-
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
@@ -511,7 +500,7 @@ fn generated_edge_ids_stay_distinct_between_tenants() {
     // The same relation written independently by two tenants must not collide on its generated id.
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("edge_scope_generated_id");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let scopes = ["tenant_a", "tenant_b"].map(|tenant| {
         let mut scope = scope();
         scope.tenant_id = Some(tenant.to_string());
@@ -543,7 +532,6 @@ fn generated_edge_ids_stay_distinct_between_tenants() {
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].id, edge.id);
     }
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
@@ -551,7 +539,7 @@ fn slot_alias_scan_applies_its_limit() {
     // The public slot-alias read returned every alias in scope, whatever limit the caller asked for.
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("slot_alias_scan_limit");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     for (tag, predicate) in [("owner", "billing owner"), ("lead", "billing lead")] {
         let target = make_claim(
@@ -601,7 +589,6 @@ fn slot_alias_scan_applies_its_limit() {
         store.scan_slot_aliases(&scope, 1, Some(20)).unwrap().len(),
         1
     );
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
@@ -609,7 +596,7 @@ fn ranked_graph_limit_keeps_the_highest_confidence_edge() {
     // A ranked result limit must keep the strongest edge regardless of insertion order.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("graph_ranking");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     for (id, confidence) in [("weak", 0.1), ("strong", 0.9)] {
         store
             .add_edge(EdgeInput {
@@ -629,7 +616,7 @@ fn ranked_graph_limit_keeps_the_highest_confidence_edge() {
             .unwrap();
     }
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let all = reopened
         .expand_edges_ranked(&scope(), &["seed".to_string()], 1, 2, Some(20))
         .unwrap();

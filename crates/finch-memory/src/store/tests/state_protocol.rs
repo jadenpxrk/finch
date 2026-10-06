@@ -10,7 +10,7 @@ use crate::{CompiledMemoryContext, ContextItem};
 fn state_mutation_evidence_must_resolve_in_scope() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_mutation_evidence_validation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let scope = scope();
     let ingested = store
         .ingest_episode(
@@ -66,7 +66,7 @@ fn state_mutation_evidence_must_resolve_in_scope() {
 fn evidence_backed_slot_aliases_unify_multilingual_lifecycle_state() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("slot_alias_lifecycle");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let original = make_claim(
         &scope,
@@ -153,7 +153,7 @@ fn evidence_backed_slot_aliases_unify_multilingual_lifecycle_state() {
 fn conflicting_slot_aliases_fail_closed() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("slot_alias_ambiguity");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let first = make_claim(
         &scope,
@@ -257,7 +257,7 @@ fn conflicting_slot_aliases_fail_closed() {
 fn slot_alias_validity_does_not_rewrite_earlier_claims() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("slot_alias_validity");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let target = make_claim(
         &scope,
@@ -338,7 +338,7 @@ fn slot_alias_validity_does_not_rewrite_earlier_claims() {
 fn invalid_same_batch_slot_alias_rolls_back_claims() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("slot_alias_atomic_rollback");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let scope = scope();
     let claim = make_claim(
         &scope,
@@ -384,7 +384,7 @@ fn invalid_same_batch_slot_alias_rolls_back_claims() {
 fn answer_emission_requires_verbatim_in_scope_evidence() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("validated_answer_emission");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let scope = scope();
     let mut span = span_record("span_answer_evidence", MemoryStatus::Active, Some(10));
     span.scope = scope.clone();
@@ -445,7 +445,7 @@ fn answer_emission_requires_verbatim_in_scope_evidence() {
 fn answer_emission_validates_support_per_canonical_slot() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("validated_answer_slot_support");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let scope = scope();
     let mut current_span = span_record("span_current_owner", MemoryStatus::Active, Some(20));
     current_span.scope = scope.clone();
@@ -531,7 +531,7 @@ fn answer_emission_validates_support_per_canonical_slot() {
 fn answer_finalization_strips_unsupported_claims_and_refuses_when_none_remain() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("grounded_answer_finalization");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let scope = scope();
     let mut current_span = span_record("span_current_reviewer", MemoryStatus::Active, Some(20));
     current_span.scope = scope.clone();
@@ -657,7 +657,7 @@ fn answer_finalization_strips_unsupported_claims_and_refuses_when_none_remain() 
 fn answer_projection_builds_support_per_canonical_slot() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("answer_projection_slot_support");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let owner = make_claim(
         &scope,
@@ -759,7 +759,7 @@ fn answer_projection_builds_support_per_canonical_slot() {
 fn packed_context_support_requires_admitted_raw_proof() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("packed_context_support_boundary");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let claim = make_claim(
         &scope,
@@ -879,7 +879,7 @@ fn packed_context_support_requires_admitted_raw_proof() {
 fn unsupported_answer_emission_requires_structured_refusal() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("validated_answer_refusal");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let support = AnswerSupportContract {
         state: AnswerSupportState::Unsupported,
         source_claim_ids: Vec::new(),
@@ -1021,7 +1021,7 @@ fn dependency_trace(
 fn rejected_mutation_batch_does_not_leave_partial_claims() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_atomic_validation");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let scope = scope();
     let claim = make_claim(
         &scope,
@@ -1058,74 +1058,11 @@ fn rejected_mutation_batch_does_not_leave_partial_claims() {
 }
 
 #[test]
-fn pending_mutation_journal_is_recovered_on_reopen() {
-    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
-    let dir = temp_dir("state_protocol_journal_recovery");
-    let scope = scope();
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
-    store
-        .append_claim(
-            &make_claim(
-                &scope,
-                "claim_preexisting_unrelated",
-                "perfil",
-                "zona",
-                Some("este"),
-                9,
-                (ClaimKind::Fact, ClaimPolarity::Affirmative),
-            ),
-            None,
-        )
-        .unwrap();
-    store.begin_state_mutation_journal(&scope).unwrap();
-    store
-        .capture_state_mutation_documents(
-            CLAIMS_COLLECTION,
-            &store.claims,
-            ["claim_interrupted".to_string()],
-        )
-        .unwrap();
-    let journal = std::fs::read_to_string(dir.join(".state-mutation-journal.json")).unwrap();
-    assert!(journal.contains("claim_interrupted"));
-    assert!(!journal.contains("claim_preexisting_unrelated"));
-    // A pending journal refuses journaled writes, so the rows land directly, as a crash leaves them.
-    for (id, subject, predicate, value, at) in [
-        ("claim_interrupted", "proyecto", "responsable", "Ana", 10),
-        ("claim_concurrent_unrelated", "otro", "estado", "activo", 11),
-    ] {
-        let claim = make_claim(
-            &scope,
-            id,
-            subject,
-            predicate,
-            Some(value),
-            at,
-            (ClaimKind::Fact, ClaimPolarity::Affirmative),
-        );
-        insert_one(&store.claims, claim_doc(&claim, None).unwrap()).unwrap();
-    }
-    drop(store);
-
-    let store = MemoryStore::open(&dir, CollectionOptions::default()).unwrap();
-    let claims = store.scan_claims(&scope, 10, None).unwrap();
-    assert!(!claims.iter().any(|claim| claim.id == "claim_interrupted"));
-    assert!(claims
-        .iter()
-        .any(|claim| claim.id == "claim_concurrent_unrelated"));
-    assert!(claims
-        .iter()
-        .any(|claim| claim.id == "claim_preexisting_unrelated"));
-
-    drop(store);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn failed_mutation_rolls_back_writes_completed_before_storage_error() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_runtime_rollback");
     let scope = scope();
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let claim = make_claim(
         &scope,
         "claim_duplicate",
@@ -1147,7 +1084,6 @@ fn failed_mutation_rolls_back_writes_completed_before_storage_error() {
         ))
         .is_err());
     assert!(store.scan_claims(&scope, 10, None).unwrap().is_empty());
-    assert!(!dir.join(".state-mutation-journal.json").exists());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1157,7 +1093,7 @@ fn failed_mutation_restores_existing_rules_rebound_by_the_batch() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_rebind_rollback");
     let scope = scope();
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     store
         .apply_state_mutation_batch(mutation(
             &scope,
@@ -1243,7 +1179,7 @@ fn multilingual_multi_hop_state_survives_reopen_and_bitemporal_queries() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_multilingual_cascade");
     let scope = scope();
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let rules = vec![
         exact_rule(
             &scope,
@@ -1306,7 +1242,7 @@ fn multilingual_multi_hop_state_survives_reopen_and_bitemporal_queries() {
         .unwrap();
     drop(store);
 
-    let store = MemoryStore::open(&dir, CollectionOptions::default()).unwrap();
+    let store = crate::reopen_test_store(&dir).unwrap();
     let historical = store
         .project_answer_ready_state(
             &scope,
@@ -1386,7 +1322,7 @@ fn multilingual_multi_hop_state_survives_reopen_and_bitemporal_queries() {
 fn late_arriving_history_does_not_replace_newer_current_state() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_late_history");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     store
         .apply_state_mutation_batch(mutation(
@@ -1519,7 +1455,7 @@ fn late_arriving_history_does_not_replace_newer_current_state() {
 fn one_batch_materializes_every_valid_time_boundary() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_batch_boundaries");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
 
     store
@@ -1603,7 +1539,7 @@ fn dependency_trace_reconciliation_preserves_other_active_member_lineage() {
 fn persisted_rule_binds_when_named_endpoint_appears_later() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_pending_rule_binding");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let mut rule = exact_rule(
         &scope,
@@ -1655,7 +1591,7 @@ fn persisted_rule_binds_when_named_endpoint_appears_later() {
 fn persisted_rule_rebinds_through_a_later_evidence_backed_alias() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_pending_rule_alias_binding");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let rule = exact_rule(
         &scope,
@@ -1736,7 +1672,7 @@ fn persisted_rule_rebinds_through_a_later_evidence_backed_alias() {
 fn derived_state_uses_the_trigger_rule_interval_intersection() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_rule_interval");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let mut trigger = make_claim(
         &scope,
@@ -1806,7 +1742,7 @@ fn derived_state_uses_the_trigger_rule_interval_intersection() {
 fn repairable_trigger_slots_track_every_transition_of_directly_asserted_state() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_repairable_triggers");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let claim = |id: &str, subject: &str, predicate: &str, value: &str, at_ms: i64| {
         make_claim(
@@ -1955,7 +1891,7 @@ fn repairable_trigger_slots_track_every_transition_of_directly_asserted_state() 
 fn derive_dependency_becomes_unsupported_when_its_trigger_is_deleted() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_derive_trigger_deleted");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let trigger = make_claim(
         &scope,
@@ -2056,7 +1992,7 @@ fn derive_dependency_becomes_unsupported_when_its_trigger_is_deleted() {
 fn expiring_derive_rule_does_not_resurrect_stale_direct_state() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_derive_rule_expiry");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let mut rule = exact_rule(
         &scope,
@@ -2128,7 +2064,7 @@ fn expiring_derive_rule_does_not_resurrect_stale_direct_state() {
 fn propagation_uses_each_trigger_valid_time_instead_of_batch_maximum() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_boundary_local_rules");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let mut rule = exact_rule(
         &scope,
@@ -2185,7 +2121,7 @@ fn propagation_uses_each_trigger_valid_time_instead_of_batch_maximum() {
 fn answer_projection_scores_all_visible_state_before_applying_limit() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_complete_candidates");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&dir, 3).unwrap();
     let scope = scope();
     let mut records = Vec::new();
     for i in 0..9 {
@@ -2229,7 +2165,7 @@ fn answer_projection_scores_all_visible_state_before_applying_limit() {
 fn state_selection_matches_unsegmented_unicode_queries_without_translation() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_unsegmented_unicode_query");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     store
         .apply_state_mutation_batch(mutation(
@@ -2272,7 +2208,7 @@ fn state_selection_matches_unsegmented_unicode_queries_without_translation() {
 fn historical_correction_projects_target_that_expired_before_batch_latest_boundary() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_historical_correction_target");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let mut historical = make_claim(
         &scope,
@@ -2366,7 +2302,7 @@ fn historical_correction_projects_target_that_expired_before_batch_latest_bounda
 fn alias_backed_set_state_is_projected_without_language_specific_routing() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_alias_set");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let member_a = make_claim(
         &scope,
@@ -2435,7 +2371,7 @@ fn alias_backed_set_state_is_projected_without_language_specific_routing() {
 fn late_arriving_open_set_member_updates_history_and_current_aggregate() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_late_set_member");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     store
         .apply_state_mutation_batch(mutation(
@@ -2525,7 +2461,7 @@ fn late_arriving_open_set_member_updates_history_and_current_aggregate() {
 fn deletion_invalidates_dependent_state_and_direct_readd_restores_it() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_delete_readd");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let responsible = make_claim(
         &scope,
@@ -2651,7 +2587,7 @@ fn deletion_invalidates_dependent_state_and_direct_readd_restores_it() {
 fn unsupported_slot_state_keeps_partial_readd_fail_closed() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_set_unsupported_readd");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let responsible = make_claim(
         &scope,
@@ -2820,7 +2756,7 @@ fn unsupported_slot_state_keeps_partial_readd_fail_closed() {
 fn set_read_over_scalar_history_lists_every_value_the_slot_has_held() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_set_read_scalar_history");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let values = [
         ("claim_hobby_gitarre", "ギター", 10),
@@ -2916,7 +2852,7 @@ fn set_read_over_scalar_history_lists_every_value_the_slot_has_held() {
 fn preference_values_accumulate_as_set_members() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_preference_set");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     for (id, value, at) in [
         ("claim_gusta_te", "té verde", 10),
@@ -2959,7 +2895,7 @@ fn preference_values_accumulate_as_set_members() {
 fn standing_dependency_governs_a_transition_stated_before_the_rule() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_retroactive_rule_window");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     // target asserted t=10; trigger holds v1 at t=5 and changes at t=20; rule stated t=30
     let batch = |t, claims, rules| mutation(&scope, t, claims, Vec::new(), rules, Vec::new());
@@ -3036,7 +2972,7 @@ fn standing_dependency_governs_a_transition_stated_before_the_rule() {
 fn rules_bound_to_an_alias_surface_reach_the_canonical_slot() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_alias_rule_reach");
-    let store = EvidencedStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let batch = |t, claims, rules| mutation(&scope, t, claims, Vec::new(), rules, Vec::new());
     store
@@ -3142,7 +3078,7 @@ fn rules_bound_to_an_alias_surface_reach_the_canonical_slot() {
 
 // One claim and one derived rule leave claims, state records and a dependency trace on slots.
 fn store_with_derived_state(name: &str) -> (EvidencedStore, MemoryScope) {
-    let store = EvidencedStore::create(&temp_dir(name), 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&temp_dir(name), 3).unwrap();
     let scope = scope();
     let claim = make_claim(
         &scope,
@@ -3204,8 +3140,6 @@ fn state_record_scans_fail_on_undecodable_row() {
     assert!(store
         .current_state_records_for_slot_ids(&scope, &slot_ids)
         .is_err());
-
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
@@ -3224,8 +3158,6 @@ fn dependency_trace_scan_fails_on_undecodable_row() {
     assert!(store
         .current_dependency_traces_for_slot_ids(&scope, &slot_ids)
         .is_err());
-
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
@@ -3248,15 +3180,13 @@ fn claim_scans_fail_on_undecodable_row() {
     assert!(store
         .scan_current_claims_for_subjects(&scope, &subjects, 10, None)
         .is_err());
-
-    let _ = std::fs::remove_dir_all(&store.path);
 }
 
 #[test]
 fn scope_rebuild_does_not_retire_a_narrower_scopes_state() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("rebuild_keeps_tenant_state");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let mut tenant = scope();
     tenant.tenant_id = Some("tenant_a".to_string());
     let mut claim = make_claim(

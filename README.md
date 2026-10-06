@@ -13,7 +13,7 @@ The database does these things:
 
 The memory layer does these things:
 
-- It stores conversation episodes and the claims extracted from them in Finch collections.
+- It stores conversation episodes and the claims extracted from them in Postgres with pgvector.
 - It records when each claim held and when each correction or replacement of it happened.
 - It packs the current claims and their source text into a context for a model to answer
   from.
@@ -27,7 +27,7 @@ The memory layer does these things:
 | `crates/finch-storage` | Columnar forward store (Arrow IPC or Parquet, optional mmap) |
 | `crates/finch-core` | Index algorithms and quantization |
 | `crates/finch-db` | Collections, segments, WAL, SQL-like filtering |
-| `crates/finch-memory` | The memory layer; the `postgres` feature stores it in Postgres |
+| `crates/finch-memory` | The memory layer, stored in Postgres with pgvector |
 | `finch-py`, `finch-node` | Python and Node.js bindings |
 
 ## Rust

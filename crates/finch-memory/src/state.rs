@@ -10,10 +10,6 @@ use crate::{
     MemoryId, MemoryScope, MemoryStatus, ResolvedRuleApplication, RuleInput, RuleRecord,
     SlotAliasInput, SlotAliasRecord, StateReadView, StateRecord,
 };
-use crate::{
-    CLAIMS_COLLECTION, CORRECTIONS_COLLECTION, ENTITIES_COLLECTION, RULES_COLLECTION,
-    SLOT_ALIASES_COLLECTION,
-};
 use finch_types::{Doc, Status, Value, ZResult};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;

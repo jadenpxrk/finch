@@ -5,8 +5,8 @@
 Finch is a vector database that runs inside your process. There is no server. A collection is
 one directory on disk. It holds documents, and each document has a primary key, scalar fields,
 and dense or sparse vector fields. A collection answers vector queries, SQL-like filters, and
-`SELECT` statements. The memory layer for agents sits on top of the database and stores its data
-in ordinary collections.
+`SELECT` statements. The memory layer for agents uses the database's types and filter language,
+and stores its records in Postgres with the pgvector extension.
 
 ```mermaid
 flowchart BT
@@ -189,9 +189,8 @@ flowchart LR
   EN --> SL
 ```
 
-By default, the memory layer is a set of collections in one directory. Each record kind has its
-own collection. A memory store therefore gets the write path, the read path, and the crash
-recovery of the sections above without change. Section 14 describes storage in Postgres.
+A memory store is one Postgres schema, and each record kind has its own table. Section 14 tells
+how the store uses Postgres.
 
 Evidence is what happened. An episode is one event, such as a user message or a tool result. An
 artifact is a file, a page, or a document. Finch splits their text into overlapping spans. Each
@@ -288,11 +287,11 @@ read follows the traces back to the claim that started the chain.
 flowchart TD
   X[Correction record: retract, replace, restore, tombstone, forget, or mark stale]
   V[Find the target claims and their slots]
-  J[Write before images to the mutation journal]
+  B[Begin one transaction]
   A[Apply the effect to each claim]
   P[Project state for the affected slots, and rules downstream]
-  K[Delete the journal: batch committed]
-  X --> V --> J --> A --> P --> K
+  K[Commit the transaction]
+  X --> V --> B --> A --> P --> K
 ```
 
 Finch never edits a stored claim in place. A correction is its own record. It names its target
@@ -302,24 +301,11 @@ restore brings a retracted claim back. A forget ends the claim in every current 
 it as a tombstone. The stored row stays. Any rule that depends on the affected slot fires again,
 so a derived value falls with its source.
 
-Every state write changes several collections: the batch write API, and the single writes of a
-claim, correction, rule, entity, or slot alias, and the scope rebuild. Each one takes the store's
-write lock and opens a journal file in the store directory. Before it changes a record, Finch
-appends that record's prior version to the journal as one checksummed entry and fsyncs it. A
-write that changes many records adds one short entry per change and never rewrites the file.
-When the write completes, Finch deletes the journal; when it fails, Finch restores every prior
-version first. If that restore also fails, some of the failed write may still be visible, so
-the store refuses every later read and write with an error that says to reopen it. If the
-process dies in between, the next open reads the journal up to its last whole entry, restores
-every prior version, and deletes it. It skips an entry the crash cut short, because Finch had not
-yet changed the record that entry names. A read therefore sees the whole write or none of it. A
-write to a state collection with no journal open is an error.
-
-The journal makes a write whole or absent across a process crash. Across a power loss or an
-operating system crash it holds only as far as the collections' WALs reach the disk, and that
-depends on the global setting `wal_fsync_every_docs`, which by default never fsyncs. With the
-default, a power loss can lose part of a finished write or part of a restore, even though the
-journal itself was on disk.
+Every state write changes several tables: the batch write API, the single writes of a claim,
+correction, rule, entity, or slot alias, and the scope rebuild. Each one takes the store's write
+lock and runs as one Postgres transaction. When the write completes, the transaction commits.
+When it fails, or the process dies first, Postgres discards every change of the write. A read
+therefore sees the whole write or none of it.
 
 ## 13. The memory read path
 
@@ -356,18 +342,13 @@ tombstone. With the same records and the same hits, the packer writes the same c
 
 ## 14. Memory storage in Postgres
 
-With the `postgres` feature, a memory store keeps its records in Postgres with the pgvector
-extension. `MemoryStore::create_postgres(url, name, dim, vector_index)` creates a store in the
-new schema `name`. `MemoryStore::open_postgres` opens it, and `drop_postgres` deletes it with
-all its rows. Each record kind is one table. The memory logic is the same as with collections.
+A memory store keeps its records in Postgres with the pgvector extension.
+`MemoryStore::create(url, name, dim, vector_index)` creates a store in the new schema `name`, and
+fails if that schema exists. `MemoryStore::open(url, name)` opens it. `drop_store(url, name)`
+deletes it with all its rows.
 
-```toml
-finch-memory = { path = "crates/finch-memory", features = ["postgres"] }
-```
-
-A state mutation runs as one Postgres transaction, so the store uses no journal file. A crash
-before the commit leaves no part of the write. Reads use a pool of eight connections. A
-connection that the server closes opens again on its next use.
+Reads use a pool of eight connections. A connection that the server closes opens again on its
+next use.
 
 With `vector_index`, each embedding column gets an HNSW index on its halfvec form. That index
 accepts up to 4,000 dimensions and is half the size of a full-precision index. Without it,
@@ -392,12 +373,8 @@ can hold the memory of many users.
 - With the same records and search hits, the memory layer packs the same context.
 - One process at a time can open a collection for writing.
 - Every read and write of the memory layer stays inside its scope.
-- A memory-layer write takes effect as one batch, or not at all, across a process crash.
-  With collections, this holds across a power loss only as far as the WAL fsync setting
-  reaches, which by default is not at all. In Postgres, the write is durable when the
-  transaction commits.
-- If a failed memory-layer write cannot be rolled back, the store refuses every read and write
-  until it is reopened, and the reopen rolls it back.
+- A memory-layer write is one Postgres transaction: it takes effect whole or not at all, and it
+  is durable when the transaction commits.
 - A claim, a correction, and a rule never change after Finch stores them. A new record
   supersedes an old one.
 - A read at a past valid time or a past transaction time returns the versions that held then.
@@ -416,13 +393,12 @@ can hold the memory of many users.
 | Filter evaluation | `crates/finch-db/src/sqlengine` |
 | Vector index algorithms | `crates/finch-core/src/algorithm` |
 | Global config, including WAL fsync | `docs/global-config.md` |
-| Memory collections and their fields | `crates/finch-memory/src/schema.rs` |
+| Memory tables and their fields | `crates/finch-memory/src/schema.rs` |
 | Chunking and ingest | `crates/finch-memory/src/ingest.rs` |
 | Hybrid span search | `crates/finch-memory/src/store/search.rs` |
 | Claim binding and state projection | `crates/finch-memory/src/store/state_records.rs` |
 | Rules and dependency traces | `crates/finch-memory/src/store/rules.rs` |
 | Corrections and claim lifecycle | `crates/finch-memory/src/store/lifecycle.rs` |
-| Mutation journal | `crates/finch-memory/src/store/mutation_journal.rs` |
 | Memory storage in Postgres | `crates/finch-memory/src/postgres.rs` |
 | Answer-ready read | `crates/finch-memory/src/store/projection.rs` |
 | Context packing | `crates/finch-memory/src/context.rs` |

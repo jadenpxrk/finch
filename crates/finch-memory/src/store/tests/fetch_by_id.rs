@@ -7,7 +7,7 @@ fn tenant(id: &str) -> MemoryScope {
 }
 
 fn open_store(name: &str) -> EvidencedStore {
-    EvidencedStore::create(&temp_dir(name), 3, CollectionOptions::default()).unwrap()
+    EvidencedStore::create(&temp_dir(name), 3).unwrap()
 }
 
 fn entity(scope: &MemoryScope, id: &str) -> EntityInput {

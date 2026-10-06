@@ -4,7 +4,6 @@ use finch_memory::{
     CorrectionOperation, EpisodeInput, HybridSpanSearch, ManualClaimInput, MemoryScope,
     MemoryStore, RetrievalBaselineHits, SourceKind, Visibility,
 };
-use finch_types::CollectionOptions;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -22,6 +21,18 @@ fn temp_dir(name: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     dir
+}
+
+/// A new, empty store named after `dir` on the server in FINCH_MEMORY_TEST_POSTGRES_URL.
+fn new_store(dir: &std::path::Path, embedding_dim: usize) -> finch_types::ZResult<MemoryStore> {
+    let url = std::env::var("FINCH_MEMORY_TEST_POSTGRES_URL")
+        .expect("set FINCH_MEMORY_TEST_POSTGRES_URL to a Postgres server with pgvector");
+    let name = format!(
+        "t_{}",
+        finch_memory::stable_hash_hex(&[&dir.to_string_lossy()])
+    );
+    finch_memory::drop_store(&url, &name)?;
+    MemoryStore::create(&url, &name, embedding_dim, false)
 }
 
 fn scope(user_id: &str) -> MemoryScope {
@@ -72,7 +83,7 @@ fn remember(
 fn production_writes_reject_fabricated_evidence_references() {
     let _guard = STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("provenance_guard");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = new_store(&dir, 3).unwrap();
     let scope = scope("provenance");
     let base = ManualClaimInput {
         id: Some("claim_provenance".to_string()),
@@ -110,7 +121,7 @@ fn production_writes_reject_fabricated_evidence_references() {
 fn exact_literal_recall_is_scoped() {
     let _guard = STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("exact_literal");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = new_store(&dir, 3).unwrap();
     let user_1 = scope("user_1");
     remember(
         &store,
@@ -151,7 +162,7 @@ fn exact_literal_recall_is_scoped() {
 fn tombstoned_memory_is_not_returned_as_current() {
     let _guard = STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("tombstone");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = new_store(&dir, 3).unwrap();
     let user = scope("user_1");
     let span_id = remember(
         &store,
@@ -211,7 +222,7 @@ fn tombstoned_memory_is_not_returned_as_current() {
 fn validity_windows_support_historical_and_current_lookup() {
     let _guard = STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("validity");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = new_store(&dir, 3).unwrap();
     let user = scope("user_1");
     remember(
         &store,
@@ -249,7 +260,7 @@ fn validity_windows_support_historical_and_current_lookup() {
 fn retrieval_metrics_measure_hybrid_baseline() {
     let _guard = STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("baseline");
-    let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+    let store = new_store(&dir, 3).unwrap();
     let user = scope("user_1");
     let gold_span = remember(
         &store,

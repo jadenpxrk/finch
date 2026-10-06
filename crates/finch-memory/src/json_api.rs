@@ -681,7 +681,6 @@ mod tests {
         ActorKind, ClaimKind, ClaimPolarity, CorrectionAuthority, CorrectionOperation, EdgeInput,
         EntityInput, ManualClaimInput, ProfileInput, SourceKind, Visibility,
     };
-    use finch_types::CollectionOptions;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -701,7 +700,7 @@ mod tests {
     fn json_api_ingests_and_searches_spans() {
         let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
         let dir = temp_dir();
-        let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+        let store = crate::test_store(&dir, 3).unwrap();
         let scope = MemoryScope::new("json");
         let input = EpisodeInput {
             id: Some("ep_json_api".to_string()),
@@ -740,7 +739,7 @@ mod tests {
     fn json_api_semantic_claim_hit_projects_current_canonical_slot_state() {
         let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
         let dir = temp_dir();
-        let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+        let store = crate::test_store(&dir, 3).unwrap();
         let scope = MemoryScope::new("json_state_projection");
         for (id, value, observed_at_ms, embedding) in [
             ("owner_previous", "Ana", 10, vec![1.0, 0.0, 0.0]),
@@ -856,7 +855,7 @@ mod tests {
     fn json_api_exposes_active_records_and_context() {
         let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
         let dir = temp_dir();
-        let store = MemoryStore::create(&dir, 3, CollectionOptions::default()).unwrap();
+        let store = crate::test_store(&dir, 3).unwrap();
         let scope = MemoryScope::new("json_records");
         let scope_json = serde_json::to_string(&scope).unwrap();
 

@@ -9,6 +9,8 @@ use crate::types::{
 };
 use crate::StateMutationBatch;
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Saturation tests write this many unrelated corrections, so a read with a fixed scan cap misses the target.
@@ -206,8 +208,8 @@ impl std::ops::Deref for EvidencedStore {
 }
 
 impl EvidencedStore {
-    fn create(path: &Path, embedding_dim: usize, options: CollectionOptions) -> ZResult<Self> {
-        MemoryStore::create(path, embedding_dim, options).map(Self)
+    fn create(path: &Path, embedding_dim: usize) -> ZResult<Self> {
+        crate::test_store(path, embedding_dim).map(Self)
     }
 
     /// Writes the cited episodes and spans that do not exist yet; each span quotes the first
@@ -395,5 +397,4 @@ mod rule_time;
 mod rules;
 mod scope_keys;
 mod state_protocol;
-mod string_indexes;
 mod write_integrity;

@@ -222,7 +222,6 @@ impl MemoryStore {
     ) -> ZResult<()> {
         self.extend_claim_embeddings_from_sources(scope, derived, claim_embeddings)?;
         let derived_docs = claim_docs_with_embeddings(derived, claim_embeddings)?;
-        self.capture_state_mutation_docs(CLAIMS_COLLECTION, &self.claims, &derived_docs)?;
         upsert_many(&self.claims, derived_docs)
     }
 

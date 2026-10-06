@@ -7,10 +7,8 @@ pub mod context;
 pub mod eval;
 pub mod ingest;
 pub mod json_api;
-#[cfg(feature = "postgres")]
 mod postgres;
-#[cfg(feature = "postgres")]
-pub use postgres::drop_postgres;
+pub use postgres::drop_store;
 pub mod retrieval;
 pub mod row;
 pub mod schema;
@@ -33,3 +31,33 @@ pub use types::*;
 
 #[cfg(test)]
 pub(crate) static TEST_STORE_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The Postgres server with pgvector that the tests use.
+#[cfg(test)]
+pub(crate) fn test_postgres_url() -> String {
+    std::env::var("FINCH_MEMORY_TEST_POSTGRES_URL")
+        .expect("set FINCH_MEMORY_TEST_POSTGRES_URL to a Postgres server with pgvector")
+}
+
+/// A new, empty store named after `dir`; the directory exists so the test can delete it.
+#[cfg(test)]
+pub(crate) fn test_store(
+    dir: &std::path::Path,
+    embedding_dim: usize,
+) -> finch_types::ZResult<MemoryStore> {
+    std::fs::create_dir_all(dir).map_err(|e| finch_types::Status::io_error(e.to_string()))?;
+    let name = test_store_name(dir);
+    drop_store(&test_postgres_url(), &name)?;
+    MemoryStore::create(&test_postgres_url(), &name, embedding_dim, false)
+}
+
+/// The store `test_store` created for `dir`.
+#[cfg(test)]
+pub(crate) fn reopen_test_store(dir: &std::path::Path) -> finch_types::ZResult<MemoryStore> {
+    MemoryStore::open(&test_postgres_url(), &test_store_name(dir))
+}
+
+#[cfg(test)]
+fn test_store_name(dir: &std::path::Path) -> String {
+    format!("t_{}", ingest::stable_hash_hex(&[&dir.to_string_lossy()]))
+}

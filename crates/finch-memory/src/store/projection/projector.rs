@@ -1,7 +1,7 @@
 use super::*;
 
 impl MemoryStore {
-    /// Maintenance rebuild of a whole scope as one journaled state mutation.
+    /// Maintenance rebuild of a whole scope as one state mutation.
     pub fn refresh_state_projection(
         &self,
         scope: &MemoryScope,
@@ -123,11 +123,6 @@ impl MemoryStore {
                 state_record_doc(&record).map_err(json_error)
             })
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(
-            STATE_RECORDS_COLLECTION,
-            &self.state_records,
-            &retired_states,
-        )?;
         upsert_many(&self.state_records, retired_states)?;
         let retired_traces = active_traces
             .into_iter()
@@ -139,11 +134,6 @@ impl MemoryStore {
                 dependency_trace_doc(&record).map_err(json_error)
             })
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(
-            DEPENDENCY_TRACES_COLLECTION,
-            &self.dependency_traces,
-            &retired_traces,
-        )?;
         upsert_many(&self.dependency_traces, retired_traces)
     }
 
@@ -246,7 +236,6 @@ impl MemoryStore {
             .map(|record| slot_doc(record).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
         if !slot_docs.is_empty() {
-            self.capture_state_mutation_docs(SLOTS_COLLECTION, &self.slots, &slot_docs)?;
             upsert_many(&self.slots, slot_docs)?;
         }
         Ok(())
@@ -269,11 +258,6 @@ impl MemoryStore {
             .chain(superseded_records.iter())
             .map(|record| state_record_doc(record).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(
-            STATE_RECORDS_COLLECTION,
-            &self.state_records,
-            &state_docs,
-        )?;
         upsert_many(&self.state_records, state_docs)
     }
 
@@ -307,11 +291,6 @@ impl MemoryStore {
             .chain(superseded_traces.iter())
             .map(|record| dependency_trace_doc(record).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(
-            DEPENDENCY_TRACES_COLLECTION,
-            &self.dependency_traces,
-            &trace_docs,
-        )?;
         upsert_many(&self.dependency_traces, trace_docs)
     }
 }

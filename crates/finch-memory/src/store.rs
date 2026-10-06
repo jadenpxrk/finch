@@ -3,6 +3,7 @@ use crate::ingest::{
     stable_hash_hex, ChunkOptions, EdgeInput, EntityInput, EpisodeInput, IngestedArtifact,
     IngestedEpisode, ManualClaimInput, ProfileInput,
 };
+use crate::postgres::PgSession;
 use crate::retrieval::{
     apply_corrections_to_span_hits_at, hybrid_fuse_rrf, lexical_terms, span_active_at,
     SpanSearchHit,
@@ -15,17 +16,16 @@ use crate::row::{
     slot_from_doc, span_doc, span_from_doc, state_record_doc, state_record_from_doc,
 };
 use crate::schema::{
-    active_collection_schemas, span_schema, span_schema_with_hnsw, ARTIFACTS_COLLECTION,
-    CLAIMS_COLLECTION, CORRECTIONS_COLLECTION, DEPENDENCY_TRACES_COLLECTION, EDGES_COLLECTION,
-    ENTITIES_COLLECTION, ENTITY_ALIASES_COLLECTION, EPISODES_COLLECTION, PROFILES_COLLECTION,
-    RULES_COLLECTION, SLOTS_COLLECTION, SLOT_ALIASES_COLLECTION, SPANS_COLLECTION,
-    STATE_RECORDS_COLLECTION, TERMS_COLLECTION,
+    active_collection_schemas, ARTIFACTS_COLLECTION, CLAIMS_COLLECTION, CORRECTIONS_COLLECTION,
+    DEPENDENCY_TRACES_COLLECTION, EDGES_COLLECTION, ENTITIES_COLLECTION, ENTITY_ALIASES_COLLECTION,
+    EPISODES_COLLECTION, PROFILES_COLLECTION, RULES_COLLECTION, SLOTS_COLLECTION,
+    SLOT_ALIASES_COLLECTION, SPANS_COLLECTION, STATE_RECORDS_COLLECTION, TERMS_COLLECTION,
 };
 use crate::state::{
     aggregate_support_state, AnswerSlotSupport, AnswerSupportContract, AnswerSupportState,
     BiTemporalQuery,
 };
-use crate::table::{MemoryTable, MemoryTransactions, ReadCachedTable};
+use crate::table::{MemoryTable, ReadCachedTable};
 use crate::types::{
     canonical_slot_part, AnswerReadyStateRequest, ArtifactRecord, CanonicalSlot,
     CanonicalSlotBindingContext, CanonicalSlotRecord, ClaimKind, ClaimPolarity, ClaimRecord,
@@ -38,17 +38,12 @@ use crate::types::{
     StateReadRole, StateReadSelection, StateReadView, StateRecord, StateRecordKind,
     StateRecordScan, Visibility,
 };
-use finch_db::Collection;
-use finch_types::{
-    CollectionOptions, CollectionSchema, Doc, HnswIndexParams, Status, Value, VectorQuery, ZResult,
-};
-use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use finch_types::{CollectionSchema, Doc, HnswIndexParams, Status, Value, VectorQuery, ZResult};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub(crate) mod canonical;
@@ -56,7 +51,6 @@ mod corrections;
 mod graph;
 mod hybrid;
 mod lifecycle;
-mod mutation_journal;
 mod projection;
 mod records;
 mod rules;
@@ -100,7 +94,6 @@ use timeline::{reconcile_dependency_trace_intervals, reconcile_state_record_inte
 
 pub struct MemoryStore {
     id: u64,
-    path: PathBuf,
     pub(crate) episodes: Arc<dyn MemoryTable>,
     pub(crate) spans: Arc<dyn MemoryTable>,
     artifacts: Arc<dyn MemoryTable>,
@@ -116,12 +109,8 @@ pub struct MemoryStore {
     dependency_traces: Arc<dyn MemoryTable>,
     slots: Arc<dyn MemoryTable>,
     pub(crate) slot_aliases: Arc<dyn MemoryTable>,
-    // Set when the tables commit together; a state mutation is then one transaction, not a journal.
-    pub(crate) transactions: Option<Arc<dyn MemoryTransactions>>,
+    session: Arc<PgSession>,
     state_mutation_lock: RwLock<()>,
-    state_mutation_journal: Mutex<Option<mutation_journal::OpenStateMutationJournal>>,
-    // Set when a failed mutation could not be rolled back; only a reopen recovers the rows.
-    poisoned: AtomicBool,
 }
 
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(0);
@@ -184,49 +173,32 @@ impl MemoryStore {
         }
         // Recursive so a public read that calls another cannot deadlock behind a waiting writer.
         let guard = self.state_mutation_lock.read_recursive();
-        self.ensure_not_poisoned()?;
         Ok(StateReadGuard {
             _lock: Some(guard),
             ends_cache: crate::table::begin_read_cache(),
         })
     }
 
-    /// Fails once a failed state mutation could not be rolled back, since its rows may be visible.
-    fn ensure_not_poisoned(&self) -> ZResult<()> {
-        if self.poisoned.load(Ordering::Acquire) {
-            return Err(Status::internal(format!(
-                "memory store at {} could not roll back a failed state mutation; reopen it to recover",
-                self.path.display()
-            )));
-        }
-        Ok(())
-    }
-
-    /// The one entry point of a state mutation: holds the write lock and journals every write of
-    /// `mutate`, committing on success and restoring the prior rows on error.
+    /// The one entry point of a state mutation: holds the write lock and runs every write of
+    /// `mutate` in one transaction, committing on success and rolling back on error.
     pub(crate) fn with_state_mutation<T>(
         &self,
-        scope: &MemoryScope,
+        _scope: &MemoryScope,
         mutate: impl FnOnce() -> ZResult<T>,
     ) -> ZResult<T> {
         let _mutation_guard = self.lock_state_mutation();
-        self.ensure_not_poisoned()?;
-        self.begin_state_mutation_journal(scope)?;
+        self.session.begin()?;
         match mutate() {
             Ok(value) => {
-                self.commit_state_mutation_journal()?;
+                self.session.commit()?;
                 Ok(value)
             }
-            Err(error) => {
-                if let Err(rollback) = self.recover_pending_state_mutation() {
-                    self.poisoned.store(true, Ordering::Release);
-                    return Err(Status::internal(format!(
-                        "{error}; rolling it back failed: {rollback}; reopen the memory store at {} to recover",
-                        self.path.display()
-                    )));
-                }
-                Err(error)
-            }
+            Err(error) => match self.session.rollback() {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(Status::internal(format!(
+                    "{error}; rolling it back failed: {rollback}"
+                ))),
+            },
         }
     }
 }
@@ -747,82 +719,23 @@ const SLOT_OUTPUT_FIELDS: &[&str] = &[
 ];
 
 impl MemoryStore {
-    pub fn create(path: &Path, embedding_dim: usize, options: CollectionOptions) -> ZResult<Self> {
-        #[cfg(all(test, feature = "postgres"))]
-        if let Some(url) = crate::postgres::test_url() {
-            // Tests clean up their store directory, so it exists for Postgres stores too.
-            fs::create_dir_all(path).map_err(|e| Status::io_error(e.to_string()))?;
-            let name = crate::postgres::test_store_name(path);
-            crate::postgres::drop_postgres(&url, &name)?;
-            let mut store = Self::create_postgres(&url, &name, embedding_dim, false)?;
-            store.path = path.to_path_buf();
-            return Ok(store);
-        }
-        Self::create_with_span_schema(path, embedding_dim, options, span_schema(embedding_dim))
-    }
-
-    pub fn create_with_span_hnsw(
-        path: &Path,
-        embedding_dim: usize,
-        options: CollectionOptions,
-        hnsw_params: HnswIndexParams,
-    ) -> ZResult<Self> {
-        Self::create_with_span_schema(
-            path,
-            embedding_dim,
-            options,
-            span_schema_with_hnsw(embedding_dim, hnsw_params),
-        )
-    }
-
     pub fn ensure_span_hnsw_index(
         &self,
         hnsw_params: HnswIndexParams,
         concurrency: Option<usize>,
     ) -> ZResult<()> {
-        self.ensure_not_poisoned()?;
         self.spans
             .create_hnsw_index("embedding", hnsw_params, concurrency)
     }
 
-    fn create_with_span_schema(
-        path: &Path,
-        embedding_dim: usize,
-        options: CollectionOptions,
-        span_collection_schema: CollectionSchema,
-    ) -> ZResult<Self> {
-        fs::create_dir_all(path).map_err(|e| Status::io_error(e.to_string()))?;
-        let mut schemas = collection_schemas(embedding_dim, span_collection_schema);
-        Self::from_tables(path.to_path_buf(), None, |name| {
-            let schema = take_schema(&mut schemas, name)?;
-            Collection::create_and_open(&path.join(name), schema, options.clone())
-                .map(|collection| collection as Arc<dyn MemoryTable>)
-        })
-    }
-
-    pub fn open(path: &Path, options: CollectionOptions) -> ZResult<Self> {
-        #[cfg(all(test, feature = "postgres"))]
-        if let Some(url) = crate::postgres::test_url() {
-            let mut store = Self::open_postgres(&url, &crate::postgres::test_store_name(path))?;
-            store.path = path.to_path_buf();
-            return Ok(store);
-        }
-        Self::from_tables(path.to_path_buf(), None, |name| {
-            Collection::open(&path.join(name), options.clone())
-                .map(|collection| collection as Arc<dyn MemoryTable>)
-        })
-    }
-
-    /// Builds the store from one table per collection, then rolls back any unfinished mutation.
+    /// Builds the store from one table per collection of the session's schema.
     pub(crate) fn from_tables(
-        path: PathBuf,
-        transactions: Option<Arc<dyn MemoryTransactions>>,
+        session: Arc<PgSession>,
         mut table: impl FnMut(&'static str) -> ZResult<Arc<dyn MemoryTable>>,
     ) -> ZResult<Self> {
         let id = NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed);
-        let store = Self {
+        Ok(Self {
             id,
-            path,
             episodes: table(EPISODES_COLLECTION)?,
             spans: table(SPANS_COLLECTION)?,
             artifacts: table(ARTIFACTS_COLLECTION)?,
@@ -850,13 +763,9 @@ impl MemoryStore {
             ),
             slots: read_cached(id, SLOTS_COLLECTION, table(SLOTS_COLLECTION)?),
             slot_aliases: read_cached(id, SLOT_ALIASES_COLLECTION, table(SLOT_ALIASES_COLLECTION)?),
-            transactions,
+            session,
             state_mutation_lock: RwLock::new(()),
-            state_mutation_journal: Mutex::new(None),
-            poisoned: AtomicBool::new(false),
-        };
-        store.recover_pending_state_mutation()?;
-        Ok(store)
+        })
     }
 
     pub(crate) fn append_episode(&self, record: &EpisodeRecord) -> ZResult<()> {
@@ -879,7 +788,6 @@ impl MemoryStore {
         &self,
         records: &[(IngestedEpisode, Vec<Vec<f32>>)],
     ) -> ZResult<()> {
-        self.ensure_not_poisoned()?;
         let mut episode_docs = Vec::new();
         let mut span_docs = Vec::new();
         let mut term_docs = Vec::new();
@@ -903,7 +811,6 @@ impl MemoryStore {
     }
 
     pub fn append_vector_spans(&self, records: &[(SpanRecord, Vec<f32>)]) -> ZResult<()> {
-        self.ensure_not_poisoned()?;
         let docs = records
             .iter()
             .map(|(span, embedding)| span_doc(span, Some(embedding)).map_err(json_error))
@@ -921,7 +828,6 @@ impl MemoryStore {
         text: &str,
         chunk_options: &ChunkOptions,
     ) -> ZResult<IngestedArtifact> {
-        self.ensure_not_poisoned()?;
         let spans = chunk_artifact_text(&record, text, chunk_options);
         self.append_artifact(&record)?;
         for span in &spans {
@@ -950,11 +856,6 @@ impl MemoryStore {
             record.source_sequence_no =
                 self.source_sequence_no_for_episode_ids(&record.scope, &record.source_episode_ids)?;
             let correction_docs = vec![correction_doc(&record).map_err(json_error)?];
-            self.capture_state_mutation_docs(
-                CORRECTIONS_COLLECTION,
-                &self.corrections,
-                &correction_docs,
-            )?;
             insert_many(&self.corrections, correction_docs)?;
             if record.target_type != "claim" {
                 return Ok(());
@@ -1020,7 +921,6 @@ impl MemoryStore {
             .iter()
             .map(|application| claim_doc(&application.claim, None).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(CLAIMS_COLLECTION, &self.claims, &derived_docs)?;
         // Surviving triggers re-derive claims already stored under the same deterministic ids.
         upsert_many(&self.claims, derived_docs)?;
         affected_slot_ids.extend(

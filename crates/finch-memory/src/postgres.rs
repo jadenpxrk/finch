@@ -1,9 +1,9 @@
-//! A memory store in Postgres with pgvector: one schema per store, one table per collection, and
+//! Memory stores in Postgres with pgvector: one schema per store, one table per collection, and
 //! each state mutation in one transaction.
 
 use crate::schema::span_schema;
 use crate::store::{collection_schemas, take_schema, MemoryStore};
-use crate::table::{MemoryTable, MemoryTransactions};
+use crate::table::MemoryTable;
 use finch_db::sqlengine::{parse_filter, FilterExpr};
 use finch_types::{
     CollectionSchema, CompareOp, DataType, Doc, HnswIndexParams, Status, Value, VectorQuery,
@@ -14,7 +14,6 @@ use pgvector::Vector;
 use postgres::types::ToSql;
 use postgres::{Client, NoTls, Row};
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
 
@@ -24,7 +23,7 @@ impl MemoryStore {
     /// Creates a store in the new Postgres schema `name`; fails if that schema exists.
     /// `vector_index` builds an HNSW index on each embedding column; without it searches are
     /// exact.
-    pub fn create_postgres(
+    pub fn create(
         url: &str,
         name: &str,
         embedding_dim: usize,
@@ -46,7 +45,7 @@ impl MemoryStore {
             return Err(error);
         }
         let mut schemas = collection_schemas(embedding_dim, span_schema(embedding_dim));
-        Self::from_tables(postgres_path(name), Some(session.clone()), |table| {
+        Self::from_tables(session.clone(), |table| {
             let table = PgTable::new(session.clone(), take_schema(&mut schemas, table)?)?;
             table.create(vector_index)?;
             Ok(Arc::new(table))
@@ -54,7 +53,7 @@ impl MemoryStore {
     }
 
     /// Opens the store in the Postgres schema `name`.
-    pub fn open_postgres(url: &str, name: &str) -> ZResult<Self> {
+    pub fn open(url: &str, name: &str) -> ZResult<Self> {
         let session = Arc::new(PgSession::connect(url, name)?);
         if !session.schema_exists()? {
             return Err(Status::not_found(format!(
@@ -63,7 +62,7 @@ impl MemoryStore {
         }
         let embedding_dim = session.embedding_dim()?;
         let mut schemas = collection_schemas(embedding_dim, span_schema(embedding_dim));
-        Self::from_tables(postgres_path(name), Some(session.clone()), |table| {
+        Self::from_tables(session.clone(), |table| {
             let table = PgTable::new(session.clone(), take_schema(&mut schemas, table)?)?;
             table.load_hnsw_fields()?;
             Ok(Arc::new(table))
@@ -72,20 +71,16 @@ impl MemoryStore {
 }
 
 /// Deletes the store in the Postgres schema `name` and every row it holds.
-pub fn drop_postgres(url: &str, name: &str) -> ZResult<()> {
+pub fn drop_store(url: &str, name: &str) -> ZResult<()> {
     PgSession::connect(url, name)?.with_client(|client| {
         client.batch_execute(&format!("DROP SCHEMA IF EXISTS {} CASCADE", quote(name)))
     })
 }
 
-fn postgres_path(name: &str) -> PathBuf {
-    PathBuf::from(format!("postgres:{name}"))
-}
-
 /// The thread running a state mutation uses the connection that holds its transaction; every
 /// other operation autocommits on a free connection of the pool. A closed connection reconnects
 /// before its next use.
-struct PgSession {
+pub(crate) struct PgSession {
     url: String,
     schema: String,
     pool: Vec<Mutex<Client>>,
@@ -197,8 +192,9 @@ fn pool_slot(len: usize) -> usize {
     (hasher.finish() % len as u64) as usize
 }
 
-impl MemoryTransactions for PgSession {
-    fn begin(&self) -> ZResult<()> {
+impl PgSession {
+    /// Starts a transaction that the calling thread's table operations join.
+    pub(crate) fn begin(&self) -> ZResult<()> {
         let mut owner = self.transaction_owner.lock();
         if owner.is_some() {
             return Err(Status::internal("a postgres transaction is already open"));
@@ -212,7 +208,7 @@ impl MemoryTransactions for PgSession {
         Ok(())
     }
 
-    fn commit(&self) -> ZResult<()> {
+    pub(crate) fn commit(&self) -> ZResult<()> {
         if self.transaction_owner.lock().take().is_none() {
             return Err(Status::internal("no postgres transaction to commit"));
         }
@@ -222,7 +218,8 @@ impl MemoryTransactions for PgSession {
             .map_err(pg_error)
     }
 
-    fn rollback(&self) -> ZResult<()> {
+    /// Discards the open transaction, if there is one.
+    pub(crate) fn rollback(&self) -> ZResult<()> {
         if self.transaction_owner.lock().take().is_none() {
             return Ok(());
         }
@@ -629,26 +626,6 @@ impl MemoryTable for PgTable {
         self.write(docs, true)
     }
 
-    fn delete(&self, pks: Vec<String>) -> ZResult<Vec<Status>> {
-        let sql = format!(
-            "DELETE FROM {} WHERE pk = ANY($1) RETURNING pk",
-            quote(&self.name)
-        );
-        let deleted = self
-            .session
-            .with_client(|client| client.query(&sql, &[&pks]))?
-            .iter()
-            .map(|row| row.get::<_, String>(0))
-            .collect::<std::collections::HashSet<_>>();
-        Ok(pks
-            .iter()
-            .map(|pk| match deleted.contains(pk) {
-                true => Status::default(),
-                false => Status::not_found(format!("pk {pk} not found")),
-            })
-            .collect())
-    }
-
     fn fetch(&self, pks: Vec<String>) -> ZResult<HashMap<String, Arc<Doc>>> {
         let columns = self.columns.iter().collect::<Vec<_>>();
         let docs = self.select(&columns, None, "WHERE pk = ANY($1)", vec![Box::new(pks)])?;
@@ -718,10 +695,6 @@ impl MemoryTable for PgTable {
             .with_client(|client| client.batch_execute(&ddl))?;
         self.hnsw_fields.lock().insert(column.name.clone());
         Ok(())
-    }
-
-    fn read_only(&self) -> bool {
-        false
     }
 }
 
@@ -1055,35 +1028,21 @@ fn connection_lost(error: &postgres::Error) -> bool {
 }
 
 #[cfg(test)]
-pub(crate) fn test_url() -> Option<String> {
-    std::env::var("FINCH_MEMORY_TEST_POSTGRES_URL").ok()
-}
-
-/// Each test store path maps to its own schema, so a reopen by path finds the same tables.
-#[cfg(test)]
-pub(crate) fn test_store_name(path: &std::path::Path) -> String {
-    let hash = crate::ingest::stable_hash_hex(&[&path.to_string_lossy()]);
-    format!("t_{}", &hash[..hash.len().min(32)])
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::MemoryScope;
 
     #[test]
     fn create_refuses_an_existing_store_and_keeps_its_rows() {
-        let Some(url) = test_url() else {
-            return;
-        };
+        let url = crate::test_postgres_url();
         let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
-        drop_postgres(&url, "t_existing").unwrap();
-        let store = MemoryStore::create_postgres(&url, "t_existing", 3, false).unwrap();
+        drop_store(&url, "t_existing").unwrap();
+        let store = MemoryStore::create(&url, "t_existing", 3, false).unwrap();
         store.claims.insert(vec![Doc::new("kept")]).unwrap();
         drop(store);
-        let again = MemoryStore::create_postgres(&url, "t_existing", 3, false);
+        let again = MemoryStore::create(&url, "t_existing", 3, false);
         assert!(again.is_err_and(|status| status.is_already_exists()));
-        let reopened = MemoryStore::open_postgres(&url, "t_existing").unwrap();
+        let reopened = MemoryStore::open(&url, "t_existing").unwrap();
         assert!(reopened
             .claims
             .fetch(vec!["kept".to_string()])
@@ -1093,12 +1052,10 @@ mod tests {
 
     #[test]
     fn reads_reconnect_after_the_server_drops_every_pooled_connection() {
-        let Some(url) = test_url() else {
-            return;
-        };
+        let url = crate::test_postgres_url();
         let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
-        drop_postgres(&url, "t_reconnect").unwrap();
-        let store = MemoryStore::create_postgres(&url, "t_reconnect", 3, false).unwrap();
+        drop_store(&url, "t_reconnect").unwrap();
+        let store = MemoryStore::create(&url, "t_reconnect", 3, false).unwrap();
         let mut admin = Client::connect(&url, NoTls).unwrap();
         admin
             .execute(

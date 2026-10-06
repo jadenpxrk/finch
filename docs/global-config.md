@@ -75,8 +75,6 @@ fields of `QueryParams`.
   records can still be lost. `0`, the default, turns this off, and then a power loss or an
   operating system crash can lose any write since the collection's last flush. Lower values
   make writes slower.
-- The memory layer's mutation journal keeps a write whole or absent across a process crash.
-  Across a power loss it holds only as far as this setting makes the WAL reach the disk.
 
 Each insert, upsert, update, or delete of one document writes one WAL record.
 

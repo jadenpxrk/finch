@@ -7,6 +7,23 @@ on:
 jobs:
   rust-test:
     runs-on: ubuntu-latest
+    # The memory tests keep their stores in Postgres with pgvector.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: finch
+          POSTGRES_PASSWORD: finch
+          POSTGRES_DB: finch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U finch"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FINCH_MEMORY_TEST_POSTGRES_URL: postgres://finch:finch@localhost:5432/finch
     steps:
       - uses: actions/checkout@v4
 

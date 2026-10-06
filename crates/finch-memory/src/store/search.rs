@@ -299,7 +299,6 @@ impl MemoryStore {
         ingested_at_ms: i64,
         chunk_options: &ChunkOptions,
     ) -> ZResult<IngestedEpisode> {
-        self.ensure_not_poisoned()?;
         let ingested = ingest_episode(input, ingested_at_ms, chunk_options);
         self.append_episode(&ingested.episode)?;
         for span in &ingested.spans {
@@ -403,7 +402,6 @@ impl MemoryStore {
         index: &SourceLexicalIndex,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanSearchHit>> {
-        self.ensure_not_poisoned()?;
         let plans = selections
             .iter()
             .map(|selection| selected_source_plan(selection, prior_hits, index))
@@ -777,7 +775,6 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanRecord>> {
-        self.ensure_not_poisoned()?;
         self.scan_spans_with_filter(scope, limit, at_ms, None)
     }
 
@@ -992,7 +989,6 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<ArtifactRecord>> {
-        self.ensure_not_poisoned()?;
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -1279,7 +1275,6 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<ProfileRecord>> {
-        self.ensure_not_poisoned()?;
         if limit == 0 {
             return Ok(Vec::new());
         }

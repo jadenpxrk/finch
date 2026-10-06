@@ -7,7 +7,6 @@ import json
 import time
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
-from .model.param import CollectionOption
 
 Json = Union[None, bool, int, float, str, List["Json"], Dict[str, "Json"]]
 
@@ -250,14 +249,16 @@ class FinchMemory:
         self.evals = _EvalApi(self)
 
     @classmethod
-    def create(cls, path: str, embedding_dim: int, options: Optional[CollectionOption] = None) -> "FinchMemory":
+    def create(cls, url: str, name: str, embedding_dim: int, vector_index: bool = False) -> "FinchMemory":
+        """Create a store in the new Postgres schema `name` at `url`."""
         store_type = _native_memory_store()
-        return cls(store_type.create(path, embedding_dim, options))
+        return cls(store_type.create(url, name, embedding_dim, vector_index))
 
     @classmethod
-    def open(cls, path: str, options: Optional[CollectionOption] = None) -> "FinchMemory":
+    def open(cls, url: str, name: str) -> "FinchMemory":
+        """Open the store in the Postgres schema `name` at `url`."""
         store_type = _native_memory_store()
-        return cls(store_type.open(path, options))
+        return cls(store_type.open(url, name))
 
     def apply_state_mutation_batch(self, batch: Mapping[str, Any]) -> Dict[str, Any]:
         return _parse(self._store.apply_state_mutation_batch_json(_json(dict(batch))))

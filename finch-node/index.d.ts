@@ -95,12 +95,6 @@ export interface FinchError extends Error {
   code: number
 }
 
-export interface MemoryStoreOptions {
-  readOnly?: boolean
-  enableMmap?: boolean
-  maxBufferSize?: number
-}
-
 export type Json =
   | null
   | boolean
@@ -328,8 +322,8 @@ export declare class FinchMemory {
   readonly raw: MemoryRawApi
   readonly experimental: MemoryRawApi
   readonly evals: MemoryEvalApi
-  static create(input: { path: string; embeddingDim: number; options?: MemoryStoreOptions }): Promise<FinchMemory>
-  static open(input: { path: string; options?: MemoryStoreOptions }): Promise<FinchMemory>
+  static create(input: { url: string; name: string; embeddingDim: number; vectorIndex?: boolean }): Promise<FinchMemory>
+  static open(input: { url: string; name: string }): Promise<FinchMemory>
   ingestEpisode(input: EpisodeInput): Promise<Record<string, unknown>>
   ingestArtifact(input: ArtifactInput): Promise<Record<string, unknown>>
   addClaim(input: ClaimInput): Promise<Record<string, unknown>>
@@ -348,8 +342,10 @@ export declare class FinchMemory {
 }
 
 export declare class MemoryStore {
-  static create(path: string, embeddingDim: number, options?: MemoryStoreOptions): Promise<MemoryStore>
-  static open(path: string, options?: MemoryStoreOptions): Promise<MemoryStore>
+  /** Creates a store in the new Postgres schema `name` at `url`. */
+  static create(url: string, name: string, embeddingDim: number, vectorIndex?: boolean): Promise<MemoryStore>
+  /** Opens the store in the Postgres schema `name` at `url`. */
+  static open(url: string, name: string): Promise<MemoryStore>
   applyStateMutationBatchJson(batchJson: string): Promise<string>
   /** JSON of `AnswerReadyStateJsonRequest`. */
   projectAnswerReadyStateJson(requestJson: string): string

@@ -67,7 +67,7 @@ fn expired_spans_consume_vector_fetch_and_hide_active_span() {
     // Expired spans nearer the query must not fill the vector fetch ahead of a live span.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_span_vector");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let mut records = (0..VECTOR_FETCH_K)
         .map(|i| (expired_span(&format!("expired_{i}")), vec![1.0, 0.0, 0.0]))
         .collect::<Vec<_>>();
@@ -95,7 +95,7 @@ fn future_claims_consume_vector_fetch_and_hide_valid_slot() {
     // Claims not yet valid must not fill the claim vector fetch ahead of a valid claim.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_claim_vector");
-    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3).unwrap();
     for i in 0..VECTOR_FETCH_K {
         let future = owner_claim(&format!("future_{i}"), &format!("future_{i}"), 100);
         store.append_claim(&future, Some(&[1.0, 0.0, 0.0])).unwrap();
@@ -117,7 +117,7 @@ fn expired_span_postings_consume_scan_limit_and_hide_active_span() {
     // Postings of expired spans must not fill the keyword scan limit ahead of a live span.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_keyword");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     // A keyword search for one hit scans at least eight postings.
     let expired = (0..8).map(|i| expired_span(&format!("expired_{i}")));
     let active = span_record("active", MemoryStatus::Active, Some(10));
@@ -145,7 +145,7 @@ fn keyword_search_reads_postings_past_a_page_of_expired_spans() {
     // Postings are read in doubling pages; 200 expired spans fill the first pages.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_keyword_pages");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let expired = (0..200).map(|i| expired_span(&format!("expired_{i}")));
     let active = span_record("active", MemoryStatus::Active, Some(10));
     for mut span in expired.chain(std::iter::once(active)) {
@@ -172,7 +172,7 @@ fn context_corrections_keep_more_than_1024_claim_corrections() {
     // Context corrections must not drop the latest correction once a claim has more than 1024.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_context_corrections");
-    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3).unwrap();
     let claim = owner_claim("claim", "project", 10);
     store.append_claim(&claim, None).unwrap();
     for i in 0..SATURATING_CORRECTION_COUNT {
@@ -210,7 +210,7 @@ fn claim_selector_correction_after_1024_selector_corrections_is_scanned() {
     // A claim selector correction must be found however many selector corrections precede it.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_claim_selector");
-    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3).unwrap();
     let claim = owner_claim("claim", "project", 10);
     store.append_claim(&claim, None).unwrap();
     for i in 0..SATURATING_CORRECTION_COUNT {
@@ -247,7 +247,7 @@ fn claim_slot_tombstone_after_1024_slot_corrections_applies() {
     // A slot tombstone must retract the claim however many slot corrections precede it.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_claim_slot");
-    let store = EvidencedStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = EvidencedStore::create(&path, 3).unwrap();
     let claim = owner_claim("claim", "project", 10);
     store.append_claim(&claim, None).unwrap();
     let slot_id = stored_slot_id(&store, &claim.id);
@@ -287,7 +287,7 @@ fn span_tombstone_after_1024_span_corrections_hides_span() {
     // A span tombstone must hide the span however many corrections name it first.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_span_ids");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let span = span_record("span", MemoryStatus::Active, Some(10));
     store.append_span(&span, Some(&[1.0, 0.0, 0.0])).unwrap();
     for i in 0..SATURATING_CORRECTION_COUNT {
@@ -324,7 +324,7 @@ fn span_selector_tombstone_after_1024_selector_corrections_hides_span() {
     // A span selector tombstone must hide the span however many selector corrections precede it.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("limit_after_filter_span_selector");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let mut span = span_record("span", MemoryStatus::Active, Some(10));
     span.text = "Runbook token SELECTOR-TOMBSTONE.".to_string();
     span.lexical_text = span.text.clone();
@@ -363,7 +363,7 @@ fn expired_edge_does_not_use_up_the_limit_of_live_graph_neighbors() {
     // Expired edges must not consume the requested count of currently valid neighbors.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("expired_edge_limit");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     for (id, valid_to_ms) in [("expired", Some(20)), ("live", None)] {
         store
             .add_edge(EdgeInput {
@@ -383,7 +383,7 @@ fn expired_edge_does_not_use_up_the_limit_of_live_graph_neighbors() {
             .unwrap();
     }
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let all = reopened
         .expand_edges_ranked(&scope(), &["seed".to_string()], 1, 2, Some(30))
         .unwrap();
@@ -408,7 +408,7 @@ fn expired_artifact_does_not_use_up_the_limit_of_active_artifacts() {
     // Expired artifacts must not consume the caller's limit on active artifacts.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("artifact_limit");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     for (id, valid_to_ms) in [("expired", Some(20)), ("active", None)] {
         store
             .ingest_artifact_text(
@@ -439,7 +439,7 @@ fn expired_artifact_does_not_use_up_the_limit_of_active_artifacts() {
             .unwrap();
     }
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let all = reopened.scan_artifacts(&scope(), 10, Some(30)).unwrap();
     let limited = reopened.scan_artifacts(&scope(), 1, Some(30)).unwrap();
     drop(reopened);
@@ -465,7 +465,7 @@ fn expired_profile_does_not_use_up_the_limit_of_active_profiles() {
     // Expired profiles must not consume the caller's limit on active profiles.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("profile_limit");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     for (id, valid_to_ms) in [("expired", Some(20)), ("active", None)] {
         store
             .add_profile(ProfileInput {
@@ -488,7 +488,7 @@ fn expired_profile_does_not_use_up_the_limit_of_active_profiles() {
             .unwrap();
     }
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let all = reopened.scan_profiles(&scope(), 10, Some(30)).unwrap();
     let limited = reopened.scan_profiles(&scope(), 1, Some(30)).unwrap();
     drop(reopened);
@@ -510,7 +510,7 @@ fn entity_scan_returns_at_most_its_limit() {
     // Entity scans must enforce their public result limit after scope and status filtering.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("entity_limit");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     for id in ["first", "second"] {
         store
             .add_entity(
@@ -532,7 +532,7 @@ fn entity_scan_returns_at_most_its_limit() {
             .unwrap();
     }
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let all = reopened.scan_entities(&scope(), 10).unwrap();
     let limited = reopened.scan_entities(&scope(), 1).unwrap();
     drop(reopened);
@@ -547,7 +547,7 @@ fn span_scan_returns_at_most_its_limit() {
     // A scan must enforce its public result limit after scope and validity filtering.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("span_scan_limit");
-    let store = MemoryStore::create(&path, 3, CollectionOptions::default()).unwrap();
+    let store = crate::test_store(&path, 3).unwrap();
     let records = ["first", "second"]
         .into_iter()
         .map(|id| {
@@ -559,7 +559,7 @@ fn span_scan_returns_at_most_its_limit() {
         .collect::<Vec<_>>();
     store.append_vector_spans(&records).unwrap();
     drop(store);
-    let reopened = MemoryStore::open(&path, CollectionOptions::default()).unwrap();
+    let reopened = crate::reopen_test_store(&path).unwrap();
     let all = reopened.scan_spans(&scope(), 10, Some(20)).unwrap();
     let limited = reopened.scan_spans(&scope(), 1, Some(20)).unwrap();
     drop(reopened);

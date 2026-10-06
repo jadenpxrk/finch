@@ -18,7 +18,6 @@ impl MemoryStore {
                 self.admit_bound_claim_slots(scope, std::slice::from_mut(&mut record))?;
             let mut record = self.canonicalize_claim_at_valid_time(scope, record)?;
             let claim_docs = vec![claim_doc(&record, embedding).map_err(json_error)?];
-            self.capture_state_mutation_docs(CLAIMS_COLLECTION, &self.claims, &claim_docs)?;
             insert_many(&self.claims, claim_docs)?;
             if !alias_inputs.is_empty() {
                 self.write_claim_slot_aliases(alias_inputs, &record)?;
@@ -61,7 +60,6 @@ impl MemoryStore {
                 slot_alias_doc(&alias).map_err(json_error)
             })
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(SLOT_ALIASES_COLLECTION, &self.slot_aliases, &alias_docs)?;
         upsert_many(&self.slot_aliases, alias_docs)
     }
 
@@ -79,7 +77,6 @@ impl MemoryStore {
             .iter()
             .map(|application| claim_doc(&application.claim, None).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        self.capture_state_mutation_docs(CLAIMS_COLLECTION, &self.claims, &derived_docs)?;
         insert_many(&self.claims, derived_docs)?;
         let affected_slot_ids = anchor_slot_id
             .into_iter()
@@ -111,7 +108,6 @@ impl MemoryStore {
         input: ManualClaimInput,
         embedding: Option<&[f32]>,
     ) -> ZResult<ClaimRecord> {
-        self.ensure_not_poisoned()?;
         let mut claim = create_manual_claim(input);
         claim.source_sequence_no =
             self.source_sequence_no_for_episode_ids(&claim.scope, &claim.source_episode_ids)?;
@@ -130,7 +126,6 @@ impl MemoryStore {
     }
 
     pub fn add_profile(&self, input: ProfileInput) -> ZResult<ProfileRecord> {
-        self.ensure_not_poisoned()?;
         let profile = crate::ingest::create_profile(input);
         self.append_profile(&profile)?;
         Ok(profile)
@@ -171,7 +166,6 @@ impl MemoryStore {
             }
             self.ensure_entity_ids_owned_by_scope(std::slice::from_ref(&record))?;
             let entity_docs = vec![entity_doc(&record, embedding).map_err(json_error)?];
-            self.capture_state_mutation_docs(ENTITIES_COLLECTION, &self.entities, &entity_docs)?;
             upsert_many(&self.entities, entity_docs)?;
             self.upsert_entity_aliases(std::slice::from_ref(&record), system_time_ms())?;
             self.rebind_rules_for_scope(&record.scope, None)?;
@@ -193,7 +187,6 @@ impl MemoryStore {
     }
 
     pub fn add_edge(&self, input: EdgeInput) -> ZResult<EdgeRecord> {
-        self.ensure_not_poisoned()?;
         let edge = create_edge(input);
         self.append_edge(&edge)?;
         Ok(edge)

@@ -1,8 +1,6 @@
-use crate::schema::PyCollectionOption;
 use crate::{to_py_err, PyResult};
 use finch_memory::MemoryStore;
 use pyo3::prelude::*;
-use std::path::Path;
 
 #[pyclass(module = "finch._finch")]
 pub struct PyMemoryStore {
@@ -24,30 +22,24 @@ impl PyMemoryStore {
 #[pymethods]
 impl PyMemoryStore {
     #[staticmethod]
-    #[pyo3(signature = (path, embedding_dim, options=None))]
+    #[pyo3(signature = (url, name, embedding_dim, vector_index=false))]
     fn create(
         py: Python<'_>,
-        path: &str,
+        url: &str,
+        name: &str,
         embedding_dim: usize,
-        options: Option<&PyCollectionOption>,
+        vector_index: bool,
     ) -> PyResult<Self> {
-        let options = options
-            .map(|option| option.inner.clone())
-            .unwrap_or_default();
         let inner = py
-            .allow_threads(|| MemoryStore::create(Path::new(path), embedding_dim, options))
+            .allow_threads(|| MemoryStore::create(url, name, embedding_dim, vector_index))
             .map_err(to_py_err)?;
         Ok(Self { inner })
     }
 
     #[staticmethod]
-    #[pyo3(signature = (path, options=None))]
-    fn open(py: Python<'_>, path: &str, options: Option<&PyCollectionOption>) -> PyResult<Self> {
-        let options = options
-            .map(|option| option.inner.clone())
-            .unwrap_or_default();
+    fn open(py: Python<'_>, url: &str, name: &str) -> PyResult<Self> {
         let inner = py
-            .allow_threads(|| MemoryStore::open(Path::new(path), options))
+            .allow_threads(|| MemoryStore::open(url, name))
             .map_err(to_py_err)?;
         Ok(Self { inner })
     }
