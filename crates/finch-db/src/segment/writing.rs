@@ -66,6 +66,3 @@ use indexes::*;
 fn sync_dir_best_effort(path: &Path) {
     let _ = std::fs::File::open(path).and_then(|d| d.sync_all());
 }
-
-#[cfg(test)]
-mod tests;

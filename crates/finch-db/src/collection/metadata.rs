@@ -81,6 +81,7 @@ impl Collection {
         writing_doc_count.saturating_sub(writing_del)
     }
 
+    /// Returns the live document count, the segment count, and the index coverage of each vector field.
     pub fn stats(&self) -> ZResult<CollectionStats> {
         let version = self.cur_version();
         let delete_bitmap = self.delete_store.read().bitmap();
@@ -125,18 +126,22 @@ impl Collection {
         })
     }
 
+    /// Returns the current schema.
     pub fn schema_info(&self) -> CollectionSchema {
         self.version_manager.current().schema.clone()
     }
 
+    /// Returns the options the collection is open with.
     pub fn options(&self) -> CollectionOptions {
         self.options.clone()
     }
 
+    /// Returns the collection directory as text.
     pub fn path_string(&self) -> String {
         self.path.display().to_string()
     }
 
+    /// Closes the collection and deletes its directory with all its data.
     pub fn destroy(self) -> ZResult<()> {
         let path = self.path.clone();
         // Drop self first to release all file handles (fjall, lock file, etc.)

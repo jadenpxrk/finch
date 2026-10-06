@@ -133,19 +133,6 @@ impl WritingSegment {
         }
     }
 
-    pub fn upsert(&mut self, doc_id: u64, doc: Doc, old_doc: Option<Doc>) -> ZResult<()> {
-        // Remove old invert index entries
-        if let Some(old) = old_doc {
-            self.remove_invert_entries(&old)?;
-            self.remove_vectors(doc_id);
-        }
-        self.insert(doc_id, doc)
-    }
-
-    pub fn update(&mut self, doc_id: u64, old_doc: Doc, new_doc: Doc) -> ZResult<()> {
-        self.upsert(doc_id, new_doc, Some(old_doc))
-    }
-
     pub fn doc_count(&self) -> u64 {
         self.doc_count.load(Ordering::Relaxed)
     }

@@ -2,18 +2,9 @@ use super::*;
 use crate::invert::persisted_index_exists;
 
 impl PersistedSegment {
-    pub fn open(meta: &WrittenSegmentMeta) -> ZResult<Self> {
-        Self::open_with_mmap(meta, true)
-    }
-
-    pub fn open_with_mmap(meta: &WrittenSegmentMeta, enable_mmap: bool) -> ZResult<Self> {
-        Self::open_with_forward_store_options(
-            meta,
-            ForwardStoreOpenOptions {
-                enable_mmap,
-                ..ForwardStoreOpenOptions::default()
-            },
-        )
+    #[cfg(test)]
+    pub(crate) fn open(meta: &WrittenSegmentMeta) -> ZResult<Self> {
+        Self::open_with_forward_store_options(meta, ForwardStoreOpenOptions::default())
     }
 
     pub fn open_with_forward_store_options(
@@ -49,11 +40,6 @@ impl PersistedSegment {
             invert_indexes: parking_lot::RwLock::new(invert_indexes),
             vector_indexes: parking_lot::RwLock::new(HashMap::new()),
         })
-    }
-
-    /// Open a persisted segment without opening any invert indexes.
-    pub fn open_forward_only(meta: &WrittenSegmentMeta) -> ZResult<Self> {
-        Self::open_forward_only_with_mmap(meta, true)
     }
 
     pub fn open_forward_only_with_mmap(

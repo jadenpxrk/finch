@@ -8,6 +8,8 @@ use crate::segment::persisted::{AnnSearch, IndexQueryParams, PersistedSegment};
 use super::Collection;
 
 impl Collection {
+    /// Runs the query and returns the primary key of each result as an integer, in result order.
+    /// Fails when a result key is not an integer.
     pub fn query_int_ids(&self, query: VectorQuery) -> ZResult<Vec<i64>> {
         if let Some(ids) = self.try_query_int_ids_fast(&query)? {
             return Ok(ids);

@@ -14,15 +14,18 @@ mod validate;
 use convert::*;
 use normalize::*;
 pub use rewrite::rewrite_expressions;
-pub use validate::{count_filter_terms, enforce_max_filter_terms, validate_filter_expr};
+pub use validate::{enforce_max_filter_terms, validate_filter_expr};
 
 /// A filter expression tree
 #[derive(Debug, Clone)]
 pub enum FilterExpr {
     /// field op literal
     Compare {
+        /// The field to compare.
         field: String,
+        /// The comparison.
         op: CompareOp,
+        /// The literal to compare with.
         value: Value,
     },
     /// expr AND expr
@@ -37,24 +40,55 @@ pub enum FilterExpr {
     IsNotNull(String),
     /// field IN (v1, v2, ...)
     InList {
+        /// The field to test.
         field: String,
+        /// The literals of the list.
         values: Vec<Value>,
+        /// True for `NOT IN`.
         negated: bool,
     },
     /// field contains all values in list
-    ContainAll { field: String, values: Vec<Value> },
+    ContainAll {
+        /// The array field to test.
+        field: String,
+        /// The values the array must all contain.
+        values: Vec<Value>,
+    },
     /// field contains any value in list
-    ContainAny { field: String, values: Vec<Value> },
+    ContainAny {
+        /// The array field to test.
+        field: String,
+        /// The values the array must contain at least one of.
+        values: Vec<Value>,
+    },
     /// string field matched by SQL LIKE pattern (`%` and `_`)
-    LikePattern { field: String, pattern: String },
+    LikePattern {
+        /// The string field to match.
+        field: String,
+        /// The pattern, where `%` matches any text and `_` matches one character.
+        pattern: String,
+    },
     /// string field starts with prefix
-    HasPrefix { field: String, prefix: String },
+    HasPrefix {
+        /// The string field to test.
+        field: String,
+        /// The text the value must start with.
+        prefix: String,
+    },
     /// string field ends with suffix
-    HasSuffix { field: String, suffix: String },
+    HasSuffix {
+        /// The string field to test.
+        field: String,
+        /// The text the value must end with.
+        suffix: String,
+    },
     /// Compare array_length(field) against an integer
     ArrayLengthCompare {
+        /// The array field whose length is compared.
         field: String,
+        /// The comparison.
         op: CompareOp,
+        /// The length to compare with.
         len: u32,
     },
     /// always true

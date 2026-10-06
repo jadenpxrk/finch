@@ -2,7 +2,7 @@
 
 use super::parser::FilterExpr;
 use finch_types::{CompareOp, Doc, Value, SYS_GLOBAL_DOC_ID, SYS_LOCAL_ROW_ID, SYS_USER_ID};
-use roaring::{RoaringBitmap, RoaringTreemap};
+use roaring::RoaringTreemap;
 
 /// Evaluates filter expressions against documents or bitmaps
 pub struct DocFilterEvaluator;
@@ -21,34 +21,6 @@ impl DocFilterEvaluator {
             }
         }
         eval_expr(filter, doc, row_id).is_true()
-    }
-
-    /// Evaluate a filter against a bitmap of candidates (within-segment u32 doc_ids)
-    pub fn filter_bitmap(
-        filter: &FilterExpr,
-        candidates: &RoaringBitmap,
-        doc_fetch: &impl Fn(u64) -> Option<Doc>,
-        delete_bitmap: Option<&RoaringTreemap>,
-        row_id_for_doc_id: Option<&dyn Fn(u64) -> Option<u64>>,
-    ) -> RoaringBitmap {
-        let mut result = RoaringBitmap::new();
-        for doc_id in candidates.iter() {
-            let doc_id_u64 = doc_id as u64;
-
-            if let Some(bitmap) = delete_bitmap {
-                if bitmap.contains(doc_id_u64) {
-                    continue;
-                }
-            }
-
-            if let Some(doc) = doc_fetch(doc_id_u64) {
-                let row_id = row_id_for_doc_id.and_then(|f| f(doc_id_u64));
-                if eval_expr(filter, &doc, row_id).is_true() {
-                    result.insert(doc_id);
-                }
-            }
-        }
-        result
     }
 }
 

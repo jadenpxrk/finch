@@ -10,12 +10,14 @@ use crate::vector_normalization::has_query_vector_payload;
 use super::{Collection, MAX_QUERY_TOPK};
 
 impl Collection {
+    /// Runs the query and returns the matching documents; a vector query returns the nearest first.
     pub fn query(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
         // Taken before the version so schema, segments, and tombstones come from one publication.
         let published = self.delete_store.read();
         self.query_impl(&self.cur_version(), &published.bitmap(), query, None)
     }
 
+    /// Runs the query as `Collection::query` does, and returns the time and counts of each phase.
     pub fn query_profiled(&self, query: VectorQuery) -> ZResult<(Vec<Arc<Doc>>, QueryProfile)> {
         let start = std::time::Instant::now();
         let mut profile = QueryProfile::default();

@@ -188,26 +188,4 @@ impl IdMap {
         write_checkpoint(db, items, &dest_dir.join(CHECKPOINT_FILE))?;
         sync_dir(dest_dir.parent().unwrap_or(Path::new(".")))
     }
-
-    /// Iterate all (pk, doc_id) pairs
-    pub fn iter_all(&self) -> Vec<(String, u64)> {
-        let decode = |k: &[u8], v: &[u8]| {
-            let pk = String::from_utf8(k.to_vec()).ok()?;
-            Some((pk, decode_doc_id(v).ok()?))
-        };
-        match &self.state {
-            IdMapState::Live { items, .. } => items
-                .iter()
-                .filter_map(|guard| guard.into_inner().ok())
-                .filter_map(|(k, v)| decode(&k, &v))
-                .collect(),
-            IdMapState::ReadOnly { .. } => match self.checkpoint() {
-                Ok(Some(file)) => file
-                    .iter_from(&[])
-                    .filter_map(|(k, v)| decode(k, v))
-                    .collect(),
-                _ => Vec::new(),
-            },
-        }
-    }
 }

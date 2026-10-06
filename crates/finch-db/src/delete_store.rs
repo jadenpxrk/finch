@@ -53,10 +53,6 @@ impl DeleteStore {
         self.modified_since_last_snapshot = true;
     }
 
-    pub fn is_deleted(&self, doc_id: u64) -> bool {
-        self.bitmap.contains(doc_id)
-    }
-
     /// Writes the bitmap under the next suffix; call `commit_snapshot` once the manifest names it.
     pub fn snapshot(&self) -> ZResult<u32> {
         let new_suffix = self.path_suffix + 1;
@@ -103,10 +99,6 @@ impl DeleteStore {
             .map_err(|e| Status::io_error(e.to_string()))?;
         sync_dir(&self.base_path)?;
         Ok(self.path_suffix)
-    }
-
-    pub fn deleted_count(&self) -> u64 {
-        self.bitmap.len()
     }
 
     pub fn bitmap(&self) -> Arc<RoaringTreemap> {

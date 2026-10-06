@@ -1,5 +1,5 @@
 use super::*;
-use crate::segment::WritingSegment;
+use crate::segment::writing::WritingSegment;
 use finch_core::algorithm::flat::{FlatBuilder, MemoryStorage};
 use finch_types::{
     CollectionSchema, CompareOp, DataType, Doc, FieldSchema, FlatIndexParams, IndexParams,

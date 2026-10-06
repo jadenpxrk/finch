@@ -143,7 +143,9 @@ fn ensure_orphan_segment_dir_removed(
     Ok(())
 }
 
+/// One open collection: its schema, segments, write-ahead log, primary-key map, and delete bitmap.
 pub struct Collection {
+    /// The collection directory.
     pub path: PathBuf,
     version_manager: VersionManager,
     writing_segment: RwLock<WritingSegment>,

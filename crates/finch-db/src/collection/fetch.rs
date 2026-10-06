@@ -8,6 +8,7 @@ use crate::doc_fetch;
 use super::Collection;
 
 impl Collection {
+    /// Returns the current document of each primary key, by key; a missing key has no entry.
     pub fn fetch(&self, pks: Vec<String>) -> ZResult<HashMap<String, Arc<Doc>>> {
         // Writers publish a key and its doc under the delete store's write lock.
         let _published = self.delete_store.read();
