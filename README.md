@@ -153,8 +153,9 @@ until a release contains it.
 ## Status
 
 The database crates are `finch-types`, `finch-proto`, `finch-storage`, `finch-core`, and
-`finch-db`. They have 407 tests. One test carries the ignore attribute. The memory layer,
-`finch-memory`, has 310 tests. All of them use synthetic data. The repository contains no
+`finch-db`. They have 401 tests. One test carries the ignore attribute. The memory layer,
+`finch-memory`, has 309 tests, which run against a Postgres server with pgvector. All of them
+use synthetic data. The repository contains no
 cached benchmark replays.
 
 The project has not had a public release.
