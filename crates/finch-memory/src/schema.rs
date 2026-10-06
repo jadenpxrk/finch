@@ -7,8 +7,6 @@ pub(crate) const EPISODES_COLLECTION: &str = "memory_episodes";
 pub(crate) const SPANS_COLLECTION: &str = "memory_spans";
 pub(crate) const ARTIFACTS_COLLECTION: &str = "memory_artifacts";
 pub(crate) const CORRECTIONS_COLLECTION: &str = "memory_corrections";
-pub(crate) const TERMS_COLLECTION: &str = "memory_terms";
-
 pub(crate) const CLAIMS_COLLECTION: &str = "memory_claims";
 pub(crate) const PROFILES_COLLECTION: &str = "memory_profiles";
 pub(crate) const ENTITIES_COLLECTION: &str = "memory_entities";
@@ -133,6 +131,7 @@ pub(crate) fn span_schema_with_hnsw(
         .with_field(string_field("text"))
         .with_field(string_field("text_hash"))
         .with_field(string_field("chunker_version"))
+        .with_field(array_string_field("lexical_terms").with_index(string_index_params()))
         .with_field(string_field("embedding_model"))
         .with_field(string_field("embedding_version"))
         .with_field(string_field("lexical_text"))
@@ -174,15 +173,6 @@ pub(crate) fn correction_schema() -> CollectionSchema {
         .with_field(string_field("source_eps_json"))
         .with_field(i64_field("source_sequence_no"))
         .with_field(string_field("metadata_json"))
-}
-
-pub(crate) fn term_schema() -> CollectionSchema {
-    add_scope_fields(CollectionSchema::new(TERMS_COLLECTION))
-        .with_field(string_field("id"))
-        .with_field(string_field("term"))
-        .with_field(string_field("span_id"))
-        .with_field(i64_field("tf"))
-        .with_field(i64_field("doc_len"))
 }
 
 pub(crate) fn claim_schema(embedding_dim: usize) -> CollectionSchema {
@@ -401,7 +391,6 @@ pub(crate) fn active_collection_schemas(embedding_dim: usize) -> Vec<CollectionS
         artifact_schema(),
         span_schema(embedding_dim),
         correction_schema(),
-        term_schema(),
         claim_schema(embedding_dim),
         profile_schema(),
         entity_schema(embedding_dim),

@@ -19,7 +19,7 @@ use crate::schema::{
     active_collection_schemas, ARTIFACTS_COLLECTION, CLAIMS_COLLECTION, CORRECTIONS_COLLECTION,
     DEPENDENCY_TRACES_COLLECTION, EDGES_COLLECTION, ENTITIES_COLLECTION, ENTITY_ALIASES_COLLECTION,
     EPISODES_COLLECTION, PROFILES_COLLECTION, RULES_COLLECTION, SLOTS_COLLECTION,
-    SLOT_ALIASES_COLLECTION, SPANS_COLLECTION, STATE_RECORDS_COLLECTION, TERMS_COLLECTION,
+    SLOT_ALIASES_COLLECTION, SPANS_COLLECTION, STATE_RECORDS_COLLECTION,
 };
 use crate::state::{
     aggregate_support_state, AnswerSlotSupport, AnswerSupportContract, AnswerSupportState,
@@ -38,7 +38,7 @@ use crate::types::{
     StateReadRole, StateReadSelection, StateReadView, StateRecord, StateRecordKind,
     StateRecordScan, Visibility,
 };
-use finch_types::{CollectionSchema, Doc, HnswIndexParams, Status, Value, VectorQuery, ZResult};
+use finch_types::{CollectionSchema, Doc, HnswIndexParams, Status, VectorQuery, ZResult};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -96,7 +96,6 @@ pub struct MemoryStore {
     pub(crate) spans: Arc<dyn MemoryTable>,
     artifacts: Arc<dyn MemoryTable>,
     pub(crate) corrections: Arc<dyn MemoryTable>,
-    terms: Arc<dyn MemoryTable>,
     pub(crate) claims: Arc<dyn MemoryTable>,
     profiles: Arc<dyn MemoryTable>,
     pub(crate) entities: Arc<dyn MemoryTable>,
@@ -560,8 +559,6 @@ const SPAN_VECTOR_FETCH_MULTIPLIER: usize = 8;
 const CLAIM_SLOT_VECTOR_FETCH_MULTIPLIER: usize = 8;
 const MAX_RULE_HOPS: usize = 8;
 
-const TERM_OUTPUT_FIELDS: &[&str] = &["term", "span_id", "tf", "doc_len"];
-
 fn expanded_span_vector_fetch_k(k: usize) -> usize {
     k.saturating_mul(SPAN_VECTOR_FETCH_MULTIPLIER)
         .max(k)
@@ -838,7 +835,6 @@ impl MemoryStore {
             spans: table(SPANS_COLLECTION)?,
             artifacts: table(ARTIFACTS_COLLECTION)?,
             corrections: read_cached(id, CORRECTIONS_COLLECTION, table(CORRECTIONS_COLLECTION)?),
-            terms: table(TERMS_COLLECTION)?,
             claims: read_cached(id, CLAIMS_COLLECTION, table(CLAIMS_COLLECTION)?),
             profiles: table(PROFILES_COLLECTION)?,
             entities: read_cached(id, ENTITIES_COLLECTION, table(ENTITIES_COLLECTION)?),
@@ -876,9 +872,8 @@ impl MemoryStore {
     ) -> ZResult<()> {
         insert_one(
             &self.spans,
-            span_doc(record, embedding).map_err(json_error)?,
-        )?;
-        self.index_span_terms(record)
+            span_doc(record, embedding, true).map_err(json_error)?,
+        )
     }
 
     /// Writes ingested episodes with one embedding for each span. Fails when the counts differ.
@@ -888,7 +883,6 @@ impl MemoryStore {
     ) -> ZResult<()> {
         let mut episode_docs = Vec::new();
         let mut span_docs = Vec::new();
-        let mut term_docs = Vec::new();
 
         for (ingested, embeddings) in records {
             if ingested.spans.len() != embeddings.len() {
@@ -898,21 +892,19 @@ impl MemoryStore {
             }
             episode_docs.push(episode_doc(&ingested.episode).map_err(json_error)?);
             for (span, embedding) in ingested.spans.iter().zip(embeddings) {
-                span_docs.push(span_doc(span, Some(embedding)).map_err(json_error)?);
-                term_docs.extend(term_docs_for_span(span));
+                span_docs.push(span_doc(span, Some(embedding), true).map_err(json_error)?);
             }
         }
 
         insert_many(&self.episodes, episode_docs)?;
-        insert_many(&self.spans, span_docs)?;
-        insert_many(&self.terms, term_docs)
+        insert_many(&self.spans, span_docs)
     }
 
     /// Writes spans with their embeddings.
     pub fn append_vector_spans(&self, records: &[(SpanRecord, Vec<f32>)]) -> ZResult<()> {
         let docs = records
             .iter()
-            .map(|(span, embedding)| span_doc(span, Some(embedding)).map_err(json_error))
+            .map(|(span, embedding)| span_doc(span, Some(embedding), false).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
         insert_many(&self.spans, docs)
     }
@@ -1078,86 +1070,20 @@ pub(crate) fn upsert_many(collection: &dyn MemoryTable, docs: Vec<Doc>) -> ZResu
     Ok(())
 }
 
-fn term_docs_for_span(span: &SpanRecord) -> Vec<Doc> {
+/// Each term of the span's lexical text with its count, and the text's length in terms.
+pub(crate) fn span_term_counts(span: &SpanRecord) -> (BTreeMap<String, i64>, i64) {
     let text = if span.lexical_text.is_empty() {
         &span.text
     } else {
         &span.lexical_text
     };
     let terms = lexical_terms(text);
-    if terms.is_empty() {
-        return Vec::new();
-    }
     let doc_len = terms.len() as i64;
     let mut counts = BTreeMap::<String, i64>::new();
     for term in terms {
         *counts.entry(term).or_default() += 1;
     }
-    counts
-        .into_iter()
-        .map(|(term, tf)| {
-            let id = stable_hash_hex(&[span.id.as_str(), term.as_str()]);
-            term_doc(&id, span, &term, tf, doc_len)
-        })
-        .collect()
-}
-
-fn term_doc(id: &str, span: &SpanRecord, term: &str, tf: i64, doc_len: i64) -> Doc {
-    Doc::new(id.to_string())
-        .set("id", Value::String(id.to_string()))
-        .set("space_id", Value::String(span.scope.space_id.clone()))
-        .set(
-            "tenant_id",
-            span.scope
-                .tenant_id
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        )
-        .set(
-            "user_id",
-            span.scope
-                .user_id
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        )
-        .set(
-            "agent_id",
-            span.scope
-                .agent_id
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        )
-        .set(
-            "project_id",
-            span.scope
-                .project_id
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        )
-        .set(
-            "thread_id",
-            span.scope
-                .thread_id
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        )
-        .set(
-            "visibility",
-            Value::String(span.visibility.as_str().to_string()),
-        )
-        .set(
-            "policy_tags_json",
-            Value::String(serde_json::to_string(&span.policy_tags).unwrap_or_default()),
-        )
-        .set("term", Value::String(term.to_string()))
-        .set("span_id", Value::String(span.id.clone()))
-        .set("tf", Value::I64(tf))
-        .set("doc_len", Value::I64(doc_len))
+    (counts, doc_len)
 }
 
 struct TermPosting {
@@ -1341,21 +1267,6 @@ fn sql_escape(value: &str) -> String {
     }
     out.push_str(&"\\".repeat(2 * run));
     out
-}
-
-fn required_doc_string(doc: &Doc, field: &str) -> ZResult<String> {
-    doc.fields
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| Status::invalid_argument(format!("memory term row missing `{field}`")))
-}
-
-fn required_doc_i64(doc: &Doc, field: &str) -> ZResult<i64> {
-    doc.fields
-        .get(field)
-        .and_then(Value::as_i64)
-        .ok_or_else(|| Status::invalid_argument(format!("memory term row missing `{field}`")))
 }
 
 pub(crate) fn json_error(err: serde_json::Error) -> Status {

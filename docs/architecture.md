@@ -167,8 +167,7 @@ compaction drops them. Otherwise the delete bitmap keeps hiding them.
 flowchart LR
   subgraph evidence [Evidence]
     EP[Episodes and artifacts]
-    SP[Spans with embeddings]
-    TM[Term postings]
+    SP[Spans with embeddings and terms]
   end
   subgraph knowledge [Knowledge]
     CL[Claims]
@@ -181,7 +180,7 @@ flowchart LR
     SR[State records]
     DT[Dependency traces]
   end
-  EP --> SP --> TM
+  EP --> SP
   SP -.cited by.-> CL
   CL --> SL --> SR
   RU --> DT --> SR
@@ -218,14 +217,14 @@ flowchart LR
   T[Episode or artifact text]
   C[Chunk into overlapping spans]
   E[Caller's embedding model, outside Finch]
-  W[Write episode, spans, and term postings]
+  W[Write episode and spans]
   T --> C --> E --> W
 ```
 
 Finch cuts the text into spans of a fixed number of characters with an overlap. A sentence
 that straddles a cut therefore appears whole in one of the two spans. The caller embeds each span. Finch
-writes the episode, the spans with their vectors, and one term posting per distinct word in
-each span. Ingest writes no claims. The caller runs its own extractor over the spans and writes
+writes the episode and the spans. Each span row holds its vector and the list of distinct
+words in it, with a GIN index on that list. Ingest writes no claims. The caller runs its own extractor over the spans and writes
 the claims it finds.
 
 ## 10. Claims and state
@@ -324,7 +323,7 @@ flowchart TD
 ```
 
 A read searches the spans two ways. The vector index finds spans near the query embedding, and
-the term postings rank spans by keyword match. Finch fuses the two rankings by reciprocal rank
+BM25 ranks the spans that hold the query words. Finch fuses the two rankings by reciprocal rank
 and keeps hits from many sources rather than one. It adds the spans next to each hit, so a
 cut sentence reads whole.
 

@@ -354,9 +354,11 @@ pub(crate) fn artifact_from_doc(doc: &Doc) -> ZResult<ArtifactRecord> {
     })
 }
 
+/// The row of a span. Keyword search finds it only when `keyword_indexed` is true.
 pub(crate) fn span_doc(
     record: &SpanRecord,
     embedding: Option<&[f32]>,
+    keyword_indexed: bool,
 ) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
@@ -367,6 +369,14 @@ pub(crate) fn span_doc(
     let embedding = embedding
         .map(|items| Value::VecF32(items.to_vec()))
         .unwrap_or(Value::Null);
+    let lexical_terms = if keyword_indexed {
+        crate::store::span_term_counts(record)
+            .0
+            .into_keys()
+            .collect()
+    } else {
+        Vec::new()
+    };
     Ok(set_status(doc, record.status)
         .set("source_type", Value::String(enum_name(record.source_type)?))
         .set("source_id", Value::String(record.source_id.clone()))
@@ -383,6 +393,7 @@ pub(crate) fn span_doc(
             "chunker_version",
             Value::String(record.chunker_version.clone()),
         )
+        .set("lexical_terms", Value::ArrayString(lexical_terms))
         .set("embedding_model", opt_string(&record.embedding_model))
         .set("embedding_version", opt_string(&record.embedding_version))
         .set("lexical_text", Value::String(record.lexical_text.clone()))

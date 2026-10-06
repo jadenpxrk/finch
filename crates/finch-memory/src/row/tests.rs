@@ -77,7 +77,7 @@ fn span_doc_validates_with_embedding() {
         valid_to_ms: None,
         provenance: Vec::new(),
     };
-    let doc = span_doc(&record, Some(&[0.0, 1.0, 0.0])).unwrap();
+    let doc = span_doc(&record, Some(&[0.0, 1.0, 0.0]), true).unwrap();
     doc.validate(&span_schema(3), false).unwrap();
 }
 
@@ -114,7 +114,7 @@ fn span_from_doc_round_trips_scalar_fields() {
             actor: Some(ActorKind::Assistant),
         }],
     };
-    let doc = span_doc(&record, Some(&[0.0, 1.0, 0.0])).unwrap();
+    let doc = span_doc(&record, Some(&[0.0, 1.0, 0.0]), true).unwrap();
     assert_eq!(span_from_doc(&doc).unwrap(), record);
 }
 

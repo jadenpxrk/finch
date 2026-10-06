@@ -299,10 +299,6 @@ fn interleave_by_rank(per_source: Vec<Vec<SpanSearchHit>>, max_rank: usize) -> V
 }
 
 impl MemoryStore {
-    pub(super) fn index_span_terms(&self, span: &SpanRecord) -> ZResult<()> {
-        insert_many(&self.terms, term_docs_for_span(span))
-    }
-
     /// Cuts an episode into spans and writes the episode and spans.
     pub fn ingest_episode(
         &self,

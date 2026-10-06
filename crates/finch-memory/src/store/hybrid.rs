@@ -54,7 +54,6 @@ impl MemoryStore {
             return Ok(Vec::new());
         }
         let mut by_id = BTreeMap::new();
-        let mut checked = BTreeSet::new();
         let mut postings = Vec::new();
         for terms in query_terms.chunks(MAX_CONTAINS_FILTER_VALUES) {
             postings.extend(self.live_term_postings(
@@ -63,7 +62,6 @@ impl MemoryStore {
                 scan_limit.max(k),
                 at_ms,
                 &mut by_id,
-                &mut checked,
             )?);
         }
         if postings.is_empty() {
@@ -90,8 +88,8 @@ impl MemoryStore {
     }
 
     /// The shortest storage-order prefix of `terms`' postings that holds `limit` postings of live
-    /// spans. Postings are read in doubling pages, so a common term does not load every posting;
-    /// each span is fetched once, and the live ones go into `live`.
+    /// spans. A span's postings follow its storage order, by term. Spans are read in doubling
+    /// pages, so a common term does not load every span; the live ones go into `live`.
     fn live_term_postings(
         &self,
         scope: &MemoryScope,
@@ -99,35 +97,42 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
         live: &mut BTreeMap<String, SpanRecord>,
-        checked: &mut BTreeSet<String>,
     ) -> ZResult<Vec<TermPosting>> {
         let filter = format!(
-            "{} AND ({})",
+            "{} AND lexical_terms contain_any ({})",
             scope_filter(scope),
-            sql_or_eq_list("term", terms.iter().map(String::as_str))
+            sql_string_list(terms.iter().map(String::as_str))
         );
         let mut rows = limit.saturating_mul(2).max(64);
         loop {
             let query = VectorQuery::new("", Vec::new(), usize::MAX)
                 .with_filter(filter.clone())
-                .with_output_fields(output_fields(TERM_OUTPUT_FIELDS));
-            let postings = self
-                .terms
+                .with_output_fields(output_fields(SPAN_OUTPUT_FIELDS));
+            let spans = self
+                .spans
                 .scan_prefix(query, rows)?
                 .iter()
-                .map(|doc| term_posting_from_doc(doc))
+                .map(|doc| span_from_doc(doc))
                 .collect::<ZResult<Vec<_>>>()?;
-            let unchecked = postings
-                .iter()
-                .filter(|posting| checked.insert(posting.span_id.clone()))
-                .map(|posting| posting.span_id.clone())
-                .collect::<Vec<_>>();
-            live.extend(
-                self.fetch_spans_by_ids(scope, &unchecked, at_ms)?
-                    .into_iter()
-                    .map(|span| (span.id.clone(), span)),
-            );
-            let exhausted = postings.len() < rows;
+            let exhausted = spans.len() < rows;
+            let mut postings = Vec::new();
+            for span in spans {
+                let (counts, doc_len) = span_term_counts(&span);
+                postings.extend(
+                    counts
+                        .into_iter()
+                        .filter(|(term, _)| terms.contains(term))
+                        .map(|(term, tf)| TermPosting {
+                            term,
+                            span_id: span.id.clone(),
+                            tf: tf as f32,
+                            doc_len: doc_len as f32,
+                        }),
+                );
+                if span.scope.matches_filter(scope) && span_active_at(&span, at_ms) {
+                    live.insert(span.id.clone(), span);
+                }
+            }
             let prefix = live_posting_prefix(postings, live, limit);
             let live_count = prefix
                 .iter()
@@ -281,13 +286,4 @@ fn live_posting_prefix(
             true
         })
         .collect()
-}
-
-fn term_posting_from_doc(doc: &Doc) -> ZResult<TermPosting> {
-    Ok(TermPosting {
-        term: required_doc_string(doc, "term")?,
-        span_id: required_doc_string(doc, "span_id")?,
-        tf: required_doc_i64(doc, "tf")? as f32,
-        doc_len: required_doc_i64(doc, "doc_len")? as f32,
-    })
 }

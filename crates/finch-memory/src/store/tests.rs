@@ -8,6 +8,7 @@ use crate::types::{
     MemoryScope, MemoryStatus, SourceKind, SourceType, Visibility,
 };
 use crate::StateMutationBatch;
+use finch_types::Value;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -257,7 +258,7 @@ impl EvidencedStore {
             span.scope = scope.clone();
             span.source_id = source_episode_id.clone();
             // Stored without lexical terms or an embedding, so searches never return it.
-            insert_one(&self.spans, span_doc(&span, None).unwrap()).unwrap();
+            insert_one(&self.spans, span_doc(&span, None, false).unwrap()).unwrap();
         }
     }
 
