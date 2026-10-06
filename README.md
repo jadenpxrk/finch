@@ -27,7 +27,7 @@ The memory layer does these things:
 | `crates/finch-storage` | Columnar forward store (Arrow IPC or Parquet, optional mmap) |
 | `crates/finch-core` | Index algorithms and quantization |
 | `crates/finch-db` | Collections, segments, WAL, SQL-like filtering |
-| `crates/finch-memory` | The memory layer |
+| `crates/finch-memory` | The memory layer; the `postgres` feature stores it in Postgres |
 | `finch-py`, `finch-node` | Python and Node.js bindings |
 
 ## Rust
@@ -154,7 +154,7 @@ until a release contains it.
 
 The database crates are `finch-types`, `finch-proto`, `finch-storage`, `finch-core`, and
 `finch-db`. They have 407 tests. One test carries the ignore attribute. The memory layer,
-`finch-memory`, has 309 tests. All of them use synthetic data. The repository contains no
+`finch-memory`, has 310 tests. All of them use synthetic data. The repository contains no
 cached benchmark replays.
 
 The project has not had a public release.

@@ -189,9 +189,9 @@ flowchart LR
   EN --> SL
 ```
 
-The memory layer is a set of collections in one directory. Each record kind has its own
-collection. A memory store therefore gets the write path, the read path, and the crash
-recovery of the sections above without change.
+By default, the memory layer is a set of collections in one directory. Each record kind has its
+own collection. A memory store therefore gets the write path, the read path, and the crash
+recovery of the sections above without change. Section 14 describes storage in Postgres.
 
 Evidence is what happened. An episode is one event, such as a user message or a tool result. An
 artifact is a file, a page, or a document. Finch splits their text into overlapping spans. Each
@@ -354,7 +354,27 @@ artifacts. The output is the context text, the list of included items, and a sup
 slot. The flag says whether the packed context has evidence for that slot, has none, or holds a
 tombstone. With the same records and the same hits, the packer writes the same context.
 
-## 14. Guarantees
+## 14. Memory storage in Postgres
+
+With the `postgres` feature, a memory store keeps its records in Postgres with the pgvector
+extension. `MemoryStore::create_postgres(url, name, dim, vector_index)` creates a store in the
+new schema `name`. `MemoryStore::open_postgres` opens it, and `drop_postgres` deletes it with
+all its rows. Each record kind is one table. The memory logic is the same as with collections.
+
+```toml
+finch-memory = { path = "crates/finch-memory", features = ["postgres"] }
+```
+
+A state mutation runs as one Postgres transaction, so the store uses no journal file. A crash
+before the commit leaves no part of the write. Reads use a pool of eight connections. A
+connection that the server closes opens again on its next use.
+
+With `vector_index`, each embedding column gets an HNSW index on its halfvec form. That index
+accepts up to 4,000 dimensions and is half the size of a full-precision index. Without it,
+vector searches are exact. Every table has an index on space, tenant, and user, so one store
+can hold the memory of many users.
+
+## 15. Guarantees
 
 - Open sees the old manifest or the new one, never a mix.
 - A flush, a compaction, a column change, and an index change each take effect at one manifest
@@ -373,8 +393,9 @@ tombstone. With the same records and the same hits, the packer writes the same c
 - One process at a time can open a collection for writing.
 - Every read and write of the memory layer stays inside its scope.
 - A memory-layer write takes effect as one batch, or not at all, across a process crash.
-  Across a power loss this holds only as far as the WAL fsync setting reaches, which by default
-  is not at all.
+  With collections, this holds across a power loss only as far as the WAL fsync setting
+  reaches, which by default is not at all. In Postgres, the write is durable when the
+  transaction commits.
 - If a failed memory-layer write cannot be rolled back, the store refuses every read and write
   until it is reopened, and the reopen rolls it back.
 - A claim, a correction, and a rule never change after Finch stores them. A new record
@@ -402,5 +423,6 @@ tombstone. With the same records and the same hits, the packer writes the same c
 | Rules and dependency traces | `crates/finch-memory/src/store/rules.rs` |
 | Corrections and claim lifecycle | `crates/finch-memory/src/store/lifecycle.rs` |
 | Mutation journal | `crates/finch-memory/src/store/mutation_journal.rs` |
+| Memory storage in Postgres | `crates/finch-memory/src/postgres.rs` |
 | Answer-ready read | `crates/finch-memory/src/store/projection.rs` |
 | Context packing | `crates/finch-memory/src/context.rs` |
