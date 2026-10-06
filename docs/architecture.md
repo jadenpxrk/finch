@@ -353,8 +353,9 @@ at a time, in every process, and writes of different scopes run in parallel. A s
 connections as it needs them, up to its maximum, and a connection that the server closes opens again.
 
 With `vector_index`, each embedding column gets an HNSW index on its halfvec form. That index
-accepts up to 4,000 dimensions and is half the size of a full-precision index. Without it,
-vector searches are exact. Every table has an index on space, tenant, and user, so one store
+accepts up to 4,000 dimensions and is half the size of a full-precision index. When the index
+returns fewer rows than the limit, the search runs again without it, so a narrow filter gets
+every match. Without the index, vector searches are exact. Every table has an index on space, tenant, and user, so one store
 can hold the memory of many users.
 
 ## 15. Guarantees

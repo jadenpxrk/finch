@@ -107,7 +107,7 @@ pub struct MemoryStore {
     dependency_traces: Arc<dyn MemoryTable>,
     slots: Arc<dyn MemoryTable>,
     pub(crate) slot_aliases: Arc<dyn MemoryTable>,
-    session: Arc<PgSession>,
+    pub(crate) session: Arc<PgSession>,
 }
 
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(0);

@@ -773,17 +773,27 @@ impl MemoryTable for PgTable {
                 vector.name
             )));
         }
-        let mut params: Vec<Param> = vec![Box::new(Vector::from(query.query_vector.clone()))];
-        let filter = self.filter_clause(&query, &mut params)?;
+        let filter_params = || -> ZResult<(String, Vec<Param>)> {
+            let mut params: Vec<Param> = vec![Box::new(Vector::from(query.query_vector.clone()))];
+            let filter = self.filter_clause(&query, &mut params)?;
+            Ok((filter, params))
+        };
         let field = quote(&vector.name);
         if self.hnsw_fields.lock().contains(&vector.name) {
             // A second sort key would keep the planner from using the HNSW index.
             let dim = vector.dimension;
+            let (filter, params) = filter_params()?;
             let tail =
                 format!("WHERE {field} IS NOT NULL AND ({filter}) ORDER BY distance LIMIT {limit}");
             let distance = format!("({field})::halfvec({dim}) <=> $1::vector::halfvec({dim})");
-            return self.select(&columns, Some(&distance), &tail, params);
+            let hits = self.select(&columns, Some(&distance), &tail, params)?;
+            // The index scan stops after hnsw.max_scan_tuples rows, so a narrow filter can leave
+            // it short; the exact search below then finds every match.
+            if hits.len() >= query.topk {
+                return Ok(hits);
+            }
         }
+        let (filter, params) = filter_params()?;
         let tail = format!(
             "WHERE {field} IS NOT NULL AND ({filter}) ORDER BY distance, seq LIMIT {limit}"
         );
@@ -1156,6 +1166,48 @@ mod tests {
             .fetch(vec!["kept".to_string()])
             .unwrap()
             .contains_key("kept"));
+    }
+
+    #[test]
+    fn an_indexed_search_with_a_narrow_filter_returns_every_match() {
+        let url = crate::test_postgres_url();
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        let location = PostgresStore::new(&url, "t_narrow_hnsw");
+        drop_store(&location).unwrap();
+        let store = MemoryStore::create(&location, 3, true).unwrap();
+        let span = |pk: String, status: &str, embedding: Vec<f32>| {
+            Doc::new(pk)
+                .set("space_id", "s")
+                .set("status", status)
+                .set("embedding", embedding)
+        };
+        let mut docs: Vec<Doc> = (0..300)
+            .map(|i| {
+                span(
+                    format!("near{i}"),
+                    "common",
+                    vec![1.0, i as f32 / 1000.0, 0.0],
+                )
+            })
+            .collect();
+        docs.extend((0..3).map(|i| span(format!("far{i}"), "rare", vec![-1.0, 0.0, i as f32])));
+        store.spans.insert(docs).unwrap();
+        // The planner then takes the index, and the index scan stops after its first candidate
+        // list, which holds only "common" rows.
+        store
+            .session
+            .with_client(|client| {
+                client.batch_execute("SET enable_seqscan = off; SET hnsw.max_scan_tuples = 1")
+            })
+            .unwrap();
+        let hits = store
+            .spans
+            .query(
+                VectorQuery::new("embedding", vec![1.0, 0.0, 0.0], 3)
+                    .with_filter("status = 'rare'"),
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 3);
     }
 
     #[test]
