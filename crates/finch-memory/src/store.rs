@@ -161,7 +161,8 @@ impl MemoryStore {
         scope: &MemoryScope,
         mutate: impl FnOnce() -> ZResult<T>,
     ) -> ZResult<T> {
-        self.session.begin_write(scope_lock_key(scope))?;
+        let (broader, own) = scope_lock_keys(scope);
+        self.session.begin_write(&broader, own)?;
         match mutate() {
             Ok(value) => {
                 self.session.commit()?;
@@ -177,22 +178,47 @@ impl MemoryStore {
     }
 }
 
-/// The advisory lock key of a scope: writes of one exact scope run one at a time.
-fn scope_lock_key(scope: &MemoryScope) -> i64 {
+/// The advisory lock keys of a write at `scope`: shared keys for every broader scope and the
+/// exclusive key of the scope itself. Writes of one scope run one at a time, a write of a broader
+/// scope waits for writes of the scopes inside it, and writes of sibling scopes run in parallel.
+fn scope_lock_keys(scope: &MemoryScope) -> (Vec<i64>, i64) {
     let fields = [
-        Some(scope.space_id.as_str()),
         scope.tenant_id.as_deref(),
         scope.user_id.as_deref(),
         scope.agent_id.as_deref(),
         scope.project_id.as_deref(),
         scope.thread_id.as_deref(),
     ];
-    let parts = fields
+    let set = fields
         .iter()
-        .map(|field| field.unwrap_or("\u{0}"))
+        .enumerate()
+        .filter(|(_, field)| field.is_some())
+        .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    let hash = crate::ingest::stable_hash_hex(&parts);
-    u64::from_str_radix(&hash, 16).map_or(0, |key| key as i64)
+    let key = |kept: &[usize]| {
+        let parts =
+            std::iter::once(scope.space_id.as_str())
+                .chain(fields.iter().enumerate().map(|(index, field)| {
+                    field.filter(|_| kept.contains(&index)).unwrap_or("\u{0}")
+                }))
+                .collect::<Vec<_>>();
+        let hash = crate::ingest::stable_hash_hex(&parts);
+        u64::from_str_radix(&hash, 16).map_or(0, |key| key as i64)
+    };
+    let mut broader = (0..(1usize << set.len()) - 1)
+        .map(|mask| {
+            let kept = set
+                .iter()
+                .enumerate()
+                .filter(|(bit, _)| mask & (1 << bit) != 0)
+                .map(|(_, index)| *index)
+                .collect::<Vec<_>>();
+            key(&kept)
+        })
+        .collect::<Vec<_>>();
+    broader.sort_unstable();
+    broader.dedup();
+    (broader, key(&set))
 }
 
 /// State that the store selects to answer one query, with its proof.

@@ -209,10 +209,11 @@ impl PgSession {
         self.bound.lock().contains_key(&thread::current().id())
     }
 
-    /// Starts a write transaction that the calling thread's operations join. It waits for any
-    /// other write of the same scope, in any process, to finish.
-    pub(crate) fn begin_write(&self, scope_key: i64) -> ZResult<()> {
-        self.begin("BEGIN", Some(scope_key))
+    /// Starts a write transaction that the calling thread's operations join. It holds the
+    /// `shared` advisory locks and then the `exclusive` one until the transaction ends, so it waits
+    /// for every write that holds one of them in the conflicting mode, in any process.
+    pub(crate) fn begin_write(&self, shared: &[i64], exclusive: i64) -> ZResult<()> {
+        self.begin("BEGIN", Some((shared, exclusive)))
     }
 
     /// Starts a read-only transaction whose reads all see one snapshot.
@@ -220,7 +221,7 @@ impl PgSession {
         self.begin("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", None)
     }
 
-    fn begin(&self, statement: &str, scope_key: Option<i64>) -> ZResult<()> {
+    fn begin(&self, statement: &str, locks: Option<(&[i64], i64)>) -> ZResult<()> {
         if self.in_transaction() {
             return Err(Status::internal("a postgres transaction is already open"));
         }
@@ -230,8 +231,11 @@ impl PgSession {
         }
         let start = |client: &mut Client| {
             client.batch_execute(statement)?;
-            if let Some(key) = scope_key {
-                client.execute("SELECT pg_advisory_xact_lock($1)", &[&key])?;
+            if let Some((shared, exclusive)) = locks {
+                for key in shared {
+                    client.execute("SELECT pg_advisory_xact_lock_shared($1)", &[key])?;
+                }
+                client.execute("SELECT pg_advisory_xact_lock($1)", &[&exclusive])?;
             }
             Ok(())
         };

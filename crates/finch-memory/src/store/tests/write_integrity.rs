@@ -237,7 +237,7 @@ fn a_write_on_one_store_does_not_skip_the_snapshot_of_another() {
         .each_ref()
         .map(|dir| crate::test_store(dir, 3).unwrap());
 
-    a.session.begin_write(0).unwrap();
+    a.session.begin_write(&[], 0).unwrap();
     let a_snapshot = a.lock_state_read().unwrap().takes_snapshot();
     let b_snapshot = b.lock_state_read().unwrap().takes_snapshot();
     a.session.rollback().unwrap();
@@ -290,6 +290,51 @@ fn writes_of_different_scopes_do_not_wait_for_each_other() {
     });
     drop(store);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_space_write_waits_for_an_open_user_write_in_that_space() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("nested_scope_writes");
+    let store = crate::test_store(&dir, 3).unwrap();
+    let user = MemoryScope {
+        user_id: Some("alice".to_string()),
+        ..scope()
+    };
+    let space = scope();
+    let space_done = std::sync::atomic::AtomicBool::new(false);
+    let (started, held) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let done_while_user_open = std::thread::scope(|threads| {
+        let store = &store;
+        let (user, space, space_done) = (&user, &space, &space_done);
+        threads.spawn(move || {
+            store
+                .with_state_mutation(user, || {
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        held.recv().unwrap();
+        threads.spawn(move || {
+            store.with_state_mutation(space, || Ok(())).unwrap();
+            space_done.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let done = space_done.load(std::sync::atomic::Ordering::SeqCst);
+        release.send(()).unwrap();
+        done
+    });
+    let done_after = space_done.load(std::sync::atomic::Ordering::SeqCst);
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(
+        !done_while_user_open,
+        "the space write ran inside the open user write"
+    );
+    assert!(done_after, "the space write never ran");
 }
 
 #[test]
