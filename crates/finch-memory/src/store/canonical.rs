@@ -126,6 +126,7 @@ impl CanonicalRegistry {
 }
 
 impl MemoryStore {
+    /// Returns binding data for up to `limit` slots: names, aliases, states, and rule links.
     pub fn canonical_slot_binding_contexts(
         &self,
         scope: &MemoryScope,

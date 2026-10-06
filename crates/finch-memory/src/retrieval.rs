@@ -4,13 +4,14 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
-pub struct SpanSearchCandidate<'a> {
+#[cfg(test)]
+pub(crate) struct SpanSearchCandidate<'a> {
     pub span: &'a SpanRecord,
     pub embedding: &'a [f32],
 }
 
 #[derive(Debug, Clone)]
-pub struct SpanSearchOptions {
+pub(crate) struct SpanSearchOptions {
     pub k: usize,
     pub scope: Option<MemoryScope>,
     pub at_ms: Option<i64>,
@@ -30,13 +31,16 @@ impl Default for SpanSearchOptions {
     }
 }
 
+/// A span that a search returned, with its score.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpanSearchHit {
+    /// Span that matched.
     pub span: SpanRecord,
+    /// Ranking score. A higher score ranks first.
     pub score: f32,
 }
 
-pub fn span_active_at(span: &SpanRecord, at_ms: Option<i64>) -> bool {
+pub(crate) fn span_active_at(span: &SpanRecord, at_ms: Option<i64>) -> bool {
     if !matches!(span.status, MemoryStatus::Active) {
         return false;
     }
@@ -47,7 +51,8 @@ pub fn span_active_at(span: &SpanRecord, at_ms: Option<i64>) -> bool {
         && span.valid_to_ms.is_none_or(|to| at_ms < to)
 }
 
-pub fn search_spans<'a>(
+#[cfg(test)]
+pub(crate) fn search_spans<'a>(
     query_embedding: &[f32],
     candidates: impl IntoIterator<Item = SpanSearchCandidate<'a>>,
     options: SpanSearchOptions,
@@ -82,7 +87,7 @@ pub fn search_spans<'a>(
     hits
 }
 
-pub fn search_spans_keyword<'a>(
+pub(crate) fn search_spans_keyword<'a>(
     query_text: &str,
     spans: impl IntoIterator<Item = &'a SpanRecord>,
     options: SpanSearchOptions,
@@ -152,7 +157,7 @@ pub fn search_spans_keyword<'a>(
     hits
 }
 
-pub fn hybrid_fuse_rrf(
+pub(crate) fn hybrid_fuse_rrf(
     vector_hits: &[SpanSearchHit],
     keyword_hits: &[SpanSearchHit],
     k: usize,
@@ -188,14 +193,15 @@ fn add_rrf_scores(by_id: &mut HashMap<String, (SpanRecord, f32)>, hits: &[SpanSe
     }
 }
 
-pub fn apply_corrections_to_span_hits(
+#[cfg(test)]
+pub(crate) fn apply_corrections_to_span_hits(
     hits: &[SpanSearchHit],
     corrections: &[CorrectionRecord],
 ) -> Vec<SpanSearchHit> {
     apply_corrections_to_span_hits_at(hits, corrections, None)
 }
 
-pub fn apply_corrections_to_span_hits_at(
+pub(crate) fn apply_corrections_to_span_hits_at(
     hits: &[SpanSearchHit],
     corrections: &[CorrectionRecord],
     at_ms: Option<i64>,
@@ -289,6 +295,7 @@ fn bm25_score(
         .sum()
 }
 
+/// Splits text into lowercase alphanumeric terms.
 pub fn lexical_terms(text: &str) -> Vec<String> {
     text.split(|ch: char| !ch.is_alphanumeric())
         .filter(|term| !term.is_empty())
@@ -307,6 +314,7 @@ fn unique_terms(terms: Vec<String>) -> Vec<String> {
     unique
 }
 
+#[cfg(test)]
 fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
     if a.len() != b.len() || a.is_empty() {
         return None;

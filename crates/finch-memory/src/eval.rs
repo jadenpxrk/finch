@@ -2,36 +2,57 @@ use crate::retrieval::SpanSearchHit;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+/// Retrieval quality of one ranked hit list.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RetrievalMetrics {
+    /// Fraction of relevant spans in the top `k` hits.
     pub recall_at_k: f32,
+    /// Fraction of relevant spans in the top `k` hits. It equals `recall_at_k`.
     pub gold_evidence_hit_rate: f32,
+    /// Inverse rank of the first relevant hit. 0.0 means no relevant hit.
     pub reciprocal_rank: f32,
+    /// Normalized discounted cumulative gain of the top `k` hits.
     pub ndcg_at_k: f32,
+    /// Fraction of required exact tokens that no top hit contains.
     pub exact_token_miss_rate: f32,
+    /// Fraction of the top `k` hits that are stale or inadmissible.
     pub stale_false_positive_rate: f32,
 }
 
+/// Hybrid retrieval metrics minus the metrics of one baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BaselineDelta {
+    /// Recall gain.
     pub recall_delta: f32,
+    /// Gold evidence hit rate gain.
     pub gold_evidence_hit_rate_delta: f32,
+    /// Reciprocal rank gain.
     pub reciprocal_rank_delta: f32,
+    /// nDCG gain.
     pub ndcg_delta: f32,
+    /// Change in the exact token miss rate.
     pub exact_token_miss_rate_delta: f32,
+    /// Change in the stale false positive rate.
     pub stale_false_positive_rate_delta: f32,
 }
 
+/// Metrics of vector, keyword, and hybrid retrieval, and the hybrid gains.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RetrievalBaselineReport {
+    /// Metrics of vector retrieval.
     pub vector: RetrievalMetrics,
+    /// Metrics of keyword retrieval.
     pub keyword: RetrievalMetrics,
+    /// Metrics of hybrid retrieval.
     pub hybrid: RetrievalMetrics,
+    /// Hybrid metrics minus vector metrics.
     pub hybrid_vs_vector: BaselineDelta,
+    /// Hybrid metrics minus keyword metrics.
     pub hybrid_vs_keyword: BaselineDelta,
 }
 
 impl BaselineDelta {
+    /// Returns true when the recall and nDCG gains reach the given minimums.
     pub fn meets_gate(self, min_recall_delta: f32, min_ndcg_delta: f32) -> bool {
         self.recall_delta >= min_recall_delta && self.ndcg_delta >= min_ndcg_delta
     }
@@ -39,11 +60,15 @@ impl BaselineDelta {
 
 /// The three ranked hit lists a retrieval baseline compares.
 pub struct RetrievalBaselineHits<'a> {
+    /// Hits from vector retrieval.
     pub vector: &'a [SpanSearchHit],
+    /// Hits from keyword retrieval.
     pub keyword: &'a [SpanSearchHit],
+    /// Hits from hybrid retrieval.
     pub hybrid: &'a [SpanSearchHit],
 }
 
+/// Scores vector, keyword, and hybrid hits and compares hybrid with each baseline.
 pub fn evaluate_retrieval_baseline(
     hits: &RetrievalBaselineHits<'_>,
     relevant_span_ids: &[String],
@@ -81,7 +106,8 @@ pub fn evaluate_retrieval_baseline(
     }
 }
 
-pub fn evaluate_span_hits(
+#[cfg(test)]
+pub(crate) fn evaluate_span_hits(
     hits: &[SpanSearchHit],
     relevant_span_ids: &[String],
     k: usize,
@@ -89,6 +115,7 @@ pub fn evaluate_span_hits(
     evaluate_span_hits_with_admission(hits, relevant_span_ids, &[], &[], k)
 }
 
+/// Scores the top `k` hits against relevant, required-token, and stale span lists.
 pub fn evaluate_span_hits_with_admission(
     hits: &[SpanSearchHit],
     relevant_span_ids: &[String],
@@ -169,7 +196,7 @@ pub fn evaluate_span_hits_with_admission(
     }
 }
 
-pub fn compare_to_baseline(
+pub(crate) fn compare_to_baseline(
     candidate: RetrievalMetrics,
     baseline: RetrievalMetrics,
 ) -> BaselineDelta {

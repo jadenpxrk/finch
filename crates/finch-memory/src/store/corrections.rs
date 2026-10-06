@@ -1,13 +1,14 @@
 use super::*;
 
 impl MemoryStore {
-    pub fn resolve_existing_correction_target(
+    pub(crate) fn resolve_existing_correction_target(
         &self,
         correction: &CorrectionRecord,
     ) -> ZResult<CorrectionRecord> {
         self.resolve_correction_target_with_pending_claims(correction, &[])
     }
 
+    /// Binds a correction to its target slot and claims, including claims not yet written.
     pub fn resolve_correction_target_with_pending_claims(
         &self,
         correction: &CorrectionRecord,

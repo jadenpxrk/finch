@@ -6,7 +6,8 @@ mod outcomes;
 mod propagation;
 use activation::*;
 use binding::*;
-use outcomes::*;
+#[cfg(test)]
+use outcomes::rule_governs_target_slot;
 use propagation::*;
 
 pub(super) struct DependencyChainResolution {
@@ -31,6 +32,7 @@ impl MemoryStore {
         })
     }
 
+    /// Binds a rule to its slots and writes it.
     pub fn add_rule(&self, input: RuleInput) -> ZResult<RuleRecord> {
         let record = self.build_rule_record(input)?;
         self.append_rule(&record)?;
@@ -41,6 +43,7 @@ impl MemoryStore {
         self.sequence_and_bind_rule(rule_record_from_input(input)?)
     }
 
+    /// Returns up to `limit` active rules valid at `at_ms`.
     pub fn scan_rules(
         &self,
         scope: &MemoryScope,
@@ -140,6 +143,7 @@ impl MemoryStore {
         Ok(repairable)
     }
 
+    /// Returns up to `limit` active rules whose trigger is the given subject and predicate.
     pub fn rules_for_trigger_slot(
         &self,
         scope: &MemoryScope,
@@ -181,7 +185,8 @@ impl MemoryStore {
         Ok(rules)
     }
 
-    pub fn rules_for_target_slot(
+    #[cfg(test)]
+    pub(crate) fn rules_for_target_slot(
         &self,
         scope: &MemoryScope,
         slot: &CanonicalSlot,
@@ -241,6 +246,7 @@ impl MemoryStore {
 
     /// Alias surfaces are the same slot under another name: a rule bound to an alias surface
     /// governs the canonical slot and vice versa, so both directions join the target filter.
+    #[cfg(test)]
     fn target_alias_surfaces(
         &self,
         scope: &MemoryScope,
@@ -361,6 +367,7 @@ fn rule_triggered_by(
 }
 
 /// Slot ids and predicate keys a target slot goes by, its alias surfaces included.
+#[cfg(test)]
 struct AliasSurfaces {
     slot_ids: Vec<MemoryId>,
     predicate_keys: Vec<String>,

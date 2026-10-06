@@ -4,7 +4,7 @@ use finch_types::{Doc, HnswIndexParams, Status, VectorQuery, ZResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub trait MemoryTable: Send + Sync {
+pub(crate) trait MemoryTable: Send + Sync {
     /// One status per doc; a pk that already exists fails with AlreadyExists.
     fn insert(&self, docs: Vec<Doc>) -> ZResult<Vec<Status>>;
     /// Replaces each whole row, so later scans see it after every row written before it.

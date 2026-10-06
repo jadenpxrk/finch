@@ -13,7 +13,7 @@ mod helpers;
 
 use helpers::*;
 
-pub fn state_record_doc(record: &StateRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn state_record_doc(record: &StateRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -53,7 +53,7 @@ pub fn state_record_doc(record: &StateRecord) -> Result<Doc, serde_json::Error> 
         .set("superseded_at_ms", opt_i64(record.superseded_at_ms)))
 }
 
-pub fn state_record_from_doc(doc: &Doc) -> ZResult<StateRecord> {
+pub(crate) fn state_record_from_doc(doc: &Doc) -> ZResult<StateRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -97,7 +97,9 @@ pub fn state_record_from_doc(doc: &Doc) -> ZResult<StateRecord> {
     })
 }
 
-pub fn dependency_trace_doc(record: &DependencyTraceRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn dependency_trace_doc(
+    record: &DependencyTraceRecord,
+) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -153,7 +155,7 @@ pub fn dependency_trace_doc(record: &DependencyTraceRecord) -> Result<Doc, serde
         .set("superseded_at_ms", opt_i64(record.superseded_at_ms)))
 }
 
-pub fn dependency_trace_from_doc(doc: &Doc) -> ZResult<DependencyTraceRecord> {
+pub(crate) fn dependency_trace_from_doc(doc: &Doc) -> ZResult<DependencyTraceRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -199,7 +201,7 @@ pub fn dependency_trace_from_doc(doc: &Doc) -> ZResult<DependencyTraceRecord> {
     })
 }
 
-pub fn slot_doc(record: &CanonicalSlotRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn slot_doc(record: &CanonicalSlotRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -233,7 +235,7 @@ pub fn slot_doc(record: &CanonicalSlotRecord) -> Result<Doc, serde_json::Error> 
         .set("superseded_at_ms", opt_i64(record.superseded_at_ms)))
 }
 
-pub fn slot_from_doc(doc: &Doc) -> ZResult<CanonicalSlotRecord> {
+pub(crate) fn slot_from_doc(doc: &Doc) -> ZResult<CanonicalSlotRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -268,7 +270,7 @@ pub fn slot_from_doc(doc: &Doc) -> ZResult<CanonicalSlotRecord> {
     })
 }
 
-pub fn episode_doc(record: &EpisodeRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn episode_doc(record: &EpisodeRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -292,7 +294,7 @@ pub fn episode_doc(record: &EpisodeRecord) -> Result<Doc, serde_json::Error> {
         .set("metadata_json", opt_string(&record.metadata_json)))
 }
 
-pub fn artifact_doc(record: &ArtifactRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn artifact_doc(record: &ArtifactRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -319,7 +321,7 @@ pub fn artifact_doc(record: &ArtifactRecord) -> Result<Doc, serde_json::Error> {
         .set("metadata_json", opt_string(&record.metadata_json)))
 }
 
-pub fn artifact_from_doc(doc: &Doc) -> ZResult<ArtifactRecord> {
+pub(crate) fn artifact_from_doc(doc: &Doc) -> ZResult<ArtifactRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -352,7 +354,10 @@ pub fn artifact_from_doc(doc: &Doc) -> ZResult<ArtifactRecord> {
     })
 }
 
-pub fn span_doc(record: &SpanRecord, embedding: Option<&[f32]>) -> Result<Doc, serde_json::Error> {
+pub(crate) fn span_doc(
+    record: &SpanRecord,
+    embedding: Option<&[f32]>,
+) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -388,7 +393,7 @@ pub fn span_doc(record: &SpanRecord, embedding: Option<&[f32]>) -> Result<Doc, s
         .set("embedding", embedding))
 }
 
-pub fn span_from_doc(doc: &Doc) -> ZResult<SpanRecord> {
+pub(crate) fn span_from_doc(doc: &Doc) -> ZResult<SpanRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -425,7 +430,7 @@ pub fn span_from_doc(doc: &Doc) -> ZResult<SpanRecord> {
     })
 }
 
-pub fn correction_doc(record: &CorrectionRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn correction_doc(record: &CorrectionRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -467,7 +472,7 @@ pub fn correction_doc(record: &CorrectionRecord) -> Result<Doc, serde_json::Erro
         .set("metadata_json", opt_string(&record.metadata_json)))
 }
 
-pub fn claim_doc(
+pub(crate) fn claim_doc(
     record: &ClaimRecord,
     embedding: Option<&[f32]>,
 ) -> Result<Doc, serde_json::Error> {
@@ -525,7 +530,7 @@ pub fn claim_doc(
         .set("embedding", embedding))
 }
 
-pub fn claim_from_doc(doc: &Doc) -> ZResult<ClaimRecord> {
+pub(crate) fn claim_from_doc(doc: &Doc) -> ZResult<ClaimRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -564,7 +569,7 @@ pub fn claim_from_doc(doc: &Doc) -> ZResult<ClaimRecord> {
     })
 }
 
-pub fn rule_doc(record: &RuleRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn rule_doc(record: &RuleRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -632,7 +637,7 @@ pub fn rule_doc(record: &RuleRecord) -> Result<Doc, serde_json::Error> {
         .set("confidence", opt_f32(record.confidence)))
 }
 
-pub fn rule_from_doc(doc: &Doc) -> ZResult<RuleRecord> {
+pub(crate) fn rule_from_doc(doc: &Doc) -> ZResult<RuleRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -682,7 +687,7 @@ pub fn rule_from_doc(doc: &Doc) -> ZResult<RuleRecord> {
     })
 }
 
-pub fn profile_doc(record: &ProfileRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn profile_doc(record: &ProfileRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -712,7 +717,7 @@ pub fn profile_doc(record: &ProfileRecord) -> Result<Doc, serde_json::Error> {
         ))
 }
 
-pub fn profile_from_doc(doc: &Doc) -> ZResult<ProfileRecord> {
+pub(crate) fn profile_from_doc(doc: &Doc) -> ZResult<ProfileRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -741,7 +746,7 @@ pub fn profile_from_doc(doc: &Doc) -> ZResult<ProfileRecord> {
     })
 }
 
-pub fn entity_doc(
+pub(crate) fn entity_doc(
     record: &EntityRecord,
     embedding: Option<&[f32]>,
 ) -> Result<Doc, serde_json::Error> {
@@ -768,7 +773,7 @@ pub fn entity_doc(
         .set("embedding", embedding))
 }
 
-pub fn entity_from_doc(doc: &Doc) -> ZResult<EntityRecord> {
+pub(crate) fn entity_from_doc(doc: &Doc) -> ZResult<EntityRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -793,7 +798,7 @@ pub fn entity_from_doc(doc: &Doc) -> ZResult<EntityRecord> {
     })
 }
 
-pub fn entity_alias_doc(record: &EntityAliasRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn entity_alias_doc(record: &EntityAliasRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -809,7 +814,7 @@ pub fn entity_alias_doc(record: &EntityAliasRecord) -> Result<Doc, serde_json::E
         .set("superseded_at_ms", opt_i64(record.superseded_at_ms)))
 }
 
-pub fn entity_alias_from_doc(doc: &Doc) -> ZResult<EntityAliasRecord> {
+pub(crate) fn entity_alias_from_doc(doc: &Doc) -> ZResult<EntityAliasRecord> {
     Ok(EntityAliasRecord {
         id: required_string(doc, "id")?,
         scope: MemoryScope {
@@ -832,7 +837,7 @@ pub fn entity_alias_from_doc(doc: &Doc) -> ZResult<EntityAliasRecord> {
     })
 }
 
-pub fn slot_alias_doc(record: &SlotAliasRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn slot_alias_doc(record: &SlotAliasRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -863,7 +868,7 @@ pub fn slot_alias_doc(record: &SlotAliasRecord) -> Result<Doc, serde_json::Error
         .set("superseded_at_ms", opt_i64(record.superseded_at_ms)))
 }
 
-pub fn slot_alias_from_doc(doc: &Doc) -> ZResult<SlotAliasRecord> {
+pub(crate) fn slot_alias_from_doc(doc: &Doc) -> ZResult<SlotAliasRecord> {
     Ok(SlotAliasRecord {
         id: required_string(doc, "id")?,
         scope: MemoryScope {
@@ -889,7 +894,7 @@ pub fn slot_alias_from_doc(doc: &Doc) -> ZResult<SlotAliasRecord> {
     })
 }
 
-pub fn edge_doc(record: &EdgeRecord) -> Result<Doc, serde_json::Error> {
+pub(crate) fn edge_doc(record: &EdgeRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),
         &record.scope,
@@ -907,7 +912,7 @@ pub fn edge_doc(record: &EdgeRecord) -> Result<Doc, serde_json::Error> {
         .set("confidence", opt_f32(record.confidence)))
 }
 
-pub fn edge_from_doc(doc: &Doc) -> ZResult<EdgeRecord> {
+pub(crate) fn edge_from_doc(doc: &Doc) -> ZResult<EdgeRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,
@@ -933,7 +938,7 @@ pub fn edge_from_doc(doc: &Doc) -> ZResult<EdgeRecord> {
     })
 }
 
-pub fn correction_from_doc(doc: &Doc) -> ZResult<CorrectionRecord> {
+pub(crate) fn correction_from_doc(doc: &Doc) -> ZResult<CorrectionRecord> {
     let scope = MemoryScope {
         space_id: required_string(doc, "space_id")?,
         tenant_id: optional_string(doc, "tenant_id")?,

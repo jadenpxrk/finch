@@ -1,6 +1,7 @@
 use super::*;
 
 impl MemoryStore {
+    /// Writes a slot alias after a check of its source claims.
     pub fn add_slot_alias(
         &self,
         input: SlotAliasInput,
@@ -132,6 +133,7 @@ impl MemoryStore {
         Ok(canonical_slot_id)
     }
 
+    /// Returns up to `limit` active slot aliases valid at `at_ms`.
     pub fn scan_slot_aliases(
         &self,
         scope: &MemoryScope,
@@ -161,6 +163,7 @@ impl MemoryStore {
         Ok(aliases)
     }
 
+    /// Returns up to `limit` active entities.
     pub fn scan_entities(&self, scope: &MemoryScope, limit: usize) -> ZResult<Vec<EntityRecord>> {
         let _state_guard = self.lock_state_read()?;
         if limit == 0 {
@@ -340,7 +343,7 @@ impl MemoryStore {
         Ok(edges)
     }
 
-    pub fn expand_edges_ranked(
+    pub(crate) fn expand_edges_ranked(
         &self,
         scope: &MemoryScope,
         seed_entity_ids: &[String],

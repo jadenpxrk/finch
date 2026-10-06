@@ -90,6 +90,7 @@ use state_records::{
 };
 use timeline::{reconcile_dependency_trace_intervals, reconcile_state_record_intervals};
 
+/// Agent memory for one named store in Postgres.
 pub struct MemoryStore {
     pub(crate) episodes: Arc<dyn MemoryTable>,
     pub(crate) spans: Arc<dyn MemoryTable>,
@@ -194,115 +195,191 @@ fn scope_lock_key(scope: &MemoryScope) -> i64 {
     u64::from_str_radix(&hash, 16).map_or(0, |key| key as i64)
 }
 
+/// State that the store selects to answer one query, with its proof.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AnswerReadyStateProjection {
+    /// Current claims of the selected slots.
     pub claims: Vec<ClaimRecord>,
+    /// Members of the selected set-valued slots.
     pub set_states: Vec<SetStateRecord>,
+    /// Version history of each selected slot.
     #[serde(default)]
     pub slot_histories: Vec<SlotHistoryRecord>,
+    /// Rules that link the selected slots.
     pub rules: Vec<RuleRecord>,
+    /// Result of each rule the projection resolved.
     #[serde(default)]
     pub rule_outcomes: Vec<RuleResolutionOutcome>,
+    /// Corrections that changed the selected claims.
     pub corrections: Vec<CorrectionRecord>,
+    /// Entities of the selected subjects.
     pub entities: Vec<EntityRecord>,
+    /// Ids of the spans that prove the selected state.
     pub proof_span_ids: Vec<MemoryId>,
+    /// Evidence that an answer from the projection may cite.
     pub support: AnswerSupportContract,
 }
 
+/// Answer-ready view of one slot: its value, support, and proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedAnswerSlot {
+    /// Id of the slot.
     pub slot_id: MemoryId,
+    /// How the answer reads the slot.
     pub read_view: StateReadView,
+    /// Whether evidence supports the state.
     pub support_state: AnswerSupportState,
+    /// Kind of the current state. `None` means the slot has no state.
     pub state_kind: Option<StateRecordKind>,
+    /// Subject text as the evidence states it.
     pub subject: Option<String>,
+    /// Predicate text as the evidence states it.
     pub predicate: Option<String>,
+    /// Current value of the slot. `None` means the slot has no single value.
     pub current_value: Option<String>,
+    /// Members of a set-valued slot.
     pub members: Vec<String>,
     /// Co-current surface facets of the slot family, newest first. A slot with more than one
     /// supported facet value has no single authoritative `current_value`; the reader sees every
     /// facet with its own validity and proof instead of a newest-wins guess.
     #[serde(default)]
     pub facets: Vec<ResolvedSlotFacet>,
+    /// Ids of the claims behind the value.
     pub source_claim_ids: Vec<MemoryId>,
+    /// Ids of the spans that prove the value.
     pub source_span_ids: Vec<MemoryId>,
+    /// Ids of the rules that can change the slot.
     pub dependency_rule_ids: Vec<MemoryId>,
+    /// Ids of the slots whose rules can change this slot.
     pub dependency_trigger_slot_ids: Vec<MemoryId>,
+    /// Start of the valid-time interval in Unix ms, inclusive. `None` means no lower bound.
     pub valid_from_ms: Option<i64>,
+    /// End of the valid-time interval in Unix ms, exclusive. `None` means no upper bound.
     pub valid_to_ms: Option<i64>,
 }
 
+/// One surface facet of a slot family, with its own value and proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedSlotFacet {
+    /// Subject text as the evidence states it.
     pub subject: Option<String>,
+    /// Predicate text as the evidence states it.
     pub predicate: Option<String>,
+    /// Whether evidence supports the state.
     pub support_state: AnswerSupportState,
+    /// Kind of the facet state. `None` means the facet has no state.
     pub state_kind: Option<StateRecordKind>,
+    /// Current value of the facet.
     pub value: Option<String>,
     /// Evidence-side statement text of the newest claim in the facet.
     #[serde(default)]
     pub state_text: Option<String>,
+    /// Ids of the claims in the facet.
     pub claim_ids: Vec<MemoryId>,
+    /// Ids of the spans that prove the facet value.
     pub source_span_ids: Vec<MemoryId>,
+    /// Start of the valid-time interval in Unix ms, inclusive. `None` means no lower bound.
     pub valid_from_ms: Option<i64>,
+    /// End of the valid-time interval in Unix ms, exclusive. `None` means no upper bound.
     pub valid_to_ms: Option<i64>,
 }
 
+/// What the selection did with a state candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StateSelectionDisposition {
+    /// The projection includes the candidate.
     Selected,
+    /// Removed because it is not in a preferred slot.
     PreferredSlotFiltered,
+    /// Removed by the candidate filter.
     CandidateFiltered,
+    /// Removed because no signal applies.
     NoSelectionSignal,
+    /// Removed by the claim limit.
     ClaimLimit,
 }
 
+/// Signals that apply to a state candidate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateSelectionSignals {
+    /// The candidate is in a preferred slot.
     pub preferred_slot: bool,
+    /// The candidate cites a retrieved span or is on a slot of the retrieved evidence.
     pub evidence: bool,
+    /// The query names the predicate and the subject of the candidate.
     pub anchored_slot: bool,
+    /// The candidate is a set state whose subject the query names.
     pub set_entity: bool,
 }
 
+/// Selection decision for one state candidate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateSelectionTraceItem {
+    /// Id of the state record.
     pub state_id: MemoryId,
+    /// Kind of state the record holds.
     pub state_kind: StateRecordKind,
+    /// Id of the canonical slot of the record. `None` means the record has no slot.
     pub slot_id: Option<MemoryId>,
+    /// Id of the entity that the subject resolves to. `None` means no entity matches.
     pub subject_entity_id: Option<MemoryId>,
+    /// Subject text as the evidence states it.
     pub subject: Option<String>,
+    /// Predicate text as the evidence states it.
     pub predicate: Option<String>,
+    /// Weighted sum of the signals. A higher score ranks first.
     pub score: u8,
+    /// Signals that apply to the candidate.
     pub signals: StateSelectionSignals,
+    /// What the selection did with the candidate.
     pub disposition: StateSelectionDisposition,
 }
 
+/// Version summary of one slot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlotHistoryTrace {
+    /// Id of the slot.
     pub slot_id: MemoryId,
+    /// Id of the entity that the subject resolves to. `None` means no entity matches.
     pub subject_entity_id: Option<MemoryId>,
+    /// Subject text as the evidence states it.
     pub subject: Option<String>,
+    /// Predicate text as the evidence states it.
     pub predicate: Option<String>,
+    /// Number of versions of the slot.
     pub version_count: usize,
+    /// Number of distinct values over all versions.
     pub distinct_value_count: usize,
+    /// Observation time of the oldest version, in Unix ms.
     pub first_observed_at_ms: i64,
+    /// Observation time of the newest version, in Unix ms.
     pub last_observed_at_ms: i64,
+    /// Earliest valid-from time over all versions, in Unix ms. `None` means no version has one.
     pub first_valid_from_ms: Option<i64>,
+    /// Latest valid-from time over all versions, in Unix ms. `None` means no version has one.
     pub last_valid_from_ms: Option<i64>,
 }
 
+/// Inputs and decisions of one answer-ready state projection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnswerReadyStateProjectionTrace {
+    /// Ids of the slots the request preferred.
     pub preferred_slot_ids: Vec<MemoryId>,
+    /// Ids of the slots the answer is about.
     #[serde(default)]
     pub answer_target_slot_ids: Vec<MemoryId>,
+    /// Ids of the retrieved evidence spans.
     pub evidence_span_ids: Vec<MemoryId>,
+    /// Selection decision for each state candidate.
     pub candidates: Vec<StateSelectionTraceItem>,
+    /// Version summary of each selected slot.
     pub slot_histories: Vec<SlotHistoryTrace>,
+    /// Ids of the claims in the projection.
     pub projected_claim_ids: Vec<MemoryId>,
+    /// Ids of the set states in the projection.
     pub projected_set_state_ids: Vec<MemoryId>,
+    /// Ids of the rules in the projection.
     pub projected_rule_ids: Vec<MemoryId>,
 }
 
@@ -367,16 +444,20 @@ const SLOT_ALIAS_OUTPUT_FIELDS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphExpansionHit {
+pub(crate) struct GraphExpansionHit {
     pub edge: EdgeRecord,
     pub depth: usize,
     pub score: f32,
 }
 
+/// Vector, keyword, and fused hit lists of one hybrid search.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HybridSearchDebug {
+    /// Hits from vector search.
     pub vector_hits: Vec<SpanSearchHit>,
+    /// Hits from keyword search.
     pub keyword_hits: Vec<SpanSearchHit>,
+    /// Hits after rank fusion, best first.
     pub fused_hits: Vec<SpanSearchHit>,
 }
 
@@ -710,6 +791,7 @@ const SLOT_OUTPUT_FIELDS: &[&str] = &[
 ];
 
 impl MemoryStore {
+    /// Builds the HNSW index on span embeddings with the given parameters.
     pub fn ensure_span_hnsw_index(
         &self,
         hnsw_params: HnswIndexParams,
@@ -773,6 +855,7 @@ impl MemoryStore {
         self.index_span_terms(record)
     }
 
+    /// Writes ingested episodes with one embedding for each span. Fails when the counts differ.
     pub fn append_ingested_episodes_with_embeddings(
         &self,
         records: &[(IngestedEpisode, Vec<Vec<f32>>)],
@@ -799,6 +882,7 @@ impl MemoryStore {
         insert_many(&self.terms, term_docs)
     }
 
+    /// Writes spans with their embeddings.
     pub fn append_vector_spans(&self, records: &[(SpanRecord, Vec<f32>)]) -> ZResult<()> {
         let docs = records
             .iter()
@@ -811,7 +895,7 @@ impl MemoryStore {
         insert_one(&self.artifacts, artifact_doc(record).map_err(json_error)?)
     }
 
-    pub fn ingest_artifact_text(
+    pub(crate) fn ingest_artifact_text(
         &self,
         record: ArtifactRecord,
         text: &str,
@@ -828,6 +912,7 @@ impl MemoryStore {
         })
     }
 
+    /// Writes a correction after a check of its evidence.
     pub fn add_correction(&self, record: &CorrectionRecord) -> ZResult<()> {
         self.with_state_mutation(&record.scope, || {
             if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {

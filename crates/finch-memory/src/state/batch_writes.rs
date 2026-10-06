@@ -1,6 +1,7 @@
 use super::*;
 
 impl MemoryStore {
+    /// Validates a batch, writes it, and projects the state it changes.
     pub fn apply_state_mutation_batch(
         &self,
         batch: StateMutationBatch,
@@ -8,6 +9,8 @@ impl MemoryStore {
         self.apply_state_mutation_batch_with_claim_embeddings(batch, BTreeMap::new())
     }
 
+    /// Validates a batch, writes it with the given claim embeddings, and projects the state it
+    /// changes.
     pub fn apply_state_mutation_batch_with_claim_embeddings(
         &self,
         batch: StateMutationBatch,

@@ -1,6 +1,7 @@
 use super::*;
 
 impl MemoryStore {
+    /// Writes a claim with an optional embedding.
     pub fn append_claim(&self, record: &ClaimRecord, embedding: Option<&[f32]>) -> ZResult<()> {
         self.with_state_mutation(&record.scope, || {
             if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {
@@ -103,6 +104,7 @@ impl MemoryStore {
         Ok(())
     }
 
+    /// Makes a claim from the input, checks its evidence, and writes it.
     pub fn add_manual_claim(
         &self,
         input: ManualClaimInput,
@@ -125,7 +127,7 @@ impl MemoryStore {
         insert_one(&self.profiles, profile_doc(record).map_err(json_error)?)
     }
 
-    pub fn add_profile(&self, input: ProfileInput) -> ZResult<ProfileRecord> {
+    pub(crate) fn add_profile(&self, input: ProfileInput) -> ZResult<ProfileRecord> {
         let profile = crate::ingest::create_profile(input);
         self.append_profile(&profile)?;
         Ok(profile)
@@ -174,7 +176,7 @@ impl MemoryStore {
         })
     }
 
-    pub fn add_entity(
+    pub(crate) fn add_entity(
         &self,
         input: EntityInput,
         embedding: Option<&[f32]>,
@@ -186,7 +188,7 @@ impl MemoryStore {
         insert_one(&self.edges, edge_doc(record).map_err(json_error)?)
     }
 
-    pub fn add_edge(&self, input: EdgeInput) -> ZResult<EdgeRecord> {
+    pub(crate) fn add_edge(&self, input: EdgeInput) -> ZResult<EdgeRecord> {
         let edge = create_edge(input);
         self.append_edge(&edge)?;
         Ok(edge)

@@ -15,9 +15,12 @@ mod render;
 
 use render::*;
 
+/// Limits and options for a context packet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextOptions {
+    /// Maximum number of estimated tokens in the packet.
     pub token_budget: usize,
+    /// Whether span items show their source.
     pub include_provenance: bool,
 }
 
@@ -30,26 +33,40 @@ impl Default for ContextOptions {
     }
 }
 
+/// One item in a context packet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextItem {
+    /// Id of the record the item shows.
     pub id: MemoryId,
+    /// Kind of record the item shows, such as `span` or `claim`.
     pub kind: String,
+    /// Estimated token count.
     pub estimated_tokens: usize,
+    /// Ids of the slots the item belongs to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slot_ids: Vec<MemoryId>,
+    /// Evidence text the item quotes. `None` means the item quotes no evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_text: Option<String>,
 }
 
+/// Context packet for a model prompt, with the evidence an answer may cite.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompiledMemoryContext {
+    /// Rendered text of the packet.
     pub body: String,
+    /// Estimated token count of the body.
     pub estimated_tokens: usize,
+    /// Token budget the packet was built for.
     pub budget: usize,
+    /// Items the body includes, in order.
     pub included: Vec<ContextItem>,
+    /// Whether the budget cut items from the packet.
     pub truncated: bool,
+    /// Evidence that an answer built from the packet may cite.
     #[serde(default)]
     pub support: AnswerSupportContract,
+    /// Result of each rule the projection resolved.
     #[serde(default)]
     pub rule_outcomes: Vec<RuleResolutionOutcome>,
 }
@@ -65,6 +82,7 @@ impl CompiledMemoryContext {
     }
 }
 
+/// Builds a context packet from span hits within the token budget.
 pub fn build_context(hits: &[SpanSearchHit], options: ContextOptions) -> CompiledMemoryContext {
     let items = hits
         .iter()
@@ -92,7 +110,7 @@ pub fn build_context(hits: &[SpanSearchHit], options: ContextOptions) -> Compile
 
 /// Every record source the context assembler can pack. Empty slices contribute nothing.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ContextInput<'a> {
+pub(crate) struct ContextInput<'a> {
     pub profiles: &'a [ProfileRecord],
     pub claims: &'a [ClaimRecord],
     pub set_states: &'a [SetStateRecord],
@@ -106,7 +124,8 @@ pub struct ContextInput<'a> {
 }
 
 /// Packs claims grounded in the retrieved hits, corrections, profiles, artifacts, and hits.
-pub fn build_state_context(
+#[cfg(test)]
+pub(crate) fn build_state_context(
     input: &ContextInput<'_>,
     options: ContextOptions,
 ) -> CompiledMemoryContext {
@@ -170,13 +189,14 @@ pub fn build_state_context(
 }
 
 /// Packs state first, then raw evidence, with no answer targets.
-pub fn build_query_state_context(
+pub(crate) fn build_query_state_context(
     input: &ContextInput<'_>,
     options: ContextOptions,
 ) -> CompiledMemoryContext {
     build_query_state_context_for_targets(input, &[], options)
 }
 
+/// Builds a context packet from a state projection, profiles, artifacts, and span hits.
 pub fn build_answer_ready_state_context(
     profiles: &[ProfileRecord],
     projection: &AnswerReadyStateProjection,
@@ -820,6 +840,7 @@ fn sort_hits_chronologically(hits: &mut [&SpanSearchHit]) {
     });
 }
 
+#[cfg(test)]
 fn claim_is_grounded_in_hits(claim: &ClaimRecord, hit_ids: &HashSet<&str>) -> bool {
     claim.source_span_ids.is_empty()
         || claim
@@ -857,7 +878,7 @@ fn is_specific_state_kind(kind: &str) -> bool {
     )
 }
 
-pub fn estimate_tokens(text: &str) -> usize {
+pub(crate) fn estimate_tokens(text: &str) -> usize {
     let by_words = text.split_whitespace().count();
     let by_chars = text.chars().count().div_ceil(4);
     by_words.max(by_chars).max(1)

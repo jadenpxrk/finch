@@ -1,6 +1,7 @@
 use super::*;
 
 impl AnswerReadyStateProjection {
+    /// Returns the answer-ready view of each answer slot.
     pub fn resolved_answer_slots(&self) -> Vec<ResolvedAnswerSlot> {
         let mut resolved = self
             .support

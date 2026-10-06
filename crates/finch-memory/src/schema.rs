@@ -3,25 +3,25 @@ use finch_types::{
     MetricType,
 };
 
-pub const EPISODES_COLLECTION: &str = "memory_episodes";
-pub const SPANS_COLLECTION: &str = "memory_spans";
-pub const ARTIFACTS_COLLECTION: &str = "memory_artifacts";
-pub const CORRECTIONS_COLLECTION: &str = "memory_corrections";
-pub const TERMS_COLLECTION: &str = "memory_terms";
+pub(crate) const EPISODES_COLLECTION: &str = "memory_episodes";
+pub(crate) const SPANS_COLLECTION: &str = "memory_spans";
+pub(crate) const ARTIFACTS_COLLECTION: &str = "memory_artifacts";
+pub(crate) const CORRECTIONS_COLLECTION: &str = "memory_corrections";
+pub(crate) const TERMS_COLLECTION: &str = "memory_terms";
 
-pub const CLAIMS_COLLECTION: &str = "memory_claims";
-pub const PROFILES_COLLECTION: &str = "memory_profiles";
-pub const ENTITIES_COLLECTION: &str = "memory_entities";
-pub const ENTITY_ALIASES_COLLECTION: &str = "memory_entity_aliases";
-pub const EDGES_COLLECTION: &str = "memory_edges";
-pub const RULES_COLLECTION: &str = "memory_rules";
-pub const STATE_RECORDS_COLLECTION: &str = "memory_state_records";
-pub const DEPENDENCY_TRACES_COLLECTION: &str = "memory_dependency_traces";
-pub const SLOTS_COLLECTION: &str = "memory_slots";
-pub const SLOT_ALIASES_COLLECTION: &str = "memory_slot_aliases";
+pub(crate) const CLAIMS_COLLECTION: &str = "memory_claims";
+pub(crate) const PROFILES_COLLECTION: &str = "memory_profiles";
+pub(crate) const ENTITIES_COLLECTION: &str = "memory_entities";
+pub(crate) const ENTITY_ALIASES_COLLECTION: &str = "memory_entity_aliases";
+pub(crate) const EDGES_COLLECTION: &str = "memory_edges";
+pub(crate) const RULES_COLLECTION: &str = "memory_rules";
+pub(crate) const STATE_RECORDS_COLLECTION: &str = "memory_state_records";
+pub(crate) const DEPENDENCY_TRACES_COLLECTION: &str = "memory_dependency_traces";
+pub(crate) const SLOTS_COLLECTION: &str = "memory_slots";
+pub(crate) const SLOT_ALIASES_COLLECTION: &str = "memory_slot_aliases";
 
 /// String fields with an inverted index in every memory collection that has them.
-pub const INDEXED_STRING_FIELDS: [&str; 3] = ["space_id", "slot_id", "subject_entity_id"];
+pub(crate) const INDEXED_STRING_FIELDS: [&str; 3] = ["space_id", "slot_id", "subject_entity_id"];
 
 pub(crate) fn string_index_params() -> IndexParams {
     IndexParams::Invert(InvertIndexParams::default())
@@ -70,7 +70,7 @@ fn add_scope_fields(schema: CollectionSchema) -> CollectionSchema {
         .with_field(string_field("policy_tags_json"))
 }
 
-pub fn episode_schema() -> CollectionSchema {
+pub(crate) fn episode_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(EPISODES_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -90,7 +90,7 @@ pub fn episode_schema() -> CollectionSchema {
         .with_field(string_field("metadata_json"))
 }
 
-pub fn artifact_schema() -> CollectionSchema {
+pub(crate) fn artifact_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(ARTIFACTS_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -110,11 +110,11 @@ pub fn artifact_schema() -> CollectionSchema {
         .with_field(string_field("metadata_json"))
 }
 
-pub fn span_schema(embedding_dim: usize) -> CollectionSchema {
+pub(crate) fn span_schema(embedding_dim: usize) -> CollectionSchema {
     span_schema_with_hnsw(embedding_dim, HnswIndexParams::new(MetricType::Cosine))
 }
 
-pub fn span_schema_with_hnsw(
+pub(crate) fn span_schema_with_hnsw(
     embedding_dim: usize,
     hnsw_params: HnswIndexParams,
 ) -> CollectionSchema {
@@ -147,7 +147,7 @@ pub fn span_schema_with_hnsw(
         ))
 }
 
-pub fn correction_schema() -> CollectionSchema {
+pub(crate) fn correction_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(CORRECTIONS_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -176,7 +176,7 @@ pub fn correction_schema() -> CollectionSchema {
         .with_field(string_field("metadata_json"))
 }
 
-pub fn term_schema() -> CollectionSchema {
+pub(crate) fn term_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(TERMS_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("term"))
@@ -185,7 +185,7 @@ pub fn term_schema() -> CollectionSchema {
         .with_field(i64_field("doc_len"))
 }
 
-pub fn claim_schema(embedding_dim: usize) -> CollectionSchema {
+pub(crate) fn claim_schema(embedding_dim: usize) -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(CLAIMS_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -213,7 +213,7 @@ pub fn claim_schema(embedding_dim: usize) -> CollectionSchema {
         .with_field(vector_field("embedding", embedding_dim))
 }
 
-pub fn profile_schema() -> CollectionSchema {
+pub(crate) fn profile_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(PROFILES_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -230,7 +230,7 @@ pub fn profile_schema() -> CollectionSchema {
         .with_field(i64_field("correction_watermark"))
 }
 
-pub fn entity_schema(embedding_dim: usize) -> CollectionSchema {
+pub(crate) fn entity_schema(embedding_dim: usize) -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(ENTITIES_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -244,7 +244,7 @@ pub fn entity_schema(embedding_dim: usize) -> CollectionSchema {
         .with_field(vector_field("embedding", embedding_dim))
 }
 
-pub fn entity_alias_schema() -> CollectionSchema {
+pub(crate) fn entity_alias_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(ENTITY_ALIASES_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -256,7 +256,7 @@ pub fn entity_alias_schema() -> CollectionSchema {
         .with_field(i64_field("superseded_at_ms"))
 }
 
-pub fn slot_alias_schema() -> CollectionSchema {
+pub(crate) fn slot_alias_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(SLOT_ALIASES_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -271,7 +271,7 @@ pub fn slot_alias_schema() -> CollectionSchema {
         .with_field(i64_field("superseded_at_ms"))
 }
 
-pub fn edge_schema() -> CollectionSchema {
+pub(crate) fn edge_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(EDGES_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -285,7 +285,7 @@ pub fn edge_schema() -> CollectionSchema {
         .with_field(f32_field("confidence"))
 }
 
-pub fn rule_schema() -> CollectionSchema {
+pub(crate) fn rule_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(RULES_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("status"))
@@ -316,7 +316,7 @@ pub fn rule_schema() -> CollectionSchema {
         .with_field(f32_field("confidence"))
 }
 
-pub fn state_record_schema() -> CollectionSchema {
+pub(crate) fn state_record_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(STATE_RECORDS_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("state_key"))
@@ -346,7 +346,7 @@ pub fn state_record_schema() -> CollectionSchema {
         .with_field(i64_field("superseded_at_ms"))
 }
 
-pub fn dependency_trace_schema() -> CollectionSchema {
+pub(crate) fn dependency_trace_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(DEPENDENCY_TRACES_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("trace_key"))
@@ -374,7 +374,7 @@ pub fn dependency_trace_schema() -> CollectionSchema {
         .with_field(i64_field("superseded_at_ms"))
 }
 
-pub fn slot_schema() -> CollectionSchema {
+pub(crate) fn slot_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(SLOTS_COLLECTION))
         .with_field(string_field("id"))
         .with_field(string_field("slot_key"))
@@ -395,7 +395,7 @@ pub fn slot_schema() -> CollectionSchema {
         .with_field(i64_field("superseded_at_ms"))
 }
 
-pub fn active_collection_schemas(embedding_dim: usize) -> Vec<CollectionSchema> {
+pub(crate) fn active_collection_schemas(embedding_dim: usize) -> Vec<CollectionSchema> {
     vec![
         episode_schema(),
         artifact_schema(),
@@ -415,11 +415,6 @@ pub fn active_collection_schemas(embedding_dim: usize) -> Vec<CollectionSchema> 
     ]
 }
 
-pub fn future_collection_schemas(embedding_dim: usize) -> Vec<CollectionSchema> {
-    let _ = embedding_dim;
-    Vec::new()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,13 +422,6 @@ mod tests {
     #[test]
     fn active_memory_schemas_validate() {
         for schema in active_collection_schemas(1536) {
-            schema.validate().unwrap();
-        }
-    }
-
-    #[test]
-    fn future_memory_schemas_validate() {
-        for schema in future_collection_schemas(1536) {
             schema.validate().unwrap();
         }
     }
@@ -449,10 +437,7 @@ mod tests {
 
     #[test]
     fn all_schemas_include_scope_fields() {
-        for schema in active_collection_schemas(128)
-            .into_iter()
-            .chain(future_collection_schemas(128))
-        {
+        for schema in active_collection_schemas(128) {
             assert!(schema.has_field("space_id"));
             assert!(schema.has_field("visibility"));
             assert!(schema.has_field("policy_tags_json"));

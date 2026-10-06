@@ -1,6 +1,7 @@
 use super::*;
 
 impl MemoryStore {
+    /// Returns the top `k` spans that match the query terms, from at most `scan_limit` candidates.
     pub fn keyword_search_spans(
         &self,
         scope: &MemoryScope,
@@ -139,6 +140,7 @@ impl MemoryStore {
         }
     }
 
+    /// Returns the spans with the given ids that are active at `at_ms`.
     pub fn fetch_spans_by_ids(
         &self,
         scope: &MemoryScope,
@@ -183,6 +185,7 @@ impl MemoryStore {
         )
     }
 
+    /// Runs vector and keyword search and fuses the two rankings.
     pub fn hybrid_search_spans(
         &self,
         scope: &MemoryScope,

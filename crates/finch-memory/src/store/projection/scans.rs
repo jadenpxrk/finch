@@ -1,6 +1,7 @@
 use super::*;
 
 impl MemoryStore {
+    /// Returns up to `limit` projected state records visible at the scan times.
     pub fn scan_state_records(
         &self,
         scope: &MemoryScope,
@@ -208,7 +209,7 @@ impl MemoryStore {
         Ok(by_id.into_values().collect())
     }
 
-    pub fn scan_dependency_traces(
+    pub(crate) fn scan_dependency_traces(
         &self,
         scope: &MemoryScope,
         limit: usize,
@@ -290,6 +291,7 @@ impl MemoryStore {
         Ok(records)
     }
 
+    /// Returns up to `limit` canonical slots valid at `at_ms`.
     pub fn scan_slots(
         &self,
         scope: &MemoryScope,

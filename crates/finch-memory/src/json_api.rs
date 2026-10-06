@@ -2,15 +2,17 @@ use crate::{
     add_correction, build_answer_ready_state_context, build_context, build_query_state_context,
     evaluate_retrieval_baseline, evaluate_span_hits_with_admission, lexical_terms, AnswerEmission,
     AnswerReadyStateRequest, AnswerSupportContract, ArtifactRecord, BiTemporalQuery, ChunkOptions,
-    ClaimRecord, ContextInput, ContextOptions, CorrectionInput, EdgeInput, EntityInput,
-    EpisodeInput, HybridSpanSearch, ManualClaimInput, MemoryScope, MemoryStore, ProfileInput,
-    SlotAliasInput, SpanSearchHit, StateMutationBatch, StateReadSelection,
+    ContextInput, ContextOptions, CorrectionInput, EdgeInput, EntityInput, EpisodeInput,
+    HybridSpanSearch, ManualClaimInput, MemoryScope, MemoryStore, ProfileInput, SlotAliasInput,
+    SpanSearchHit, StateMutationBatch, StateReadSelection,
 };
 use finch_types::{Status, ZResult};
 use serde::Deserialize;
 use std::collections::HashSet;
 
 impl MemoryStore {
+    /// Validates a JSON answer emission against a JSON support contract. Returns the result as
+    /// JSON.
     pub fn validate_answer_emission_json(
         &self,
         scope_json: &str,
@@ -26,6 +28,7 @@ impl MemoryStore {
         serde_json::to_string(&validated).map_err(json_status)
     }
 
+    /// Validates a JSON answer emission against a JSON context packet. Returns the result as JSON.
     pub fn validate_answer_context_json(
         &self,
         scope_json: &str,
@@ -41,6 +44,8 @@ impl MemoryStore {
         serde_json::to_string(&validated).map_err(json_status)
     }
 
+    /// Validates a JSON answer emission against a JSON context packet. Returns the grounded answer
+    /// as JSON.
     pub fn finalize_answer_context_json(
         &self,
         scope_json: &str,
@@ -56,12 +61,14 @@ impl MemoryStore {
         serde_json::to_string(&grounded).map_err(json_status)
     }
 
+    /// Applies a JSON state mutation batch. Returns the result as JSON.
     pub fn apply_state_mutation_batch_json(&self, batch_json: &str) -> ZResult<String> {
         let batch = serde_json::from_str::<StateMutationBatch>(batch_json).map_err(json_status)?;
         let result = self.apply_state_mutation_batch(batch)?;
         serde_json::to_string(&result).map_err(json_status)
     }
 
+    /// Projects answer-ready state for a JSON request. Returns the projection as JSON.
     pub fn project_answer_ready_state_json(&self, request_json: &str) -> ZResult<String> {
         let request = serde_json::from_str::<AnswerReadyStateJsonRequest>(request_json)
             .map_err(json_status)?;
@@ -81,6 +88,7 @@ impl MemoryStore {
         serde_json::to_string(&projection).map_err(json_status)
     }
 
+    /// Ingests a JSON episode and writes it. Returns the episode and its spans as JSON.
     pub fn ingest_episode_json(
         &self,
         input_json: &str,
@@ -96,12 +104,14 @@ impl MemoryStore {
         serde_json::to_string(&ingested).map_err(json_status)
     }
 
+    /// Writes a JSON artifact record. Returns the record as JSON.
     pub fn append_artifact_json(&self, record_json: &str) -> ZResult<String> {
         let artifact = serde_json::from_str::<ArtifactRecord>(record_json).map_err(json_status)?;
         self.append_artifact(&artifact)?;
         serde_json::to_string(&artifact).map_err(json_status)
     }
 
+    /// Cuts artifact text into spans and writes the artifact and spans. Returns them as JSON.
     pub fn ingest_artifact_text_json(
         &self,
         record_json: &str,
@@ -117,6 +127,7 @@ impl MemoryStore {
         serde_json::to_string(&ingested).map_err(json_status)
     }
 
+    /// Writes a correction from JSON input. Returns the record as JSON.
     pub fn add_correction_json(&self, input_json: &str, created_at_ms: i64) -> ZResult<String> {
         let input = serde_json::from_str::<CorrectionInput>(input_json).map_err(json_status)?;
         let correction = add_correction(input, created_at_ms);
@@ -124,6 +135,7 @@ impl MemoryStore {
         serde_json::to_string(&correction).map_err(json_status)
     }
 
+    /// Writes a claim from JSON input with an optional embedding. Returns the record as JSON.
     pub fn add_manual_claim_json(
         &self,
         input_json: &str,
@@ -134,12 +146,14 @@ impl MemoryStore {
         serde_json::to_string(&claim).map_err(json_status)
     }
 
+    /// Writes a profile from JSON input. Returns the record as JSON.
     pub fn add_profile_json(&self, input_json: &str) -> ZResult<String> {
         let input = serde_json::from_str::<ProfileInput>(input_json).map_err(json_status)?;
         let profile = self.add_profile(input)?;
         serde_json::to_string(&profile).map_err(json_status)
     }
 
+    /// Writes an entity from JSON input with an optional embedding. Returns the record as JSON.
     pub fn add_entity_json(
         &self,
         input_json: &str,
@@ -150,18 +164,21 @@ impl MemoryStore {
         serde_json::to_string(&entity).map_err(json_status)
     }
 
+    /// Writes an entity edge from JSON input. Returns the record as JSON.
     pub fn add_edge_json(&self, input_json: &str) -> ZResult<String> {
         let input = serde_json::from_str::<EdgeInput>(input_json).map_err(json_status)?;
         let edge = self.add_edge(input)?;
         serde_json::to_string(&edge).map_err(json_status)
     }
 
+    /// Writes a slot alias from JSON input. Returns the record as JSON.
     pub fn add_slot_alias_json(&self, input_json: &str, recorded_at_ms: i64) -> ZResult<String> {
         let input = serde_json::from_str::<SlotAliasInput>(input_json).map_err(json_status)?;
         let alias = self.add_slot_alias(input, recorded_at_ms)?;
         serde_json::to_string(&alias).map_err(json_status)
     }
 
+    /// Returns up to `limit` slot aliases valid at `at_ms`, as JSON.
     pub fn scan_slot_aliases_json(
         &self,
         scope_json: &str,
@@ -173,6 +190,7 @@ impl MemoryStore {
         serde_json::to_string(&aliases).map_err(json_status)
     }
 
+    /// Returns the `k` spans nearest to the embedding, as JSON.
     pub fn query_spans_json(
         &self,
         scope_json: &str,
@@ -185,6 +203,7 @@ impl MemoryStore {
         serde_json::to_string(&hits).map_err(json_status)
     }
 
+    /// Returns the top `k` spans that match the query terms, as JSON.
     pub fn keyword_search_spans_json(
         &self,
         scope_json: &str,
@@ -198,6 +217,7 @@ impl MemoryStore {
         serde_json::to_string(&hits).map_err(json_status)
     }
 
+    /// Returns the top `k` fused hits of vector and keyword search, as JSON.
     pub fn hybrid_search_spans_json(
         &self,
         scope_json: &str,
@@ -223,6 +243,7 @@ impl MemoryStore {
         serde_json::to_string(&hits).map_err(json_status)
     }
 
+    /// Returns the vector, keyword, and fused hits of a hybrid search, as JSON.
     pub fn hybrid_search_spans_debug_json(
         &self,
         scope_json: &str,
@@ -246,6 +267,7 @@ impl MemoryStore {
         serde_json::to_string(&debug).map_err(json_status)
     }
 
+    /// Adds neighbor spans around each JSON hit. Returns the hits as JSON.
     pub fn complete_span_evidence_json(
         &self,
         scope_json: &str,
@@ -262,6 +284,7 @@ impl MemoryStore {
         serde_json::to_string(&completed).map_err(json_status)
     }
 
+    /// Scores JSON hits against JSON span and token lists. Returns the metrics as JSON.
     pub fn evaluate_span_hits_json(
         &self,
         hits_json: &str,
@@ -281,6 +304,7 @@ impl MemoryStore {
         serde_json::to_string(&metrics).map_err(json_status)
     }
 
+    /// Compares vector, keyword, and hybrid hits from a JSON request. Returns the report as JSON.
     pub fn evaluate_retrieval_baseline_json(&self, request_json: &str) -> ZResult<String> {
         let request = serde_json::from_str::<RetrievalBaselineJsonRequest>(request_json)
             .map_err(json_status)?;
@@ -298,12 +322,14 @@ impl MemoryStore {
         serde_json::to_string(&report).map_err(json_status)
     }
 
+    /// Returns up to `limit` corrections, as JSON.
     pub fn scan_corrections_json(&self, scope_json: &str, limit: usize) -> ZResult<String> {
         let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
         let records = self.scan_corrections(&scope, limit)?;
         serde_json::to_string(&records).map_err(json_status)
     }
 
+    /// Returns up to `limit` active claim versions valid at `at_ms`, as JSON.
     pub fn scan_claims_json(
         &self,
         scope_json: &str,
@@ -315,6 +341,7 @@ impl MemoryStore {
         serde_json::to_string(&records).map_err(json_status)
     }
 
+    /// Returns up to `limit` current claims valid at `at_ms`, as JSON.
     pub fn scan_current_claims_json(
         &self,
         scope_json: &str,
@@ -326,6 +353,7 @@ impl MemoryStore {
         serde_json::to_string(&records).map_err(json_status)
     }
 
+    /// Returns up to `limit` artifacts valid at `at_ms`, as JSON.
     pub fn scan_artifacts_json(
         &self,
         scope_json: &str,
@@ -337,6 +365,7 @@ impl MemoryStore {
         serde_json::to_string(&records).map_err(json_status)
     }
 
+    /// Returns up to `limit` profiles valid at `at_ms`, as JSON.
     pub fn scan_profiles_json(
         &self,
         scope_json: &str,
@@ -348,12 +377,15 @@ impl MemoryStore {
         serde_json::to_string(&records).map_err(json_status)
     }
 
+    /// Returns up to `limit` active entities, as JSON.
     pub fn scan_entities_json(&self, scope_json: &str, limit: usize) -> ZResult<String> {
         let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
         let records = self.scan_entities(&scope, limit)?;
         serde_json::to_string(&records).map_err(json_status)
     }
 
+    /// Follows entity edges from the seed entities up to `max_depth` hops. Returns the ranked edges
+    /// as JSON.
     pub fn expand_edges_json(
         &self,
         scope_json: &str,
@@ -369,6 +401,7 @@ impl MemoryStore {
         serde_json::to_string(&hits).map_err(json_status)
     }
 
+    /// Builds a context packet from JSON hits. Returns the packet as JSON.
     pub fn build_context_json(
         &self,
         hits_json: &str,
@@ -386,6 +419,8 @@ impl MemoryStore {
         serde_json::to_string(&context).map_err(json_status)
     }
 
+    /// Builds a context packet from profiles, current claims, artifacts, and the JSON hits. Returns
+    /// it as JSON.
     pub fn build_memory_context_json(&self, request_json: &str) -> ZResult<String> {
         let _state_guard = self.lock_state_read()?;
         let request =
@@ -519,7 +554,7 @@ fn default_state_limit() -> usize {
 
 /// Record limits, valid time, and packing budget shared by the context requests.
 #[derive(Debug, Deserialize)]
-pub struct ContextLimitsJson {
+pub(crate) struct ContextLimitsJson {
     pub profile_limit: usize,
     pub claim_limit: usize,
     pub artifact_limit: usize,
@@ -549,7 +584,7 @@ pub struct MemoryContextJsonRequest {
 
 /// Evidence retrieval for an answer context: hybrid span search plus answer-target slots.
 #[derive(Debug, Deserialize)]
-pub struct AnswerContextSearchJson {
+pub(crate) struct AnswerContextSearchJson {
     pub query_embedding: Vec<f32>,
     pub k: usize,
     pub scan_limit: usize,
@@ -589,31 +624,6 @@ fn json_status(err: serde_json::Error) -> Status {
 
 fn expanded_limit(limit: usize) -> usize {
     limit.saturating_mul(8).max(limit)
-}
-
-pub fn filter_claims_by_query_text(
-    claims: Vec<ClaimRecord>,
-    query_text: &str,
-    limit: usize,
-) -> Vec<ClaimRecord> {
-    let terms = unique_terms(lexical_terms(query_text));
-    filter_claims_by_query(claims, &terms, limit)
-}
-
-fn filter_claims_by_query(
-    claims: Vec<ClaimRecord>,
-    terms: &[String],
-    limit: usize,
-) -> Vec<ClaimRecord> {
-    rank_and_filter(claims, terms, limit, |claim| {
-        format!(
-            "{} {} {} {}",
-            claim.claim_text,
-            claim.subject.as_deref().unwrap_or(""),
-            claim.predicate.as_deref().unwrap_or(""),
-            claim.object_value.as_deref().unwrap_or("")
-        )
-    })
 }
 
 fn filter_artifacts_by_query(

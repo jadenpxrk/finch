@@ -30,25 +30,35 @@ pub struct HybridSourceDiverseOptions {
 
 /// The query side of one hybrid source-diverse retrieval.
 pub struct HybridSourceDiverseQuery<'a> {
+    /// Embedding of the query.
     pub query_embedding: Vec<f32>,
+    /// Query text for keyword matching.
     pub query_text: &'a str,
     /// Lexical expansion queries fused with the main query.
     pub expansions: &'a [ExpansionQuery],
     /// Queries for the supplemental retrieval round.
     pub supplemental_queries: &'a [ExpansionQuery],
+    /// Source lexical index to search.
     pub index: &'a SourceLexicalIndex,
+    /// Valid time to read at, in Unix ms. `None` means no time filter.
     pub at_ms: Option<i64>,
 }
 
+/// A source and the number of its spans to read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceSpanSelection {
+    /// Id of the source to read.
     pub source_id: String,
+    /// Maximum number of spans to read from the source.
     pub max_spans: usize,
 }
 
+/// An extra query that widens a retrieval.
 #[derive(Debug, Clone)]
 pub struct ExpansionQuery {
+    /// Query text.
     pub text: String,
+    /// Embedding of the query. `None` means keyword search only.
     pub embedding: Option<Vec<f32>>,
 }
 
@@ -293,6 +303,7 @@ impl MemoryStore {
         insert_many(&self.terms, term_docs_for_span(span))
     }
 
+    /// Cuts an episode into spans and writes the episode and spans.
     pub fn ingest_episode(
         &self,
         input: EpisodeInput,
@@ -307,6 +318,7 @@ impl MemoryStore {
         Ok(ingested)
     }
 
+    /// Returns the `k` spans nearest to the embedding, after corrections.
     pub fn query_spans(
         &self,
         scope: &MemoryScope,
@@ -330,7 +342,8 @@ impl MemoryStore {
         Ok(hits)
     }
 
-    pub fn query_source_diverse_spans(
+    #[cfg(test)]
+    pub(crate) fn query_source_diverse_spans(
         &self,
         scope: &MemoryScope,
         query_embedding: Vec<f32>,
@@ -394,6 +407,7 @@ impl MemoryStore {
         self.hydrate_selected_sources(scope, selections, &ranked, index, at_ms)
     }
 
+    /// Reads the spans each selection asks for and merges them with the prior hits.
     pub fn hydrate_selected_sources(
         &self,
         scope: &MemoryScope,
@@ -581,6 +595,7 @@ impl MemoryStore {
             .collect())
     }
 
+    /// Returns the slot ids of the `k` claims nearest to the embedding.
     pub fn query_claim_slot_ids(
         &self,
         scope: &MemoryScope,
@@ -592,7 +607,7 @@ impl MemoryStore {
         self.ranked_claim_vector_slot_ids(scope, query_embedding, k, at_ms)
     }
 
-    pub fn query_current_state_slot_ids(
+    pub(crate) fn query_current_state_slot_ids(
         &self,
         scope: &MemoryScope,
         query_embedding: Vec<f32>,
@@ -715,7 +730,8 @@ impl MemoryStore {
             .collect())
     }
 
-    pub fn query_spans_with_corrections(
+    #[cfg(test)]
+    pub(crate) fn query_spans_with_corrections(
         &self,
         scope: &MemoryScope,
         query_embedding: Vec<f32>,
@@ -773,6 +789,7 @@ impl MemoryStore {
         Ok(hits)
     }
 
+    /// Returns up to `limit` active spans valid at `at_ms`.
     pub fn scan_spans(
         &self,
         scope: &MemoryScope,
@@ -809,6 +826,7 @@ impl MemoryStore {
         Ok(spans)
     }
 
+    /// Adds up to `before` and `after` neighbor spans around each hit.
     pub fn complete_span_evidence(
         &self,
         scope: &MemoryScope,
@@ -873,6 +891,7 @@ impl MemoryStore {
         Ok(apply_corrections_to_span_hits_at(&out, &corrections, at_ms))
     }
 
+    /// Returns up to `limit` corrections.
     pub fn scan_corrections(
         &self,
         scope: &MemoryScope,
@@ -939,7 +958,7 @@ impl MemoryStore {
         Ok(corrections)
     }
 
-    pub fn scan_context_corrections(
+    pub(crate) fn scan_context_corrections(
         &self,
         scope: &MemoryScope,
         claims: &[ClaimRecord],
@@ -987,7 +1006,7 @@ impl MemoryStore {
             .collect()
     }
 
-    pub fn scan_artifacts(
+    pub(crate) fn scan_artifacts(
         &self,
         scope: &MemoryScope,
         limit: usize,
@@ -1014,6 +1033,7 @@ impl MemoryStore {
         Ok(artifacts)
     }
 
+    /// Returns up to `limit` active claim versions valid at `at_ms`.
     pub fn scan_claims(
         &self,
         scope: &MemoryScope,
@@ -1083,6 +1103,7 @@ impl MemoryStore {
         Ok(slot_ids)
     }
 
+    /// Returns up to `limit` current claims, after corrections and newest-wins resolution.
     pub fn scan_current_claims(
         &self,
         scope: &MemoryScope,
@@ -1297,7 +1318,7 @@ impl MemoryStore {
         Ok(claims)
     }
 
-    pub fn scan_profiles(
+    pub(crate) fn scan_profiles(
         &self,
         scope: &MemoryScope,
         limit: usize,
@@ -1422,6 +1443,7 @@ fn fuse_ranked_slot_ids(vector: &[MemoryId], lexical: &[MemoryId], k: usize) -> 
         .collect()
 }
 
+#[cfg(test)]
 fn source_diverse_span_hits(
     hits: Vec<SpanSearchHit>,
     max_sources: usize,

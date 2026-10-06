@@ -74,6 +74,7 @@ fn projection_proof_span_ids(projection: &AnswerReadyStateProjection) -> Vec<Mem
 }
 
 impl MemoryStore {
+    /// Adds the proof spans of the answer slots of a projection to the retrieved hits.
     pub fn hydrate_answer_ready_state_evidence(
         &self,
         scope: &MemoryScope,
@@ -127,6 +128,7 @@ impl MemoryStore {
         Ok(hydrated)
     }
 
+    /// Selects the claims, sets, histories, rules, and corrections that answer one query.
     pub fn project_answer_ready_state(
         &self,
         scope: &MemoryScope,

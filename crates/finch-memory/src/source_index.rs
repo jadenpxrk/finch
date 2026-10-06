@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::retrieval::lexical_terms;
 
+/// Format name that the manifest of a source lexical index must hold.
 pub const SOURCE_LEXICAL_INDEX_FORMAT: &str = "finch-source-lexical-index-v5";
 
 const MANIFEST_FILE: &str = "manifest.json";
@@ -54,9 +55,12 @@ struct SourceRow {
     spans: Vec<String>,
 }
 
+/// A source that a lexical index search returned, with its BM25 score.
 #[derive(Debug, Clone)]
 pub struct SourceLexicalHit {
+    /// Id of the source that matched.
     pub source_id: String,
+    /// BM25 score. A higher score ranks first.
     pub score: f32,
 }
 
@@ -83,6 +87,7 @@ pub struct SourceLexicalIndexBuilder {
 }
 
 impl SourceLexicalIndexBuilder {
+    /// Returns an empty builder.
     pub fn new() -> Self {
         Self::default()
     }
@@ -122,6 +127,7 @@ impl SourceLexicalIndexBuilder {
         Ok(())
     }
 
+    /// Returns the number of sources added.
     pub fn source_count(&self) -> usize {
         self.sources.len()
     }
@@ -222,6 +228,7 @@ pub struct SourceLexicalIndex {
 }
 
 impl SourceLexicalIndex {
+    /// Opens the index in `dir`. Fails when the format does not match.
     pub fn open(dir: &Path) -> ZResult<Self> {
         let manifest: SourceLexicalManifest = serde_json::from_reader(BufReader::new(
             File::open(dir.join(MANIFEST_FILE)).map_err(Status::from)?,
@@ -298,6 +305,7 @@ impl SourceLexicalIndex {
         })
     }
 
+    /// Returns the number of indexed sources.
     pub fn source_count(&self) -> usize {
         self.sources.len()
     }

@@ -1,7 +1,7 @@
 use super::*;
 
 impl MemoryStore {
-    pub fn validate_answer_context(
+    pub(crate) fn validate_answer_context(
         &self,
         scope: &MemoryScope,
         context: &CompiledMemoryContext,
@@ -12,7 +12,7 @@ impl MemoryStore {
         Ok(validated)
     }
 
-    pub fn finalize_answer_context(
+    pub(crate) fn finalize_answer_context(
         &self,
         scope: &MemoryScope,
         context: &CompiledMemoryContext,
@@ -47,7 +47,7 @@ impl MemoryStore {
         }))
     }
 
-    pub fn validate_answer_emission(
+    pub(crate) fn validate_answer_emission(
         &self,
         scope: &MemoryScope,
         support: &AnswerSupportContract,
@@ -77,7 +77,7 @@ impl MemoryStore {
     }
 }
 
-pub fn validate_packed_answer_emission(
+pub(crate) fn validate_packed_answer_emission(
     context: &CompiledMemoryContext,
     emission: AnswerEmission,
 ) -> ZResult<ValidatedAnswerEmission> {

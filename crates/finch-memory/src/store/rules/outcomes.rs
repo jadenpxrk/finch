@@ -913,6 +913,7 @@ fn closure_candidates(
 }
 
 /// Whether an active, bound rule in force at `at_ms` targets `slot`, exactly or subject-wide.
+#[cfg(test)]
 pub(super) fn rule_governs_target_slot(
     rule: &RuleRecord,
     scope: &MemoryScope,

@@ -1,19 +1,24 @@
+pub use crate::types::EntityInput;
 use crate::types::{
     ActorKind, ArtifactRecord, ClaimKind, ClaimPolarity, ClaimRecord, CorrectionAuthority,
     CorrectionOperation, CorrectionRecord, EdgeRecord, EntityRecord, EpisodeRecord, MemoryId,
     MemoryScope, MemoryStatus, ProfileRecord, ProvenanceRef, SourceKind, SourceType, SpanRecord,
     TemporalFields, Visibility,
 };
-pub use crate::types::{EdgeInput, EntityInput, ProfileInput};
+pub(crate) use crate::types::{EdgeInput, ProfileInput};
 use serde::{Deserialize, Serialize};
 
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 
+/// Settings that cut text into spans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChunkOptions {
+    /// Maximum characters in one span.
     pub max_chars: usize,
+    /// Characters that two adjacent spans share.
     pub overlap_chars: usize,
+    /// Version label of the chunker that cut the spans.
     pub chunker_version: String,
 }
 
@@ -38,79 +43,135 @@ impl ChunkOptions {
     }
 }
 
+/// Input for one episode to ingest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpisodeInput {
+    /// Id for the episode. `None` makes an id from the scope, sequence, time, and content.
     pub id: Option<MemoryId>,
+    /// Memory scope that owns the record.
     pub scope: MemoryScope,
+    /// Visibility label of the record.
     pub visibility: Visibility,
+    /// Caller-defined policy labels that stay with the record.
     pub policy_tags: Vec<String>,
+    /// Kind of event the episode records.
     pub source_kind: SourceKind,
+    /// Who produced the content.
     pub actor: ActorKind,
+    /// Position of the episode in its conversation.
     pub sequence_no: i64,
+    /// Time the event occurred, in Unix ms. `None` means unknown.
     pub event_time_ms: Option<i64>,
+    /// Start of the valid-time interval in Unix ms. `None` uses `event_time_ms`.
     pub valid_from_ms: Option<i64>,
+    /// End of the valid-time interval in Unix ms, exclusive. `None` means no upper bound.
     pub valid_to_ms: Option<i64>,
+    /// Full text of the episode.
     pub raw_text: String,
+    /// Reference to the raw content in external storage. `None` means the text holds all content.
     pub blob_ref: Option<String>,
+    /// MIME type of the raw content.
     pub mime_type: Option<String>,
+    /// Ids of the episodes that caused this episode.
     pub causal_parent_ids: Vec<MemoryId>,
+    /// Caller metadata as a JSON string.
     pub metadata_json: Option<String>,
 }
 
+/// An episode and the spans cut from its text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestedEpisode {
+    /// Stored episode.
     pub episode: EpisodeRecord,
+    /// Spans cut from the episode text, in order.
     pub spans: Vec<SpanRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngestedArtifact {
+pub(crate) struct IngestedArtifact {
     pub artifact: ArtifactRecord,
     pub spans: Vec<SpanRecord>,
 }
 
+/// Input for one correction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorrectionInput {
+    /// Id for the correction. `None` makes the store generate one.
     pub id: Option<MemoryId>,
+    /// Memory scope that owns the record.
     pub scope: MemoryScope,
+    /// Visibility label of the record.
     pub visibility: Visibility,
+    /// Caller-defined policy labels that stay with the record.
     pub policy_tags: Vec<String>,
+    /// Change the correction makes.
     pub operation: CorrectionOperation,
+    /// Kind of record the correction targets, such as `claim`.
     pub target_type: String,
+    /// Ids of the records the correction targets.
     pub target_ids: Vec<MemoryId>,
+    /// Text that selects target records. `None` means the target ids alone select them.
     pub target_selector: Option<String>,
+    /// Replacement value. `None` means the operation sets no value.
     pub new_value: Option<String>,
+    /// Reason for the correction, in free text.
     pub reason: Option<String>,
+    /// Who produced the content.
     pub actor: ActorKind,
+    /// Who made the correction.
     pub authority: CorrectionAuthority,
+    /// Time the correction takes effect, in Unix ms. `None` means the creation time.
     pub effective_at_ms: Option<i64>,
+    /// Start of the valid time the correction changes, in Unix ms. `None` means no lower bound.
     pub applies_valid_from_ms: Option<i64>,
+    /// End of the valid time the correction changes, in Unix ms. `None` means no upper bound.
     pub applies_valid_to_ms: Option<i64>,
+    /// How the correction spreads to dependent records. `None` means the default policy.
     pub cascade_policy: Option<String>,
+    /// Caller metadata as a JSON string.
     pub metadata_json: Option<String>,
 }
 
+/// Input for a claim that a caller states directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManualClaimInput {
+    /// Id for the claim. `None` makes the store generate one.
     pub id: Option<MemoryId>,
+    /// Memory scope that owns the record.
     pub scope: MemoryScope,
+    /// Visibility label of the record.
     pub visibility: Visibility,
+    /// Caller-defined policy labels that stay with the record.
     pub policy_tags: Vec<String>,
+    /// Statement of the claim in natural language.
     pub claim_text: String,
+    /// Subject text as the evidence states it.
     pub subject: Option<String>,
+    /// Predicate text as the evidence states it.
     pub predicate: Option<String>,
+    /// Value the record states for its slot.
     pub object_value: Option<String>,
+    /// Category of the claim.
     pub claim_kind: ClaimKind,
+    /// Whether the claim asserts, denies, or is not certain.
     pub polarity: ClaimPolarity,
+    /// Ids of the evidence spans that support the record.
     pub source_span_ids: Vec<MemoryId>,
+    /// Ids of the episodes that support the record.
     pub source_episode_ids: Vec<MemoryId>,
+    /// Name of the extractor or person that made the claim.
     pub asserted_by: String,
+    /// Confidence score. `None` means the source gave no score.
     pub confidence: Option<f32>,
+    /// Time the evidence was observed, in Unix ms.
     pub observed_at_ms: i64,
+    /// Start of the valid-time interval in Unix ms, inclusive. `None` means no lower bound.
     pub valid_from_ms: Option<i64>,
+    /// End of the valid-time interval in Unix ms, exclusive. `None` means no upper bound.
     pub valid_to_ms: Option<i64>,
 }
 
+/// Returns a 64-bit FNV-1a hash of the parts as 16 hex digits.
 pub fn stable_hash_hex(parts: &[&str]) -> String {
     let mut hash = FNV_OFFSET;
     for part in parts {
@@ -124,6 +185,7 @@ pub fn stable_hash_hex(parts: &[&str]) -> String {
     format!("{hash:016x}")
 }
 
+/// Makes an episode record and cuts its text into spans. It writes nothing.
 pub fn ingest_episode(
     input: EpisodeInput,
     ingested_at_ms: i64,
@@ -181,7 +243,7 @@ pub fn ingest_episode(
     IngestedEpisode { episode, spans }
 }
 
-pub fn chunk_artifact_text(
+pub(crate) fn chunk_artifact_text(
     artifact: &ArtifactRecord,
     text: &str,
     chunk_options: &ChunkOptions,
@@ -203,7 +265,11 @@ pub fn chunk_artifact_text(
     )
 }
 
-pub fn chunk_episode(episode: &EpisodeRecord, chunk_options: &ChunkOptions) -> Vec<SpanRecord> {
+#[cfg(test)]
+pub(crate) fn chunk_episode(
+    episode: &EpisodeRecord,
+    chunk_options: &ChunkOptions,
+) -> Vec<SpanRecord> {
     chunk_text(
         &ChunkSource {
             source_type: SourceType::Episode,
@@ -221,6 +287,7 @@ pub fn chunk_episode(episode: &EpisodeRecord, chunk_options: &ChunkOptions) -> V
     )
 }
 
+/// Makes a correction record from the input. It writes nothing.
 pub fn add_correction(input: CorrectionInput, created_at_ms: i64) -> CorrectionRecord {
     let target_hash = stable_hash_hex(
         &input
@@ -267,6 +334,7 @@ pub fn add_correction(input: CorrectionInput, created_at_ms: i64) -> CorrectionR
     }
 }
 
+/// Makes a claim record from the input. It writes nothing.
 pub fn create_manual_claim(input: ManualClaimInput) -> ClaimRecord {
     let source_hash = stable_hash_hex(
         &input
@@ -312,7 +380,7 @@ pub fn create_manual_claim(input: ManualClaimInput) -> ClaimRecord {
     }
 }
 
-pub fn create_profile(mut input: ProfileInput) -> ProfileRecord {
+pub(crate) fn create_profile(mut input: ProfileInput) -> ProfileRecord {
     let id = input.id.take().unwrap_or_else(|| {
         let evidence_ids = input
             .evidence_claim_ids
@@ -331,7 +399,7 @@ pub fn create_profile(mut input: ProfileInput) -> ProfileRecord {
     input.into_record(id)
 }
 
-pub fn create_entity(mut input: EntityInput) -> EntityRecord {
+pub(crate) fn create_entity(mut input: EntityInput) -> EntityRecord {
     let id = input.id.take().unwrap_or_else(|| {
         generated_id(
             "entity",
@@ -342,7 +410,7 @@ pub fn create_entity(mut input: EntityInput) -> EntityRecord {
     input.into_record(id)
 }
 
-pub fn create_edge(mut input: EdgeInput) -> EdgeRecord {
+pub(crate) fn create_edge(mut input: EdgeInput) -> EdgeRecord {
     let id = input.id.take().unwrap_or_else(|| {
         generated_id(
             "edge",
