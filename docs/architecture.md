@@ -354,8 +354,12 @@ connections as it needs them, up to its maximum, and a connection that the serve
 With `vector_index`, each embedding column gets an HNSW index on its halfvec form. That index
 accepts up to 4,000 dimensions and is half the size of a full-precision index. When the index
 returns fewer rows than the limit, the search runs again without it, so a narrow filter gets
-every match. Without the index, vector searches are exact. Every table has an index on space, tenant, and user, so one store
-can hold the memory of many users.
+every match. Without the index, vector searches are exact. Every table has an index on space,
+tenant, and user, so one store can hold the memory of many users.
+
+An HNSW index slows each span write. To load many spans, create the store without
+`vector_index`, write the spans, and then call `ensure_span_hnsw_index`. At 100,000 spans, this
+is about three times faster than a store that updates its index on each write.
 
 ## 15. Guarantees
 
