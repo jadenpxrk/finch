@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use pgvector::Vector;
 use postgres::types::ToSql;
 use postgres::{Client, NoTls, Row};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
@@ -52,10 +52,9 @@ impl MemoryStore {
         let embedding_dim = session.embedding_dim()?;
         let mut schemas = collection_schemas(embedding_dim, span_schema(embedding_dim));
         Self::from_tables(postgres_path(name), Some(session.clone()), |table| {
-            Ok(Arc::new(PgTable::new(
-                session.clone(),
-                take_schema(&mut schemas, table)?,
-            )?))
+            let table = PgTable::new(session.clone(), take_schema(&mut schemas, table)?)?;
+            table.load_hnsw_fields()?;
+            Ok(Arc::new(table))
         })
     }
 }
@@ -64,13 +63,18 @@ fn postgres_path(name: &str) -> PathBuf {
     PathBuf::from(format!("postgres:{name}"))
 }
 
-/// Two connections: the thread running a state mutation uses the one holding its transaction,
-/// and every other operation autocommits on the other.
+/// The thread running a state mutation uses the connection that holds its transaction; every
+/// other operation autocommits on a free connection of the pool. A closed connection reconnects
+/// before its next use.
 struct PgSession {
-    autocommit: Mutex<Client>,
+    url: String,
+    schema: String,
+    pool: Vec<Mutex<Client>>,
     transaction: Mutex<Client>,
     transaction_owner: Mutex<Option<ThreadId>>,
 }
+
+const POOL_CONNECTIONS: usize = 8;
 
 impl PgSession {
     fn connect(url: &str, schema: &str) -> ZResult<Self> {
@@ -84,21 +88,14 @@ impl PgSession {
                 "postgres store name {schema:?} must be 1-63 characters of a-z, 0-9, or _"
             )));
         }
-        let connect = || -> ZResult<Mutex<Client>> {
-            let mut client = Client::connect(url, NoTls).map_err(pg_error)?;
-            // Filtered HNSW scans keep searching until they find `LIMIT` matches, in exact order.
-            client
-                .batch_execute(&format!(
-                    "SET search_path TO {}, public; SET hnsw.ef_search = 1000; \
-                     SET hnsw.iterative_scan = strict_order;",
-                    quote(schema)
-                ))
-                .map_err(pg_error)?;
-            Ok(Mutex::new(client))
-        };
+        let pool = (0..POOL_CONNECTIONS)
+            .map(|_| open_connection(url, schema).map(Mutex::new))
+            .collect::<ZResult<Vec<_>>>()?;
         Ok(Self {
-            autocommit: connect()?,
-            transaction: connect()?,
+            url: url.to_string(),
+            schema: schema.to_string(),
+            pool,
+            transaction: Mutex::new(open_connection(url, schema)?),
             transaction_owner: Mutex::new(None),
         })
     }
@@ -120,16 +117,56 @@ impl PgSession {
 
     fn with_client<T>(
         &self,
-        run: impl FnOnce(&mut Client) -> Result<T, postgres::Error>,
+        mut run: impl FnMut(&mut Client) -> Result<T, postgres::Error>,
     ) -> ZResult<T> {
         let in_transaction = *self.transaction_owner.lock() == Some(thread::current().id());
         let mut client = if in_transaction {
             self.transaction.lock()
         } else {
-            self.autocommit.lock()
+            self.pool
+                .iter()
+                .find_map(|client| client.try_lock())
+                .unwrap_or_else(|| self.pool[pool_slot(self.pool.len())].lock())
         };
-        run(&mut client).map_err(pg_error)
+        // A transaction's connection must not reconnect: its uncommitted writes are gone.
+        if in_transaction {
+            return run(&mut client).map_err(pg_error);
+        }
+        if client.is_closed() {
+            *client = open_connection(&self.url, &self.schema)?;
+        }
+        match run(&mut client) {
+            // A closed or terminated connection never ran the statement, so it runs once more.
+            Err(error) if connection_lost(&error) => {
+                *client = open_connection(&self.url, &self.schema)?;
+                run(&mut client).map_err(pg_error)
+            }
+            result => result.map_err(pg_error),
+        }
     }
+}
+
+/// A connection with the store's schema first on the search path.
+fn open_connection(url: &str, schema: &str) -> ZResult<Client> {
+    let mut client = Client::connect(url, NoTls).map_err(pg_error)?;
+    // Filtered HNSW scans keep searching until they find `LIMIT` matches, in exact order. A larger
+    // ef_search makes the planner cost the index above a full scan and skip it.
+    client
+        .batch_execute(&format!(
+            "SET search_path TO {}, public; SET hnsw.ef_search = 100; \
+             SET hnsw.iterative_scan = strict_order;",
+            quote(schema)
+        ))
+        .map_err(pg_error)?;
+    Ok(client)
+}
+
+/// A pool slot for a caller that found every connection busy, spread by thread.
+fn pool_slot(len: usize) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    thread::current().id().hash(&mut hasher);
+    (hasher.finish() % len as u64) as usize
 }
 
 impl MemoryTransactions for PgSession {
@@ -138,10 +175,11 @@ impl MemoryTransactions for PgSession {
         if owner.is_some() {
             return Err(Status::internal("a postgres transaction is already open"));
         }
-        self.transaction
-            .lock()
-            .batch_execute("BEGIN")
-            .map_err(pg_error)?;
+        let mut client = self.transaction.lock();
+        if client.is_closed() {
+            *client = open_connection(&self.url, &self.schema)?;
+        }
+        client.batch_execute("BEGIN").map_err(pg_error)?;
         *owner = Some(thread::current().id());
         Ok(())
     }
@@ -189,6 +227,8 @@ struct PgTable {
     session: Arc<PgSession>,
     name: String,
     columns: Vec<Column>,
+    // Vector fields with an HNSW index; their searches order by the indexed halfvec distance.
+    hnsw_fields: Mutex<BTreeSet<String>>,
 }
 
 impl PgTable {
@@ -222,6 +262,7 @@ impl PgTable {
             session,
             name: schema.name,
             columns,
+            hnsw_fields: Mutex::new(BTreeSet::new()),
         })
     }
 
@@ -238,17 +279,43 @@ impl PgTable {
         for column in self.columns.iter().filter(|column| column.indexed) {
             if column.kind == ColumnKind::Vector {
                 if vector_index {
-                    ddl.push_str(&hnsw_index_ddl(&self.name, &column.name, None));
+                    ddl.push_str(&hnsw_index_ddl(&self.name, column, None));
+                    self.hnsw_fields.lock().insert(column.name.clone());
                 }
-            } else {
+            } else if column.name != "space_id" {
                 ddl.push_str(&format!(
                     "CREATE INDEX ON {table} ({});",
                     quote(&column.name)
                 ));
             }
         }
+        // Scope filters test space, then tenant and user, so one index serves a store of many users.
+        ddl.push_str(&format!(
+            "CREATE INDEX ON {table} (space_id, tenant_id, user_id);"
+        ));
         self.session
             .with_client(|client| client.batch_execute(&ddl))
+    }
+
+    fn load_hnsw_fields(&self) -> ZResult<()> {
+        let indexes = self.session.with_client(|client| {
+            client.query(
+                "SELECT indexname FROM pg_indexes \
+                 WHERE schemaname = current_schema() AND tablename = $1",
+                &[&self.name],
+            )
+        })?;
+        let names = indexes
+            .iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect::<BTreeSet<_>>();
+        let mut fields = self.hnsw_fields.lock();
+        for column in self.columns.iter().filter(|c| c.kind == ColumnKind::Vector) {
+            if names.contains(&hnsw_index_name(&self.name, &column.name)) {
+                fields.insert(column.name.clone());
+            }
+        }
+        Ok(())
     }
 
     fn column(&self, name: &str) -> ZResult<&Column> {
@@ -592,6 +659,14 @@ impl MemoryTable for PgTable {
         let mut params: Vec<Param> = vec![Box::new(Vector::from(query.query_vector.clone()))];
         let filter = self.filter_clause(&query, &mut params)?;
         let field = quote(&vector.name);
+        if self.hnsw_fields.lock().contains(&vector.name) {
+            // A second sort key would keep the planner from using the HNSW index.
+            let dim = vector.dimension;
+            let tail =
+                format!("WHERE {field} IS NOT NULL AND ({filter}) ORDER BY distance LIMIT {limit}");
+            let distance = format!("({field})::halfvec({dim}) <=> $1::vector::halfvec({dim})");
+            return self.select(&columns, Some(&distance), &tail, params);
+        }
         let tail = format!(
             "WHERE {field} IS NOT NULL AND ({filter}) ORDER BY distance, seq LIMIT {limit}"
         );
@@ -605,9 +680,11 @@ impl MemoryTable for PgTable {
         _concurrency: Option<usize>,
     ) -> ZResult<()> {
         let column = self.column(field)?;
-        let ddl = hnsw_index_ddl(&self.name, &column.name, Some(&params));
+        let ddl = hnsw_index_ddl(&self.name, column, Some(&params));
         self.session
-            .with_client(|client| client.batch_execute(&ddl))
+            .with_client(|client| client.batch_execute(&ddl))?;
+        self.hnsw_fields.lock().insert(column.name.clone());
+        Ok(())
     }
 
     fn read_only(&self) -> bool {
@@ -615,7 +692,9 @@ impl MemoryTable for PgTable {
     }
 }
 
-fn hnsw_index_ddl(table: &str, field: &str, params: Option<&HnswIndexParams>) -> String {
+/// An HNSW index on the halfvec form of `column`: pgvector indexes vector columns of at most
+/// 2000 dimensions and halfvec columns of at most 4000, and halfvec halves the index size.
+fn hnsw_index_ddl(table: &str, column: &Column, params: Option<&HnswIndexParams>) -> String {
     let with = params.map_or(String::new(), |params| {
         format!(
             " WITH (m = {}, ef_construction = {})",
@@ -623,11 +702,16 @@ fn hnsw_index_ddl(table: &str, field: &str, params: Option<&HnswIndexParams>) ->
         )
     });
     format!(
-        "CREATE INDEX IF NOT EXISTS {} ON {} USING hnsw ({} vector_cosine_ops){with};",
-        quote(&format!("{table}_{field}_hnsw")),
+        "CREATE INDEX IF NOT EXISTS {} ON {} USING hnsw (({}::halfvec({})) halfvec_cosine_ops){with};",
+        quote(&hnsw_index_name(table, &column.name)),
         quote(table),
-        quote(field)
+        quote(&column.name),
+        column.dimension
     )
+}
+
+fn hnsw_index_name(table: &str, field: &str) -> String {
+    format!("{table}_{field}_hnsw")
 }
 
 fn column_type(column: &Column) -> String {
@@ -923,7 +1007,18 @@ fn quote(identifier: &str) -> String {
 }
 
 fn pg_error(error: postgres::Error) -> Status {
-    Status::io_error(format!("postgres: {error}"))
+    match error.as_db_error() {
+        Some(db) => Status::io_error(format!("postgres: {} ({})", db.message(), db.code().code())),
+        None => Status::io_error(format!("postgres: {error}")),
+    }
+}
+
+fn connection_lost(error: &postgres::Error) -> bool {
+    use postgres::error::SqlState;
+    error.is_closed()
+        || error
+            .code()
+            .is_some_and(|code| [SqlState::ADMIN_SHUTDOWN, SqlState::CRASH_SHUTDOWN].contains(code))
 }
 
 #[cfg(test)]
@@ -936,4 +1031,33 @@ pub(crate) fn test_url() -> Option<String> {
 pub(crate) fn test_store_name(path: &std::path::Path) -> String {
     let hash = crate::ingest::stable_hash_hex(&[&path.to_string_lossy()]);
     format!("t_{}", &hash[..hash.len().min(32)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MemoryScope;
+
+    #[test]
+    fn reads_reconnect_after_the_server_drops_every_pooled_connection() {
+        let Some(url) = test_url() else {
+            return;
+        };
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        let store = MemoryStore::create_postgres(&url, "t_reconnect", 3, false).unwrap();
+        let mut admin = Client::connect(&url, NoTls).unwrap();
+        admin
+            .execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                 WHERE datname = current_database() AND pid <> pg_backend_pid()",
+                &[],
+            )
+            .unwrap();
+        for _ in 0..POOL_CONNECTIONS + 1 {
+            assert!(store
+                .scan_claims(&MemoryScope::new("s"), 10, None)
+                .unwrap()
+                .is_empty());
+        }
+    }
 }
