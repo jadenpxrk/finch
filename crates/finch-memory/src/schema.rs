@@ -201,6 +201,7 @@ pub fn claim_schema(embedding_dim: usize) -> CollectionSchema {
         .with_field(string_field("polarity"))
         .with_field(string_field("source_spans_json"))
         .with_field(string_field("source_eps_json"))
+        .with_field(array_string_field("evidence_ids").with_index(string_index_params()))
         .with_field(i64_field("source_sequence_no"))
         .with_field(string_field("asserted_by"))
         .with_field(string_field("extractor_version"))

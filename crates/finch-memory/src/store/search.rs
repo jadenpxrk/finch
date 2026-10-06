@@ -692,13 +692,17 @@ impl MemoryStore {
             transaction_at_ms: None,
         };
         // Only records sharing a usable term with the query can score by term overlap.
-        let terms = lexical_query_terms(query_text);
-        let mut scored = self
-            .scan_state_records_sharing_terms(scope, &terms, temporal)?
+        let (terms, records) = self.scan_state_records_sharing_rare_terms(
+            scope,
+            &lexical_query_terms(query_text),
+            temporal,
+        )?;
+        let mut scored = records
             .into_iter()
             .filter_map(|record| {
                 let slot_id = record.slot_id.clone()?;
-                let score = current_state_query_overlap(query_text, &state_lexical_fields(&record));
+                let score =
+                    current_state_query_overlap(query_text, &terms, &state_lexical_fields(&record));
                 (score > 0).then_some((score, slot_id, record.id))
             })
             .collect::<Vec<_>>();
@@ -1044,15 +1048,39 @@ impl MemoryStore {
         source_span_ids: &BTreeSet<&str>,
         source_episode_ids: &BTreeSet<&str>,
     ) -> ZResult<BTreeSet<MemoryId>> {
-        if source_span_ids.is_empty() && source_episode_ids.is_empty() {
+        let evidence_ids = source_span_ids
+            .iter()
+            .chain(source_episode_ids)
+            .copied()
+            .collect::<Vec<_>>();
+        if evidence_ids.is_empty() {
             return Ok(BTreeSet::new());
         }
-        Ok(self
-            .scan_claims(scope, usize::MAX, None)?
-            .into_iter()
-            .filter(|claim| claim_cites_any(claim, source_span_ids, source_episode_ids))
-            .filter_map(|claim| claim.slot_id)
-            .collect())
+        // Claims store the ids they cite, so only claims citing the evidence are read.
+        let docs = scan_in_chunks(
+            &self.claims,
+            &evidence_ids,
+            usize::MAX,
+            CLAIM_OUTPUT_FIELDS,
+            |chunk| {
+                format!(
+                    "{} AND evidence_ids contain_any ({})",
+                    scope_filter(scope),
+                    sql_string_list(chunk.iter().copied())
+                )
+            },
+        )?;
+        let mut slot_ids = BTreeSet::new();
+        for doc in &docs {
+            let claim = claim_from_doc(doc)?;
+            if matches!(claim.status, MemoryStatus::Active)
+                && claim.scope.matches_filter(scope)
+                && claim_cites_any(&claim, source_span_ids, source_episode_ids)
+            {
+                slot_ids.extend(claim.slot_id);
+            }
+        }
+        Ok(slot_ids)
     }
 
     pub fn scan_current_claims(

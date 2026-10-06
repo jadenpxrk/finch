@@ -28,37 +28,41 @@ impl MemoryStore {
         Ok(records)
     }
 
-    /// State records visible at `temporal` whose lexical terms include one of `terms`.
-    pub(crate) fn scan_state_records_sharing_terms(
+    /// The state records visible at `temporal` that share one of `terms`, and the terms they were
+    /// read for. A term in more than `COMMON_STATE_TERM_ROWS` stored records is left out: it
+    /// reads too many rows and tells too few slots apart.
+    pub(crate) fn scan_state_records_sharing_rare_terms(
         &self,
         scope: &MemoryScope,
         terms: &BTreeSet<String>,
         temporal: BiTemporalQuery,
-    ) -> ZResult<Vec<StateRecord>> {
-        let terms = terms.iter().map(String::as_str).collect::<Vec<_>>();
-        let docs = scan_in_chunks(
-            &self.state_records,
-            &terms,
-            usize::MAX,
-            STATE_RECORD_OUTPUT_FIELDS,
-            |chunk| {
-                format!(
+    ) -> ZResult<(BTreeSet<String>, Vec<StateRecord>)> {
+        let mut rare = BTreeSet::new();
+        let mut seen = BTreeSet::new();
+        let mut records = Vec::new();
+        for term in terms {
+            let query = VectorQuery::new("", Vec::new(), usize::MAX)
+                .with_filter(format!(
                     "{} AND lexical_terms contain_any ({})",
                     scope_filter(scope),
-                    sql_string_list(chunk.iter().copied())
-                )
-            },
-        )?;
-        let mut seen = BTreeSet::new();
-        docs.iter()
-            .filter(|doc| seen.insert(doc.pk.clone()))
-            .map(|doc| state_record_from_doc(doc))
-            .filter(|record| {
-                record.as_ref().map_or(true, |record| {
-                    state_record_visible_at(record, scope, temporal)
-                })
-            })
-            .collect()
+                    sql_string_list(std::iter::once(term.as_str()))
+                ))
+                .with_output_fields(output_fields(STATE_RECORD_OUTPUT_FIELDS));
+            let docs = self
+                .state_records
+                .scan_prefix(query, COMMON_STATE_TERM_ROWS + 1)?;
+            if docs.len() > COMMON_STATE_TERM_ROWS {
+                continue;
+            }
+            rare.insert(term.clone());
+            for doc in docs.iter().filter(|doc| seen.insert(doc.pk.clone())) {
+                let record = state_record_from_doc(doc)?;
+                if state_record_visible_at(&record, scope, temporal) {
+                    records.push(record);
+                }
+            }
+        }
+        Ok((rare, records))
     }
 
     pub(crate) fn scan_state_records_bitemporal_for_slot_ids(
@@ -500,3 +504,5 @@ fn dependency_trace_visible_at(
                 && record.valid_to_ms.is_none_or(|to| at < to)
         })
 }
+
+const COMMON_STATE_TERM_ROWS: usize = 50;

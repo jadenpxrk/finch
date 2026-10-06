@@ -805,8 +805,13 @@ pub(super) fn normalized_phrase_present(normalized_query: &str, phrase: &str) ->
         || (!phrase.is_ascii() && normalized_query.contains(&phrase))
 }
 
-pub(super) fn current_state_query_overlap(query_text: &str, fields: &[&str]) -> usize {
-    let query_terms = lexical_query_terms(query_text);
+/// How well a record's fields match the query: 4 for each field the whole query contains as a
+/// phrase, and 1 for each field term among `query_terms`.
+pub(super) fn current_state_query_overlap(
+    query_text: &str,
+    query_terms: &BTreeSet<String>,
+    fields: &[&str],
+) -> usize {
     if query_terms.is_empty() {
         return 0;
     }

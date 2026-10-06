@@ -113,6 +113,28 @@ fn future_claims_consume_vector_fetch_and_hide_valid_slot() {
 }
 
 #[test]
+fn a_term_in_more_than_fifty_state_records_does_not_rank_slots() {
+    // A common term would make lexical ranking read every record that holds it.
+    let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("limit_after_filter_common_term");
+    let store = EvidencedStore::create(&path, 3).unwrap();
+    for i in 0..60 {
+        let common = owner_claim(&format!("common_{i}"), &format!("beacon a{i}"), 10);
+        store.append_claim(&common, None).unwrap();
+    }
+    let rare = owner_claim("rare", "lighthouse", 10);
+    store.append_claim(&rare, None).unwrap();
+    let rankings = store
+        .query_current_state_slot_rankings(&scope(), Vec::new(), "beacon lighthouse", 5, Some(50))
+        .unwrap();
+    let rare_slot_id = stored_slot_id(&store, &rare.id);
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+    drop(guard);
+    assert_eq!(rankings.lexical, vec![rare_slot_id]);
+}
+
+#[test]
 fn expired_span_postings_consume_scan_limit_and_hide_active_span() {
     // Postings of expired spans must not fill the keyword scan limit ahead of a live span.
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
