@@ -9,13 +9,15 @@ pub mod ingest;
 pub mod json_api;
 #[cfg(feature = "postgres")]
 mod postgres;
+#[cfg(feature = "postgres")]
+pub use postgres::drop_postgres;
 pub mod retrieval;
 pub mod row;
 pub mod schema;
 pub mod source_index;
 pub mod state;
 pub mod store;
-pub mod table;
+mod table;
 pub mod types;
 
 pub use context::*;

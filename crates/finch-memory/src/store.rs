@@ -753,6 +753,7 @@ impl MemoryStore {
             // Tests clean up their store directory, so it exists for Postgres stores too.
             fs::create_dir_all(path).map_err(|e| Status::io_error(e.to_string()))?;
             let name = crate::postgres::test_store_name(path);
+            crate::postgres::drop_postgres(&url, &name)?;
             let mut store = Self::create_postgres(&url, &name, embedding_dim, false)?;
             store.path = path.to_path_buf();
             return Ok(store);

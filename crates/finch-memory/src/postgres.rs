@@ -21,7 +21,7 @@ use std::thread::{self, ThreadId};
 type Param = Box<dyn ToSql + Sync>;
 
 impl MemoryStore {
-    /// Creates a store in the Postgres schema `name`, replacing any store already there.
+    /// Creates a store in the new Postgres schema `name`; fails if that schema exists.
     /// `vector_index` builds an HNSW index on each embedding column; without it searches are
     /// exact.
     pub fn create_postgres(
@@ -31,13 +31,20 @@ impl MemoryStore {
         vector_index: bool,
     ) -> ZResult<Self> {
         let session = Arc::new(PgSession::connect(url, name)?);
-        session.with_client(|client| {
+        let created = session.with_client(|client| {
             client.batch_execute(&format!(
-                "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; \
-                 CREATE SEQUENCE {schema}.write_seq;",
+                "CREATE SCHEMA {schema}; CREATE SEQUENCE {schema}.write_seq;",
                 schema = quote(name)
             ))
-        })?;
+        });
+        if let Err(error) = created {
+            if session.schema_exists()? {
+                return Err(Status::already_exists(format!(
+                    "postgres store {name} already exists"
+                )));
+            }
+            return Err(error);
+        }
         let mut schemas = collection_schemas(embedding_dim, span_schema(embedding_dim));
         Self::from_tables(postgres_path(name), Some(session.clone()), |table| {
             let table = PgTable::new(session.clone(), take_schema(&mut schemas, table)?)?;
@@ -49,6 +56,11 @@ impl MemoryStore {
     /// Opens the store in the Postgres schema `name`.
     pub fn open_postgres(url: &str, name: &str) -> ZResult<Self> {
         let session = Arc::new(PgSession::connect(url, name)?);
+        if !session.schema_exists()? {
+            return Err(Status::not_found(format!(
+                "postgres store {name} does not exist"
+            )));
+        }
         let embedding_dim = session.embedding_dim()?;
         let mut schemas = collection_schemas(embedding_dim, span_schema(embedding_dim));
         Self::from_tables(postgres_path(name), Some(session.clone()), |table| {
@@ -57,6 +69,13 @@ impl MemoryStore {
             Ok(Arc::new(table))
         })
     }
+}
+
+/// Deletes the store in the Postgres schema `name` and every row it holds.
+pub fn drop_postgres(url: &str, name: &str) -> ZResult<()> {
+    PgSession::connect(url, name)?.with_client(|client| {
+        client.batch_execute(&format!("DROP SCHEMA IF EXISTS {} CASCADE", quote(name)))
+    })
 }
 
 fn postgres_path(name: &str) -> PathBuf {
@@ -97,6 +116,15 @@ impl PgSession {
             pool,
             transaction: Mutex::new(open_connection(url, schema)?),
             transaction_owner: Mutex::new(None),
+        })
+    }
+
+    fn schema_exists(&self) -> ZResult<bool> {
+        let schema = self.schema.clone();
+        self.with_client(|client| {
+            client
+                .query_opt("SELECT 1 FROM pg_namespace WHERE nspname = $1", &[&schema])
+                .map(|row| row.is_some())
         })
     }
 
@@ -1044,11 +1072,32 @@ mod tests {
     use crate::MemoryScope;
 
     #[test]
+    fn create_refuses_an_existing_store_and_keeps_its_rows() {
+        let Some(url) = test_url() else {
+            return;
+        };
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        drop_postgres(&url, "t_existing").unwrap();
+        let store = MemoryStore::create_postgres(&url, "t_existing", 3, false).unwrap();
+        store.claims.insert(vec![Doc::new("kept")]).unwrap();
+        drop(store);
+        let again = MemoryStore::create_postgres(&url, "t_existing", 3, false);
+        assert!(again.is_err_and(|status| status.is_already_exists()));
+        let reopened = MemoryStore::open_postgres(&url, "t_existing").unwrap();
+        assert!(reopened
+            .claims
+            .fetch(vec!["kept".to_string()])
+            .unwrap()
+            .contains_key("kept"));
+    }
+
+    #[test]
     fn reads_reconnect_after_the_server_drops_every_pooled_connection() {
         let Some(url) = test_url() else {
             return;
         };
         let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        drop_postgres(&url, "t_reconnect").unwrap();
         let store = MemoryStore::create_postgres(&url, "t_reconnect", 3, false).unwrap();
         let mut admin = Client::connect(&url, NoTls).unwrap();
         admin

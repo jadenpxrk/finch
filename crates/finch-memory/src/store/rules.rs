@@ -407,8 +407,6 @@ fn latest_comparable_claims_by_slot(
     latest
 }
 
-/// Filter clauses naming a trigger claim as a rule trigger: by its slot id, or by its subject
-/// keys and predicate. `None` when neither is known.
 /// Whether the rule's trigger names the claim's slot id, or one of its subject keys with its
 /// predicate key.
 fn rule_at_trigger_endpoint(
