@@ -554,7 +554,7 @@ const CORRECTION_OUTPUT_FIELDS: &[&str] = &[
 ];
 
 const MAX_VECTOR_QUERY_TOPK: usize = 1024;
-const MAX_CONTAINS_FILTER_VALUES: usize = 31;
+const MAX_CONTAINS_FILTER_VALUES: usize = 1024;
 const SPAN_VECTOR_FETCH_MULTIPLIER: usize = 8;
 const CLAIM_SLOT_VECTOR_FETCH_MULTIPLIER: usize = 8;
 const MAX_RULE_HOPS: usize = 8;
@@ -1239,10 +1239,11 @@ fn sql_string_list<'a>(items: impl Iterator<Item = &'a str>) -> String {
 }
 
 fn sql_or_eq_list<'a>(field: &str, items: impl Iterator<Item = &'a str>) -> String {
-    items
-        .map(|item| format!("{field} = '{}'", sql_escape(item)))
-        .collect::<Vec<_>>()
-        .join(" OR ")
+    let list = sql_string_list(items);
+    if list.is_empty() {
+        return list;
+    }
+    format!("{field} IN ({list})")
 }
 
 // The filter dialect escapes quotes with a backslash and rejects SQL quote doubling.
