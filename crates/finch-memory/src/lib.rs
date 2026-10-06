@@ -1,7 +1,7 @@
 //! Agent memory stored in Postgres with pgvector. Records evidence and the claims drawn from it,
 //! keeps each claim's history on two timelines (when it held and when Finch learned it), and
-//! packs the current state into a context for a language model. Used by the Python and Node
-//! bindings and by `finch-memory-bench`.
+//! packs the current state into a context for a language model. The Python and Node bindings
+//! expose it.
 
 #![deny(missing_docs)]
 
