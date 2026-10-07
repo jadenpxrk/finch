@@ -1,8 +1,10 @@
 //! Memory stores in Postgres with pgvector: one schema per store, one table per collection, and
 //! each state mutation in one transaction.
 
-use crate::schema::span_schema;
-use crate::store::{collection_schemas, take_schema, MemoryStore};
+use crate::row::{span_from_doc, state_record_from_doc};
+use crate::schema::{span_schema, CLAIMS_COLLECTION, SPANS_COLLECTION, STATE_RECORDS_COLLECTION};
+use crate::store::state_records::state_lexical_terms;
+use crate::store::{collection_schemas, span_term_counts, take_schema, MemoryStore};
 use crate::table::MemoryTable;
 use finch_db::sqlengine::{parse_filter, FilterExpr};
 use finch_types::{
@@ -13,11 +15,12 @@ use parking_lot::{Condvar, Mutex};
 use pgvector::Vector;
 use postgres::types::ToSql;
 use postgres::{Client, NoTls, Row};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
 
 type Param = Box<dyn ToSql + Sync>;
+type Migration = fn(&Arc<PgSession>, usize) -> ZResult<()>;
 
 /// Where a memory store lives in Postgres, and how many connections it may hold at once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +31,10 @@ pub struct PostgresStore {
     pub name: String,
     /// Most connections the store holds at once. Each read or write holds one until it ends.
     pub max_connections: usize,
+    /// When true, Postgres row-level security shows each operation only the rows of its scope's
+    /// tenant, and an operation without a tenant fails. The role must not bypass row-level
+    /// security.
+    pub tenant_isolation: bool,
 }
 
 impl PostgresStore {
@@ -37,9 +44,15 @@ impl PostgresStore {
             url: url.into(),
             name: name.into(),
             max_connections: 8,
+            tenant_isolation: false,
         }
     }
 }
+
+/// Migration `i` changes a store of schema version `i` to version `i + 1`. The current version is
+/// the number of migrations.
+const MIGRATIONS: &[Migration] = &[migrate_to_1];
+const SCHEMA_VERSION: usize = MIGRATIONS.len();
 
 impl MemoryStore {
     /// Creates a store in the new schema `store.name`; fails if that schema exists.
@@ -67,14 +80,18 @@ impl MemoryStore {
             return Err(error);
         }
         let mut schemas = collection_schemas(embedding_dim, span_schema(embedding_dim));
-        Self::from_tables(session.clone(), |table| {
+        let store = Self::from_tables(session.clone(), |table| {
             let table = PgTable::new(session.clone(), take_schema(&mut schemas, table)?)?;
             table.create(vector_index)?;
             Ok(Arc::new(table))
-        })
+        })?;
+        session.with_client(|client| write_schema_version(client, SCHEMA_VERSION))?;
+        prepare_schema(&session, embedding_dim)?;
+        Ok(store)
     }
 
-    /// Opens the store in the schema `store.name`.
+    /// Opens the store in the schema `store.name`. A store of an older schema version changes
+    /// to the current version in one transaction. A store of a newer version does not open.
     pub fn open(store: &PostgresStore) -> ZResult<Self> {
         let name = &store.name;
         let session = Arc::new(PgSession::connect(store)?);
@@ -84,6 +101,7 @@ impl MemoryStore {
             )));
         }
         let embedding_dim = session.embedding_dim()?;
+        prepare_schema(&session, embedding_dim)?;
         let mut schemas = collection_schemas(embedding_dim, span_schema(embedding_dim));
         Self::from_tables(session.clone(), |table| {
             let table = PgTable::new(session.clone(), take_schema(&mut schemas, table)?)?;
@@ -91,6 +109,176 @@ impl MemoryStore {
             Ok(Arc::new(table))
         })
     }
+}
+
+/// Runs the migrations from the store's schema version to `SCHEMA_VERSION`, and turns on tenant
+/// isolation if the session has it. An advisory lock on the store makes concurrent opens wait.
+fn prepare_schema(session: &Arc<PgSession>, embedding_dim: usize) -> ZResult<()> {
+    let lock = crate::ingest::stable_hash_hex(&["finch_schema", &session.schema]);
+    let lock = u64::from_str_radix(&lock, 16).map_or(0, |key| key as i64);
+    session.begin_write(Some((&[], lock)), None)?;
+    let prepared = (|| {
+        let version = session.with_client(|client| {
+            let table = client.query_opt(
+                "SELECT 1 FROM pg_tables \
+                 WHERE schemaname = current_schema() AND tablename = 'finch_meta'",
+                &[],
+            )?;
+            match table {
+                Some(_) => client
+                    .query_opt("SELECT schema_version FROM finch_meta", &[])
+                    .map(|row| row.map_or(0, |row| row.get::<_, i32>(0))),
+                None => Ok(0),
+            }
+        })?;
+        let version = usize::try_from(version).unwrap_or(0);
+        if version > SCHEMA_VERSION {
+            return Err(Status::unimplemented(format!(
+                "postgres store {} has schema version {version}, and this Finch knows versions \
+                 up to {SCHEMA_VERSION}",
+                session.schema
+            )));
+        }
+        if version < SCHEMA_VERSION {
+            for migration in &MIGRATIONS[version..] {
+                migration(session, embedding_dim)?;
+            }
+            session.with_client(|client| write_schema_version(client, SCHEMA_VERSION))?;
+        }
+        if session.tenant_isolation {
+            isolate_tenants(session, embedding_dim)?;
+        }
+        Ok(())
+    })();
+    session.finish(prepared)
+}
+
+fn write_schema_version(client: &mut Client, version: usize) -> Result<(), postgres::Error> {
+    let version = i32::try_from(version).unwrap_or(i32::MAX);
+    client.batch_execute(
+        "CREATE TABLE IF NOT EXISTS finch_meta (schema_version integer NOT NULL); \
+         DELETE FROM finch_meta;",
+    )?;
+    client
+        .execute("INSERT INTO finch_meta VALUES ($1)", &[&version])
+        .map(drop)
+}
+
+/// Version 0 is every store without `finch_meta`. Its spans may keep keyword terms in the table
+/// `memory_terms`, and it may lack columns that reads need.
+fn migrate_to_1(session: &Arc<PgSession>, embedding_dim: usize) -> ZResult<()> {
+    let tables = add_missing_tables_and_columns(session, embedding_dim)?;
+    let had_terms = session.with_client(|client| {
+        client
+            .query_opt("SELECT to_regclass('memory_terms')::text", &[])
+            .map(|row| {
+                row.and_then(|row| row.get::<_, Option<String>>(0))
+                    .is_some()
+            })
+    })?;
+    // Only spans that the keyword-indexed write paths wrote have postings in memory_terms.
+    if had_terms {
+        let spans = &tables[SPANS_COLLECTION];
+        let indexed = spans.pks_where(
+            "lexical_terms IS NULL AND EXISTS \
+             (SELECT 1 FROM memory_terms t WHERE t.span_id = memory_spans.pk)",
+        )?;
+        spans.backfill_terms("lexical_terms", indexed, |doc| {
+            Ok(span_term_counts(&span_from_doc(doc)?)
+                .0
+                .into_keys()
+                .collect())
+        })?;
+    }
+    let state_records = &tables[STATE_RECORDS_COLLECTION];
+    let pending = state_records.pks_where("lexical_terms IS NULL")?;
+    state_records.backfill_terms("lexical_terms", pending, |doc| {
+        Ok(state_lexical_terms(&state_record_from_doc(doc)?))
+    })?;
+    // claim_doc stores the sorted distinct ids of the claim's source spans and episodes.
+    session.with_client(|client| {
+        client.batch_execute(&format!(
+            "UPDATE memory_spans SET lexical_terms = '{{}}' WHERE lexical_terms IS NULL; \
+             DROP TABLE IF EXISTS memory_terms; \
+             UPDATE {claims} SET evidence_ids = ARRAY(SELECT DISTINCT id COLLATE \"C\" \
+               FROM jsonb_array_elements_text(COALESCE(source_spans_json, '[]')::jsonb \
+                 || COALESCE(source_eps_json, '[]')::jsonb) AS e(id) ORDER BY 1) \
+             WHERE evidence_ids IS NULL;",
+            claims = quote(CLAIMS_COLLECTION)
+        ))
+    })
+}
+
+/// Creates each collection table and column of the current schema that the store lacks, with
+/// the indexes that `MemoryStore::create` builds. Returns the tables by name.
+fn add_missing_tables_and_columns(
+    session: &Arc<PgSession>,
+    embedding_dim: usize,
+) -> ZResult<BTreeMap<String, PgTable>> {
+    let spans_hnsw = hnsw_index_name(SPANS_COLLECTION, "embedding");
+    let vector_index = session.with_client(|client| {
+        client
+            .query_opt(
+                "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1",
+                &[&spans_hnsw],
+            )
+            .map(|row| row.is_some())
+    })?;
+    let mut tables = BTreeMap::new();
+    for (name, schema) in collection_schemas(embedding_dim, span_schema(embedding_dim)) {
+        let table = PgTable::new(session.clone(), schema)?;
+        let present = session.with_client(|client| {
+            client.query(
+                "SELECT column_name::text FROM information_schema.columns \
+                 WHERE table_schema = current_schema() AND table_name = $1",
+                &[&name],
+            )
+        })?;
+        let present = present
+            .iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect::<BTreeSet<_>>();
+        if present.is_empty() {
+            table.create(vector_index)?;
+        } else {
+            table.add_columns(&present, vector_index)?;
+        }
+        tables.insert(name, table);
+    }
+    Ok(tables)
+}
+
+/// Turns on row-level security for every collection table, with a policy that admits only rows
+/// of the tenant that the transaction sets. The policy replaces any earlier one, so a second run
+/// changes nothing.
+fn isolate_tenants(session: &PgSession, embedding_dim: usize) -> ZResult<()> {
+    let bypasses = session.with_client(|client| {
+        client
+            .query_one(
+                "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user",
+                &[],
+            )
+            .map(|row| row.get::<_, bool>(0))
+    })?;
+    if bypasses {
+        return Err(Status::permission_denied(
+            "tenant isolation needs a postgres role that does not bypass row-level security",
+        ));
+    }
+    let ddl = collection_schemas(embedding_dim, span_schema(embedding_dim))
+        .keys()
+        .map(|name| {
+            let table = quote(name);
+            format!(
+                "ALTER TABLE {table} ENABLE ROW LEVEL SECURITY; \
+                 ALTER TABLE {table} FORCE ROW LEVEL SECURITY; \
+                 DROP POLICY IF EXISTS finch_tenant ON {table}; \
+                 CREATE POLICY finch_tenant ON {table} \
+                 USING (tenant_id = NULLIF(current_setting('finch.tenant_id', true), ''));"
+            )
+        })
+        .collect::<String>();
+    session.with_client(|client| client.batch_execute(&ddl))
 }
 
 /// Deletes the store in the schema `store.name` and every row it holds.
@@ -115,6 +303,7 @@ pub(crate) struct PgSession {
     released: Condvar,
     bound: Mutex<HashMap<ThreadId, Client>>,
     max_connections: usize,
+    pub(crate) tenant_isolation: bool,
 }
 
 impl PgSession {
@@ -144,6 +333,7 @@ impl PgSession {
             released: Condvar::new(),
             bound: Mutex::new(HashMap::new()),
             max_connections: store.max_connections,
+            tenant_isolation: store.tenant_isolation,
         })
     }
 
@@ -241,19 +431,33 @@ impl PgSession {
         self.bound.lock().contains_key(&thread::current().id())
     }
 
-    /// Starts a write transaction that the calling thread's operations join. It holds the
-    /// `shared` advisory locks and then the `exclusive` one until the transaction ends, so it waits
-    /// for every write that holds one of them in the conflicting mode, in any process.
-    pub(crate) fn begin_write(&self, shared: &[i64], exclusive: i64) -> ZResult<()> {
-        self.begin("BEGIN", Some((shared, exclusive)))
+    /// Starts a write transaction that the calling thread's operations join. With `locks`, it
+    /// holds the shared advisory locks and then the exclusive one until the transaction ends, so
+    /// it waits for every write that holds one of them in the conflicting mode, in any process.
+    /// With `tenant`, row-level security shows the transaction only that tenant's rows.
+    pub(crate) fn begin_write(
+        &self,
+        locks: Option<(&[i64], i64)>,
+        tenant: Option<&str>,
+    ) -> ZResult<()> {
+        self.begin("BEGIN", locks, tenant)
     }
 
-    /// Starts a read-only transaction whose reads all see one snapshot.
-    pub(crate) fn begin_snapshot(&self) -> ZResult<()> {
-        self.begin("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", None)
+    /// Starts a read-only transaction whose reads all see one snapshot of `tenant`'s rows.
+    pub(crate) fn begin_snapshot(&self, tenant: Option<&str>) -> ZResult<()> {
+        self.begin(
+            "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+            None,
+            tenant,
+        )
     }
 
-    fn begin(&self, statement: &str, locks: Option<(&[i64], i64)>) -> ZResult<()> {
+    fn begin(
+        &self,
+        statement: &str,
+        locks: Option<(&[i64], i64)>,
+        tenant: Option<&str>,
+    ) -> ZResult<()> {
         if self.in_transaction() {
             return Err(Status::internal("a postgres transaction is already open"));
         }
@@ -268,6 +472,9 @@ impl PgSession {
                     client.execute("SELECT pg_advisory_xact_lock_shared($1)", &[key])?;
                 }
                 client.execute("SELECT pg_advisory_xact_lock($1)", &[&exclusive])?;
+            }
+            if let Some(tenant) = tenant {
+                client.execute("SELECT set_config('finch.tenant_id', $1, true)", &[&tenant])?;
             }
             Ok(())
         };
@@ -295,6 +502,35 @@ impl PgSession {
 
     pub(crate) fn commit(&self) -> ZResult<()> {
         self.end("COMMIT")
+    }
+
+    /// Commits the calling thread's transaction when `result` is a success, and rolls it back
+    /// otherwise.
+    pub(crate) fn finish<T>(&self, result: ZResult<T>) -> ZResult<T> {
+        match result {
+            Ok(value) => {
+                self.commit()?;
+                Ok(value)
+            }
+            Err(error) => match self.rollback() {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(Status::internal(format!(
+                    "{error}; rolling it back failed: {rollback}"
+                ))),
+            },
+        }
+    }
+
+    /// Fails when tenant isolation is on and the calling thread has no transaction, which is
+    /// where an operation sets its tenant.
+    fn check_tenant_bound(&self, table: &str) -> ZResult<()> {
+        if self.tenant_isolation && !self.in_transaction() {
+            return Err(Status::permission_denied(format!(
+                "tenant isolation is on, so {table} is read and written only by an operation \
+                 with a tenant scope"
+            )));
+        }
+        Ok(())
     }
 
     /// Discards the calling thread's transaction, if it has one.
@@ -408,23 +644,8 @@ impl PgTable {
                 .map(|column| format!(", {} {}", quote(&column.name), column_type(column)))
                 .collect::<String>()
         );
-        for column in self.columns.iter().filter(|column| column.indexed) {
-            if column.kind == ColumnKind::Vector {
-                if vector_index {
-                    ddl.push_str(&hnsw_index_ddl(&self.name, column, None));
-                    self.hnsw_fields.lock().insert(column.name.clone());
-                }
-            } else if column.kind == ColumnKind::TextArray {
-                ddl.push_str(&format!(
-                    "CREATE INDEX ON {table} USING gin ({});",
-                    quote(&column.name)
-                ));
-            } else if column.name != "space_id" {
-                ddl.push_str(&format!(
-                    "CREATE INDEX ON {table} ({});",
-                    quote(&column.name)
-                ));
-            }
+        for column in &self.columns {
+            ddl.push_str(&self.column_index_ddl(column, vector_index));
         }
         // Scope filters test space, then tenant and user, so one index serves a store of many users.
         ddl.push_str(&format!(
@@ -432,6 +653,87 @@ impl PgTable {
         ));
         self.session
             .with_client(|client| client.batch_execute(&ddl))
+    }
+
+    /// Adds each column that `present` does not name, with its index.
+    fn add_columns(&self, present: &BTreeSet<String>, vector_index: bool) -> ZResult<()> {
+        let ddl = self
+            .columns
+            .iter()
+            .filter(|column| !present.contains(&column.name))
+            .map(|column| {
+                format!(
+                    "ALTER TABLE {} ADD COLUMN {} {};{}",
+                    quote(&self.name),
+                    quote(&column.name),
+                    column_type(column),
+                    self.column_index_ddl(column, vector_index)
+                )
+            })
+            .collect::<String>();
+        self.session
+            .with_client(|client| client.batch_execute(&ddl))
+    }
+
+    fn column_index_ddl(&self, column: &Column, vector_index: bool) -> String {
+        let table = quote(&self.name);
+        if !column.indexed {
+            String::new()
+        } else if column.kind == ColumnKind::Vector {
+            if !vector_index {
+                return String::new();
+            }
+            self.hnsw_fields.lock().insert(column.name.clone());
+            hnsw_index_ddl(&self.name, column, None)
+        } else if column.kind == ColumnKind::TextArray {
+            format!(
+                "CREATE INDEX ON {table} USING gin ({});",
+                quote(&column.name)
+            )
+        } else if column.name != "space_id" {
+            format!("CREATE INDEX ON {table} ({});", quote(&column.name))
+        } else {
+            String::new()
+        }
+    }
+
+    /// The pks of the rows that match the SQL condition `condition`, in pk order.
+    fn pks_where(&self, condition: &str) -> ZResult<Vec<String>> {
+        let sql = format!(
+            "SELECT pk FROM {} WHERE {condition} ORDER BY pk",
+            quote(&self.name)
+        );
+        let rows = self.session.with_client(|client| client.query(&sql, &[]))?;
+        Ok(rows.iter().map(|row| row.get::<_, String>(0)).collect())
+    }
+
+    /// Sets the text[] `column` of each row in `pks` to `terms` of the row.
+    fn backfill_terms(
+        &self,
+        column: &str,
+        pks: Vec<String>,
+        terms: impl Fn(&Doc) -> ZResult<Vec<String>>,
+    ) -> ZResult<()> {
+        let sql = format!(
+            "UPDATE {table} SET {column} = ARRAY(SELECT jsonb_array_elements_text(u.terms::jsonb)) \
+             FROM unnest($1::text[], $2::text[]) AS u(pk, terms) WHERE {table}.pk = u.pk",
+            table = quote(&self.name),
+            column = quote(column)
+        );
+        for chunk in pks.chunks(1024) {
+            let docs = self.fetch(chunk.to_vec())?;
+            let mut keys = Vec::with_capacity(docs.len());
+            let mut values = Vec::with_capacity(docs.len());
+            for (pk, doc) in docs {
+                let terms = serde_json::to_string(&terms(&doc)?)
+                    .map_err(|e| Status::internal(e.to_string()))?;
+                keys.push(pk);
+                values.push(terms);
+            }
+            self.session
+                .with_client(|client| client.execute(&sql, &[&keys, &values]))?;
+        }
+        Ok(())
     }
 
     fn load_hnsw_fields(&self) -> ZResult<()> {
@@ -465,6 +767,7 @@ impl PgTable {
     /// Writes each doc whole in one statement; a field the doc lacks is stored as null. Rows
     /// take sequence numbers in doc order.
     fn write(&self, docs: Vec<Doc>, replace: bool) -> ZResult<Vec<Status>> {
+        self.session.check_tenant_bound(&self.name)?;
         let mut statuses = vec![Status::default(); docs.len()];
         let mut batch = WriteBatch::new(&self.columns);
         let mut position = HashMap::<&str, usize>::new();
@@ -601,6 +904,7 @@ impl PgTable {
         tail: &str,
         params: Vec<Param>,
     ) -> ZResult<Vec<Arc<Doc>>> {
+        self.session.check_tenant_bound(&self.name)?;
         let sql = format!(
             "SELECT pk{}{} FROM {} {tail}",
             columns
@@ -1147,7 +1451,338 @@ fn connection_lost(error: &postgres::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MemoryScope;
+    use crate::{
+        ActorKind, ChunkOptions, ClaimKind, ClaimPolarity, EpisodeInput, ManualClaimInput,
+        MemoryScope, SourceKind, Visibility,
+    };
+
+    fn episode(scope: &MemoryScope, id: &str, text: &str) -> EpisodeInput {
+        EpisodeInput {
+            id: Some(id.to_string()),
+            scope: scope.clone(),
+            visibility: Visibility::Private,
+            policy_tags: Vec::new(),
+            source_kind: SourceKind::UserMessage,
+            actor: ActorKind::User,
+            sequence_no: 1,
+            event_time_ms: Some(10),
+            valid_from_ms: None,
+            valid_to_ms: None,
+            raw_text: text.to_string(),
+            blob_ref: None,
+            mime_type: None,
+            causal_parent_ids: Vec::new(),
+            metadata_json: None,
+        }
+    }
+
+    fn chunks() -> ChunkOptions {
+        ChunkOptions {
+            max_chars: 24,
+            overlap_chars: 0,
+            chunker_version: "test".to_string(),
+        }
+    }
+
+    /// Writes keyword-indexed spans, one span without keyword terms, and a claim with its state.
+    fn seed(store: &MemoryStore, scope: &MemoryScope) {
+        let ingested = store
+            .ingest_episode(
+                episode(
+                    scope,
+                    "ep1",
+                    "alpha beta gamma alpha delta epsilon zeta gamma",
+                ),
+                11,
+                &chunks(),
+            )
+            .unwrap();
+        let mut plain = ingested.spans[0].clone();
+        plain.id = "plain_span".to_string();
+        store
+            .append_vector_spans(&[(plain, vec![1.0, 0.0, 0.0])])
+            .unwrap();
+        store
+            .add_manual_claim(
+                ManualClaimInput {
+                    id: Some("c1".to_string()),
+                    scope: scope.clone(),
+                    visibility: Visibility::Private,
+                    policy_tags: Vec::new(),
+                    claim_text: "Alpha status is green".to_string(),
+                    subject: Some("alpha".to_string()),
+                    predicate: Some("status".to_string()),
+                    object_value: Some("green".to_string()),
+                    claim_kind: ClaimKind::Fact,
+                    polarity: ClaimPolarity::Affirmative,
+                    source_span_ids: vec![ingested.spans[0].id.clone()],
+                    source_episode_ids: vec!["ep1".to_string()],
+                    asserted_by: "user".to_string(),
+                    confidence: None,
+                    observed_at_ms: 10,
+                    valid_from_ms: Some(10),
+                    valid_to_ms: None,
+                },
+                None,
+            )
+            .unwrap();
+    }
+
+    fn column(
+        admin: &mut Client,
+        schema: &str,
+        table: &str,
+        column: &str,
+    ) -> Vec<(String, Vec<String>)> {
+        admin
+            .query(
+                &format!("SELECT pk, {column} FROM {schema}.{table} ORDER BY pk"),
+                &[],
+            )
+            .unwrap()
+            .iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect()
+    }
+
+    #[test]
+    fn open_migrates_a_version_0_store_in_place() {
+        let url = crate::test_postgres_url();
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        let old = PostgresStore::new(&url, "t_migrate_old");
+        let fresh = PostgresStore::new(&url, "t_migrate_fresh");
+        let scope = MemoryScope::new("s");
+        for location in [&old, &fresh] {
+            drop_store(location).unwrap();
+            seed(&MemoryStore::create(location, 3, false).unwrap(), &scope);
+        }
+        let mut admin = Client::connect(&url, NoTls).unwrap();
+        let written = [
+            ("memory_spans", "lexical_terms"),
+            ("memory_claims", "evidence_ids"),
+            ("memory_state_records", "lexical_terms"),
+        ]
+        .map(|(table, name)| column(&mut admin, "t_migrate_old", table, name));
+        assert!(written
+            .iter()
+            .all(|rows| rows.iter().any(|(_, terms)| !terms.is_empty())));
+        // A store from before finch_meta: postings in memory_terms and none of the newer columns.
+        admin
+            .batch_execute(
+                "SET search_path TO t_migrate_old, public; \
+                 DROP TABLE finch_meta; \
+                 CREATE TABLE memory_terms (pk text PRIMARY KEY, seq bigint NOT NULL, \
+                   space_id text, tenant_id text, user_id text, agent_id text, project_id text, \
+                   thread_id text, visibility text, policy_tags_json text, id text, term text, \
+                   span_id text, tf bigint, doc_len bigint); \
+                 INSERT INTO memory_terms (pk, seq, space_id, id, term, span_id, tf, doc_len) \
+                   SELECT pk || ':' || term, 0, space_id, pk || ':' || term, term, pk, 1, 1 \
+                   FROM memory_spans, unnest(lexical_terms) AS term; \
+                 ALTER TABLE memory_spans DROP COLUMN lexical_terms; \
+                 ALTER TABLE memory_claims DROP COLUMN evidence_ids; \
+                 ALTER TABLE memory_state_records DROP COLUMN lexical_terms; \
+                 RESET search_path;",
+            )
+            .unwrap();
+
+        let migrated = MemoryStore::open(&old).unwrap();
+        let version = |admin: &mut Client| -> (i32, String) {
+            let row = admin
+                .query_one(
+                    "SELECT schema_version, xmin::text FROM t_migrate_old.finch_meta",
+                    &[],
+                )
+                .unwrap();
+            (row.get(0), row.get(1))
+        };
+        let (number, written_by) = version(&mut admin);
+        assert_eq!(number as usize, SCHEMA_VERSION);
+        let backfilled = [
+            ("memory_spans", "lexical_terms"),
+            ("memory_claims", "evidence_ids"),
+            ("memory_state_records", "lexical_terms"),
+        ]
+        .map(|(table, name)| column(&mut admin, "t_migrate_old", table, name));
+        assert_eq!(backfilled, written);
+        let terms_table = admin
+            .query_one(
+                "SELECT to_regclass('t_migrate_old.memory_terms')::text",
+                &[],
+            )
+            .unwrap()
+            .get::<_, Option<String>>(0);
+        assert_eq!(terms_table, None);
+        let search = |store: &MemoryStore| {
+            store
+                .keyword_search_spans(&scope, "alpha gamma zeta", 10, 100, None)
+                .unwrap()
+                .into_iter()
+                .map(|hit| (hit.span.id, hit.score))
+                .collect::<Vec<_>>()
+        };
+        let hits = search(&migrated);
+        assert!(!hits.is_empty());
+        assert_eq!(hits, search(&MemoryStore::open(&fresh).unwrap()));
+        drop(migrated);
+
+        MemoryStore::open(&old).unwrap();
+        assert_eq!(version(&mut admin), (number, written_by));
+    }
+
+    #[test]
+    fn a_store_of_a_newer_schema_version_does_not_open() {
+        let url = crate::test_postgres_url();
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        let location = PostgresStore::new(&url, "t_newer_version");
+        drop_store(&location).unwrap();
+        drop(MemoryStore::create(&location, 3, false).unwrap());
+        Client::connect(&url, NoTls)
+            .unwrap()
+            .batch_execute("UPDATE t_newer_version.finch_meta SET schema_version = 99")
+            .unwrap();
+        let error = MemoryStore::open(&location).err().unwrap();
+        assert!(error.message().contains("version 99"), "{error}");
+        assert!(
+            error.message().contains(&format!("up to {SCHEMA_VERSION}")),
+            "{error}"
+        );
+    }
+
+    /// The test server's URL with a role that does not bypass row-level security.
+    fn tenant_role_url(url: &str) -> String {
+        let mut admin = Client::connect(url, NoTls).unwrap();
+        let database = admin
+            .query_one("SELECT current_database()", &[])
+            .unwrap()
+            .get::<_, String>(0);
+        let role = format!("{database}_tenant_role");
+        admin
+            .batch_execute(&format!(
+                "DO $$ BEGIN \
+                   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN \
+                     CREATE ROLE {role} LOGIN PASSWORD '{role}' NOSUPERUSER NOBYPASSRLS; \
+                   END IF; \
+                 END $$; \
+                 GRANT CREATE ON DATABASE {database} TO {role};"
+            ))
+            .unwrap();
+        let config = url.parse::<postgres::Config>().unwrap();
+        let host = match &config.get_hosts()[0] {
+            postgres::config::Host::Tcp(host) => host.clone(),
+            postgres::config::Host::Unix(path) => path.display().to_string(),
+        };
+        format!(
+            "host={host} port={} dbname={database} user={role} password={role}",
+            config.get_ports().first().copied().unwrap_or(5432)
+        )
+    }
+
+    fn tenant_scope(tenant: &str) -> MemoryScope {
+        let mut scope = MemoryScope::new("s");
+        scope.tenant_id = Some(tenant.to_string());
+        scope
+    }
+
+    fn space_scan() -> VectorQuery {
+        VectorQuery::new("", Vec::new(), 100).with_filter("space_id = 's'")
+    }
+
+    #[test]
+    fn tenant_isolation_shows_each_operation_only_its_tenants_rows() {
+        let url = crate::test_postgres_url();
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        drop_store(&PostgresStore::new(&url, "t_tenants")).unwrap();
+        let mut location = PostgresStore::new(tenant_role_url(&url), "t_tenants");
+        location.tenant_isolation = true;
+        let store = MemoryStore::create(&location, 3, false).unwrap();
+        let (a, b) = (tenant_scope("a"), tenant_scope("b"));
+        store
+            .ingest_episode(episode(&a, "ep_a", "alpha beta"), 11, &chunks())
+            .unwrap();
+        let b_spans = store
+            .ingest_episode(episode(&b, "ep_b", "alpha beta"), 11, &chunks())
+            .unwrap()
+            .spans
+            .into_iter()
+            .map(|span| span.id)
+            .collect::<Vec<_>>();
+
+        let reopened = MemoryStore::open(&location).unwrap();
+        for store in [&store, &reopened] {
+            let guard = store.lock_state_read(&a).unwrap();
+            // The filter matches both tenants' rows; row-level security keeps B's out.
+            let rows = store.spans.scan_filter_only(space_scan()).unwrap();
+            assert!(!rows.is_empty());
+            assert!(rows
+                .iter()
+                .all(|doc| doc.fields.get("tenant_id").and_then(|v| v.as_str()) == Some("a")));
+            assert!(store.spans.fetch(b_spans.clone()).unwrap().is_empty());
+            drop(guard);
+            assert!(store
+                .fetch_spans_by_ids(&a, &b_spans, None)
+                .unwrap()
+                .is_empty());
+            assert_eq!(
+                store.fetch_spans_by_ids(&b, &b_spans, None).unwrap().len(),
+                b_spans.len()
+            );
+        }
+
+        let no_tenant = MemoryScope::new("s");
+        let write = store.ingest_episode(episode(&no_tenant, "ep_none", "gamma"), 11, &chunks());
+        assert!(write.is_err_and(|status| status.message().contains("tenant_id")));
+        assert!(store.scan_spans(&no_tenant, 10, None).is_err());
+        assert!(store.spans.fetch(b_spans).is_err());
+    }
+
+    #[test]
+    fn tenant_isolation_refuses_a_role_that_bypasses_row_level_security() {
+        let url = crate::test_postgres_url();
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        let mut location = PostgresStore::new(&url, "t_tenants_superuser");
+        drop_store(&location).unwrap();
+        let bypasses = Client::connect(&url, NoTls)
+            .unwrap()
+            .query_one(
+                "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user",
+                &[],
+            )
+            .unwrap()
+            .get::<_, bool>(0);
+        location.tenant_isolation = true;
+        assert_eq!(MemoryStore::create(&location, 3, false).is_err(), bypasses);
+    }
+
+    #[test]
+    fn without_tenant_isolation_a_store_holds_rows_without_a_tenant() {
+        let url = crate::test_postgres_url();
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        drop_store(&PostgresStore::new(&url, "t_tenants_off")).unwrap();
+        let location = PostgresStore::new(tenant_role_url(&url), "t_tenants_off");
+        let store = MemoryStore::create(&location, 3, false).unwrap();
+        for (id, scope) in [
+            ("ep_none", MemoryScope::new("s")),
+            ("ep_a", tenant_scope("a")),
+            ("ep_b", tenant_scope("b")),
+        ] {
+            store
+                .ingest_episode(episode(&scope, id, "alpha"), 11, &chunks())
+                .unwrap();
+        }
+        let tenants = store
+            .spans
+            .scan_filter_only(space_scan())
+            .unwrap()
+            .iter()
+            .map(|doc| {
+                doc.fields
+                    .get("tenant_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(tenants.len(), 3);
+    }
 
     #[test]
     fn create_refuses_an_existing_store_and_keeps_its_rows() {

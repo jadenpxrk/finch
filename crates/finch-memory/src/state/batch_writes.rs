@@ -17,7 +17,10 @@ impl MemoryStore {
         claim_embeddings: BTreeMap<MemoryId, Vec<f32>>,
     ) -> ZResult<StateMutationResult> {
         validate_batch_scope(&batch)?;
-        self.validate_batch_evidence(&batch)?;
+        {
+            let _state_guard = self.lock_state_read(&batch.scope)?;
+            self.validate_batch_evidence(&batch)?;
+        }
         self.apply_validated_state_mutation_batch(batch, claim_embeddings)
     }
 

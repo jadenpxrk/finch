@@ -111,6 +111,7 @@ impl MemoryStore {
         embedding: Option<&[f32]>,
     ) -> ZResult<ClaimRecord> {
         let mut claim = create_manual_claim(input);
+        let state_guard = self.lock_state_read(&claim.scope)?;
         claim.source_sequence_no =
             self.source_sequence_no_for_episode_ids(&claim.scope, &claim.source_episode_ids)?;
         let registry = self.canonical_registry_for_names_at(
@@ -119,6 +120,7 @@ impl MemoryStore {
             claim.valid_from_ms.or(Some(claim.observed_at_ms)),
         )?;
         let claim = canonicalize_claim(claim, &registry);
+        drop(state_guard);
         self.append_claim(&claim, embedding)?;
         Ok(claim)
     }
@@ -129,7 +131,7 @@ impl MemoryStore {
 
     pub(crate) fn add_profile(&self, input: ProfileInput) -> ZResult<ProfileRecord> {
         let profile = crate::ingest::create_profile(input);
-        self.append_profile(&profile)?;
+        self.with_scope_tenant(&profile.scope, || self.append_profile(&profile))?;
         Ok(profile)
     }
 
@@ -190,7 +192,7 @@ impl MemoryStore {
 
     pub(crate) fn add_edge(&self, input: EdgeInput) -> ZResult<EdgeRecord> {
         let edge = create_edge(input);
-        self.append_edge(&edge)?;
+        self.with_scope_tenant(&edge.scope, || self.append_edge(&edge))?;
         Ok(edge)
     }
 }

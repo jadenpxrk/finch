@@ -363,6 +363,25 @@ An HNSW index slows each span write. To load many spans, create the store withou
 `vector_index`, write the spans, and then call `ensure_span_hnsw_index`. At 100,000 spans, this
 is about three times faster than a store that updates its index on each write.
 
+The table `finch_meta` holds the schema version of the store. `create` writes the current
+version. `open` reads it under an advisory lock on the store, so two processes cannot upgrade
+one store at the same time. When the version is lower, `open` applies each migration in order in
+one transaction. When the version is higher than the code knows, `open` fails and names the two
+versions. A store without `finch_meta` has version 0.
+
+Migration 1 creates each table, column, and index that the current schema has and the store does
+not have. It fills `lexical_terms` of each span that has rows in the table `memory_terms`, and
+then deletes that table. Other spans get no keyword terms. It also fills `evidence_ids` of each
+claim and `lexical_terms` of each state record, with the values that a write gives them.
+
+Tenant isolation is off by default. Set `tenant_isolation` in `PostgresStore` to turn it on.
+Then each table gets Postgres row-level security with a policy that shows only the rows of one
+tenant. Each transaction sets that tenant from the `tenant_id` of its scope. An operation without
+a tenant fails, and a table read or write outside an operation fails. `open` adds the policies to
+an existing store. Open such a store with tenant isolation each time, because a store without the
+tenant setting shows no rows. The Postgres role must not be a superuser and must not have
+`BYPASSRLS`, because such a role ignores the policies. `create` and `open` fail for such a role.
+
 ## 15. Guarantees
 
 - Open sees the old manifest or the new one, never a mix.

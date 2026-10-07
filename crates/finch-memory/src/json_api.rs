@@ -422,10 +422,10 @@ impl MemoryStore {
     /// Builds a context packet from profiles, current claims, artifacts, and the JSON hits. Returns
     /// it as JSON.
     pub fn build_memory_context_json(&self, request_json: &str) -> ZResult<String> {
-        let _state_guard = self.lock_state_read()?;
         let request =
             serde_json::from_str::<MemoryContextJsonRequest>(request_json).map_err(json_status)?;
         let scope = &request.scope;
+        let _state_guard = self.lock_state_read(scope)?;
         let limits = &request.limits;
         let profiles = self.scan_profiles(scope, limits.profile_limit, limits.at_ms)?;
         let claims = self.scan_current_claims(scope, limits.claim_limit, limits.at_ms)?;
@@ -480,10 +480,10 @@ impl MemoryStore {
     /// target slots are retrieved for the query; otherwise `hits` and `selections` are used as
     /// given.
     pub fn build_answer_ready_context_json(&self, request_json: &str) -> ZResult<String> {
-        let _state_guard = self.lock_state_read()?;
         let request =
             serde_json::from_str::<AnswerContextJsonRequest>(request_json).map_err(json_status)?;
         let scope = &request.scope;
+        let _state_guard = self.lock_state_read(scope)?;
         let limits = &request.limits;
         let query_text = request.query_text.as_str();
         let (hits, selections) = match request.search {

@@ -10,7 +10,7 @@ impl MemoryStore {
         scan_limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanSearchHit>> {
-        let _state_guard = self.lock_state_read()?;
+        let _state_guard = self.lock_state_read(scope)?;
         let mut hits = self.keyword_search_spans_with_corrections(
             scope,
             query_text,
@@ -152,6 +152,7 @@ impl MemoryStore {
         span_ids: &[String],
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanRecord>> {
+        let _state_guard = self.lock_state_read(scope)?;
         if span_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -196,7 +197,7 @@ impl MemoryStore {
         scope: &MemoryScope,
         search: HybridSpanSearch<'_>,
     ) -> ZResult<HybridSearchDebug> {
-        let _state_guard = self.lock_state_read()?;
+        let _state_guard = self.lock_state_read(scope)?;
         let HybridSpanSearch {
             query_embedding,
             query_text,
