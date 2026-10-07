@@ -36,8 +36,8 @@ The `finch-memory` tests keep their stores in Postgres with pgvector. Start a se
 in `FINCH_MEMORY_TEST_POSTGRES_URL`:
 
 ```bash
-docker run -d --name finch-pg -p 55432:5432 -e POSTGRES_USER=finch -e POSTGRES_PASSWORD=finch \
-  -e POSTGRES_DB=finch pgvector/pgvector:pg17
+docker run -d --name finch-pg --shm-size=1g -p 55432:5432 -e POSTGRES_USER=finch \
+  -e POSTGRES_PASSWORD=finch -e POSTGRES_DB=finch pgvector/pgvector:pg17
 export FINCH_MEMORY_TEST_POSTGRES_URL=postgres://finch:finch@localhost:55432/finch
 ```
 
