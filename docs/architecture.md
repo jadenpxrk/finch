@@ -324,12 +324,31 @@ flowchart TD
 Finch never edits a stored claim in place. A correction is its own record. It names its target
 by claim ids or by slot. It carries the time it takes effect and who asked for it. A retract
 ends the claim's validity at that time. A replace also writes a new claim with the new value. A
-restore brings a retracted claim back. A forget ends the claim in every current read and packs
-it as a tombstone. The stored row stays. Any rule that depends on the affected slot fires again,
+restore brings a retracted claim back. Any rule that depends on the affected slot fires again,
 so a derived value falls with its source.
 
+A forget deletes its target claims. It also deletes the records that Finch derived from them:
+derived claims, state records, dependency traces, edges, and profiles. Entities, aliases, and
+slots lose the ids of the deleted claims, and Finch deletes the ones that have no evidence left.
+The correction record stays, but it holds no selector, new value, reason, or metadata that names
+a forgotten value. If its id names a forgotten value, Finch gives it an id from a hash of its
+scope, slot, and times. Its target ids name only forget ids, not the deleted claims. In each
+single-valued slot of a deleted claim, Finch writes a marker claim with no value from the
+effective time of the forget. The forget targets the marker, so the slot holds a tombstone. An
+older claim of the slot stays stored but does not become current. A later claim with a new value
+becomes current. A set-valued slot, such as the user's allergies, gets no marker. The forget
+removes only the forgotten member, and the other members stay current. A forget does not delete the spans that quote the value. To delete them,
+erase their episodes.
+
+Two calls delete stored data. `MemoryStore::erase_scope(&scope)` deletes every row of the scope
+and of each scope inside it, in every table. Rows of broader scopes and of other scopes stay.
+`MemoryStore::erase_episodes(&scope, &ids)` deletes the episodes and their spans. It also deletes
+each claim, rule, and correction that cites them, with the records derived from those, as a
+forget does. Then Finch projects the state of each affected scope again. A claim that another
+episode supports stays. Each call returns the number of deleted rows per table.
+
 Every state write changes several tables: the batch write API, the single writes of a claim,
-correction, rule, entity, or slot alias, and the scope rebuild. Each one runs as one Postgres
+correction, rule, entity, or slot alias, the scope rebuild, and the two erase calls. Each one runs as one Postgres
 transaction. When the write completes, the transaction commits. When it fails, or the process
 dies first, Postgres discards every change of the write. A read runs in one read-only snapshot,
 so it sees the whole write or none of it.
@@ -429,7 +448,10 @@ tenant setting shows no rows. The Postgres role must not be a superuser and must
 - A memory-layer write is one Postgres transaction: it takes effect whole or not at all, and it
   is durable when the transaction commits.
 - A claim, a correction, and a rule never change after Finch stores them. A new record
-  supersedes an old one.
+  supersedes an old one. Only a forget or an erase deletes one.
+- A forget, `erase_scope`, and `erase_episodes` delete rows with SQL `DELETE`. After the
+  transaction commits, no read returns the deleted records. Postgres keeps the old row data in
+  its files until `VACUUM` reuses that space.
 - A read at a past valid time or a past transaction time returns the versions that held then.
 - The same writes in the same order produce the same version ids.
 

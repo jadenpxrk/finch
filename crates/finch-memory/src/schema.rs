@@ -388,6 +388,7 @@ pub(crate) fn slot_schema() -> CollectionSchema {
 
 pub(crate) fn extraction_job_schema() -> CollectionSchema {
     add_scope_fields(CollectionSchema::new(EXTRACTION_JOBS_COLLECTION))
+        .with_field(string_field("id"))
         .with_field(string_field("episode_id"))
         .with_field(i64_field("sequence_no"))
         .with_field(i64_field("event_time_ms"))

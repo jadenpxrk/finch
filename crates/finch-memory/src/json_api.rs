@@ -136,6 +136,26 @@ impl MemoryStore {
         serde_json::to_string(&correction).map_err(json_status)
     }
 
+    /// Deletes every record of a JSON scope and of each scope inside it. Returns the report as
+    /// JSON.
+    pub fn erase_scope_json(&self, scope_json: &str) -> ZResult<String> {
+        let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
+        let report = self.erase_scope(&scope)?;
+        serde_json::to_string(&report).map_err(json_status)
+    }
+
+    /// Deletes episodes of a JSON scope and every record derived from them. Returns the report as
+    /// JSON.
+    pub fn erase_episodes_json(
+        &self,
+        scope_json: &str,
+        episode_ids: Vec<String>,
+    ) -> ZResult<String> {
+        let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
+        let report = self.erase_episodes(&scope, &episode_ids)?;
+        serde_json::to_string(&report).map_err(json_status)
+    }
+
     /// Writes a claim from JSON input with an optional embedding. Returns the record as JSON.
     pub fn add_manual_claim_json(
         &self,

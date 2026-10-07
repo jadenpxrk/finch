@@ -194,6 +194,20 @@ impl MemoryStore {
     }
 
     #[napi]
+    pub fn erase_scope_json(&self, scope_json: String) -> Result<AsyncTask<BlockingTask<String>>> {
+        self.spawn(move |m| m.erase_scope_json(&scope_json))
+    }
+
+    #[napi]
+    pub fn erase_episodes_json(
+        &self,
+        scope_json: String,
+        episode_ids: Vec<String>,
+    ) -> Result<AsyncTask<BlockingTask<String>>> {
+        self.spawn(move |m| m.erase_episodes_json(&scope_json, episode_ids))
+    }
+
+    #[napi]
     pub fn add_manual_claim_json(
         &self,
         input_json: String,

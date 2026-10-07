@@ -35,7 +35,12 @@ impl MemoryStore {
                 *correction =
                     self.resolve_correction_target_with_pending_claims(correction, &batch.claims)?;
             }
-            self.apply_state_mutation_batch_inner(batch, claim_embeddings)
+            let mut forget = ForgetPlan::default();
+            let mut result =
+                self.apply_state_mutation_batch_inner(batch, claim_embeddings, &mut forget)?;
+            let erased = self.apply_forget(&scope, forget)?;
+            crate::store::retain_unerased(&mut result, &erased);
+            Ok(result)
         })
     }
 
@@ -198,6 +203,7 @@ impl MemoryStore {
         &self,
         batch: StateMutationBatch,
         mut claim_embeddings: BTreeMap<MemoryId, Vec<f32>>,
+        forget: &mut ForgetPlan,
     ) -> ZResult<StateMutationResult> {
         let scope = &batch.scope;
         let entities =
@@ -210,7 +216,7 @@ impl MemoryStore {
             self.write_batch_slot_aliases(alias_inputs, &claims, batch.transaction_time_ms)?;
         let claims = self.recanonicalize_batch_claims(scope, claims, &claim_embeddings)?;
         let (rules, reconciliation_rules) = self.write_batch_rules(scope, batch.rules)?;
-        let corrections = self.write_batch_corrections(scope, batch.corrections)?;
+        let corrections = self.write_batch_corrections(scope, batch.corrections, forget)?;
 
         let boundaries =
             self.plan_batch_boundaries(scope, &claims, &corrections, &reconciliation_rules)?;
@@ -448,6 +454,7 @@ impl MemoryStore {
         &self,
         scope: &MemoryScope,
         inputs: Vec<CorrectionRecord>,
+        forget: &mut ForgetPlan,
     ) -> ZResult<Vec<CorrectionRecord>> {
         let mut corrections = Vec::with_capacity(inputs.len());
         for mut correction in inputs {
@@ -458,7 +465,8 @@ impl MemoryStore {
                 correction.target_subject_key.as_deref().into_iter(),
                 Some(correction.effective_at_ms),
             )?;
-            corrections.push(canonicalize_correction(correction, &registry));
+            corrections
+                .push(self.plan_forget(canonicalize_correction(correction, &registry), forget)?);
         }
         let correction_docs = corrections
             .iter()

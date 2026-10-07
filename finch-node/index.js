@@ -268,6 +268,16 @@ class FinchMemory {
     return Promise.resolve(parse(this.store.extractionBacklogJson(JSON.stringify(scope(input)))));
   }
 
+  eraseScope(input) {
+    return this.store.eraseScopeJson(JSON.stringify(scope(input.scope))).then(parse);
+  }
+
+  eraseEpisodes(input) {
+    return this.store
+      .eraseEpisodesJson(JSON.stringify(scope(input.scope)), input.episodeIds)
+      .then(parse);
+  }
+
   addSlotAlias(input) {
     const payload = {
       id: input.id ?? null,

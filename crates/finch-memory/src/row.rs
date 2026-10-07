@@ -296,8 +296,9 @@ pub(crate) fn episode_doc(record: &EpisodeRecord) -> Result<Doc, serde_json::Err
 
 /// The pending extraction job of `record`, ordered by the episode's sequence number.
 pub(crate) fn extraction_job_doc(record: &EpisodeRecord) -> Result<Doc, serde_json::Error> {
+    let id = format!("xjob_{}", record.id);
     let doc = set_scope(
-        Doc::new(format!("xjob_{}", record.id)),
+        Doc::new(id.clone()).set("id", Value::String(id)),
         &record.scope,
         record.visibility,
         &record.policy_tags,
