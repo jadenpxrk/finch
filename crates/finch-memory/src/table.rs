@@ -18,6 +18,8 @@ pub(crate) trait MemoryTable: Send + Sync {
     /// Nearest rows by cosine distance in `score`, or with no query vector the first `topk`
     /// matching rows, oldest write first.
     fn query(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>>;
+    /// Deletes every row the filter matches and returns their count; an empty filter fails.
+    fn delete(&self, filter: &str) -> ZResult<usize>;
     fn create_hnsw_index(
         &self,
         field: &str,
@@ -49,6 +51,10 @@ impl<T: MemoryTable + ?Sized> MemoryTable for Arc<T> {
 
     fn query(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
         (**self).query(query)
+    }
+
+    fn delete(&self, filter: &str) -> ZResult<usize> {
+        (**self).delete(filter)
     }
 
     fn create_hnsw_index(
@@ -190,6 +196,13 @@ impl MemoryTable for ReadCachedTable {
 
     fn query(&self, query: VectorQuery) -> ZResult<Vec<Arc<Doc>>> {
         self.cached("query", &query, || self.inner.query(query.clone()))
+    }
+
+    fn delete(&self, filter: &str) -> ZResult<usize> {
+        #[cfg(test)]
+        count_state_write_toward_crash();
+        Self::clear();
+        self.inner.delete(filter)
     }
 
     fn create_hnsw_index(

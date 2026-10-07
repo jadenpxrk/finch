@@ -110,6 +110,19 @@ impl PyMemoryStore {
         self.without_gil(py, |m| m.add_correction_json(input_json, created_at_ms))
     }
 
+    fn erase_scope_json(&self, py: Python<'_>, scope_json: &str) -> PyResult<String> {
+        self.without_gil(py, |m| m.erase_scope_json(scope_json))
+    }
+
+    fn erase_episodes_json(
+        &self,
+        py: Python<'_>,
+        scope_json: &str,
+        episode_ids: Vec<String>,
+    ) -> PyResult<String> {
+        self.without_gil(py, |m| m.erase_episodes_json(scope_json, episode_ids))
+    }
+
     #[pyo3(signature = (input_json, embedding=None))]
     fn add_manual_claim_json(
         &self,

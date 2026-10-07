@@ -222,6 +222,16 @@ class FinchMemory {
     return this.addCorrection({ ...input, operation: 'restore' });
   }
 
+  eraseScope(input) {
+    return this.store.eraseScopeJson(JSON.stringify(scope(input.scope))).then(parse);
+  }
+
+  eraseEpisodes(input) {
+    return this.store
+      .eraseEpisodesJson(JSON.stringify(scope(input.scope)), input.episodeIds)
+      .then(parse);
+  }
+
   addSlotAlias(input) {
     const payload = {
       id: input.id ?? null,

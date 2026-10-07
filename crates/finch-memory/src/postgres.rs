@@ -800,6 +800,22 @@ impl MemoryTable for PgTable {
         self.select(&columns, Some(&format!("{field} <=> $1")), &tail, params)
     }
 
+    fn delete(&self, filter: &str) -> ZResult<usize> {
+        // An empty filter matches every row, and no caller means that.
+        if filter.trim().is_empty() {
+            return Err(Status::invalid_argument("a delete needs a filter"));
+        }
+        let mut params = Vec::new();
+        let mut condition = String::new();
+        self.filter_sql(&parse_filter(filter)?, &mut condition, &mut params)?;
+        let sql = format!("DELETE FROM {} WHERE {condition}", quote(&self.name));
+        let deleted = self.session.with_client(|client| {
+            let refs = params.iter().map(|p| p.as_ref()).collect::<Vec<_>>();
+            client.execute(&sql, &refs)
+        })?;
+        Ok(usize::try_from(deleted).unwrap_or(usize::MAX))
+    }
+
     fn create_hnsw_index(
         &self,
         field: &str,

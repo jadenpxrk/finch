@@ -419,6 +419,14 @@ class FinchMemory:
         raw["operation"] = "restore"
         return self.add_correction(raw)
 
+    def erase_scope(self, scope: Union[MemoryScope, Mapping[str, Any]]) -> Dict[str, Any]:
+        return _parse(self._store.erase_scope_json(_json(_scope(scope))))
+
+    def erase_episodes(
+        self, scope: Union[MemoryScope, Mapping[str, Any]], episode_ids: Sequence[str]
+    ) -> Dict[str, Any]:
+        return _parse(self._store.erase_episodes_json(_json(_scope(scope)), list(episode_ids)))
+
     def add_slot_alias(self, input: Union[SlotAliasInput, Mapping[str, Any]]) -> Dict[str, Any]:
         raw = _raw(input)
         payload = {

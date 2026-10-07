@@ -309,6 +309,11 @@ export interface ClaimListResult {
   claims: Record<string, unknown>[]
 }
 
+export interface ErasureReport {
+  /** Number of deleted rows by table name. */
+  deleted_rows: Record<string, number>
+}
+
 export interface MemoryEvalApi {
   runRetrieval(input: Record<string, unknown>): Promise<Record<string, unknown>>
   compareSearchModes(input: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -332,6 +337,8 @@ export declare class FinchMemory {
   addCorrection(input: CorrectionInput): Promise<Record<string, unknown>>
   tombstone(input: Omit<CorrectionInput, 'operation'>): Promise<Record<string, unknown>>
   restore(input: Omit<CorrectionInput, 'operation'>): Promise<Record<string, unknown>>
+  eraseScope(input: { scope: MemoryScope }): Promise<ErasureReport>
+  eraseEpisodes(input: { scope: MemoryScope; episodeIds: string[] }): Promise<ErasureReport>
   addSlotAlias(input: SlotAliasInput): Promise<Record<string, unknown>>
   search(input: SearchRequest): Promise<SearchResponse>
   projectAnswerReadyState(input: ProjectAnswerReadyStateRequest): Promise<Record<string, unknown>>
@@ -353,6 +360,8 @@ export declare class MemoryStore {
   appendArtifactJson(recordJson: string): Promise<string>
   ingestArtifactTextJson(recordJson: string, text: string, chunkOptionsJson?: string): Promise<string>
   addCorrectionJson(inputJson: string, createdAtMs: number): Promise<string>
+  eraseScopeJson(scopeJson: string): Promise<string>
+  eraseEpisodesJson(scopeJson: string, episodeIds: string[]): Promise<string>
   addManualClaimJson(inputJson: string, embedding?: number[]): Promise<string>
   addProfileJson(inputJson: string): Promise<string>
   addEntityJson(inputJson: string, embedding?: number[]): Promise<string>
