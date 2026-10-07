@@ -11,15 +11,16 @@ use crate::retrieval::{
 use crate::row::{
     artifact_doc, artifact_from_doc, claim_doc, claim_from_doc, correction_doc,
     correction_from_doc, dependency_trace_doc, dependency_trace_from_doc, edge_doc, edge_from_doc,
-    entity_alias_doc, entity_alias_from_doc, entity_doc, entity_from_doc, episode_doc, profile_doc,
-    profile_from_doc, rule_doc, rule_from_doc, slot_alias_doc, slot_alias_from_doc, slot_doc,
-    slot_from_doc, span_doc, span_from_doc, state_record_doc, state_record_from_doc,
+    entity_alias_doc, entity_alias_from_doc, entity_doc, entity_from_doc, episode_doc,
+    extraction_job_doc, profile_doc, profile_from_doc, rule_doc, rule_from_doc, slot_alias_doc,
+    slot_alias_from_doc, slot_doc, slot_from_doc, span_doc, span_from_doc, state_record_doc,
+    state_record_from_doc,
 };
 use crate::schema::{
     active_collection_schemas, ARTIFACTS_COLLECTION, CLAIMS_COLLECTION, CORRECTIONS_COLLECTION,
     DEPENDENCY_TRACES_COLLECTION, EDGES_COLLECTION, ENTITIES_COLLECTION, ENTITY_ALIASES_COLLECTION,
-    EPISODES_COLLECTION, PROFILES_COLLECTION, RULES_COLLECTION, SLOTS_COLLECTION,
-    SLOT_ALIASES_COLLECTION, SPANS_COLLECTION, STATE_RECORDS_COLLECTION,
+    EPISODES_COLLECTION, EXTRACTION_JOBS_COLLECTION, PROFILES_COLLECTION, RULES_COLLECTION,
+    SLOTS_COLLECTION, SLOT_ALIASES_COLLECTION, SPANS_COLLECTION, STATE_RECORDS_COLLECTION,
 };
 use crate::state::{
     aggregate_support_state, AnswerSlotSupport, AnswerSupportContract, AnswerSupportState,
@@ -46,6 +47,7 @@ use std::sync::Arc;
 
 pub(crate) mod canonical;
 mod corrections;
+mod extraction_jobs;
 mod graph;
 mod hybrid;
 mod lifecycle;
@@ -56,6 +58,11 @@ mod search;
 pub(crate) mod state_records;
 mod timeline;
 
+pub(crate) use extraction_jobs::OPEN_JOBS_INDEX_DDL;
+pub use extraction_jobs::{
+    ExtractionBacklog, ExtractionFailure, ExtractionJob, ExtractionJobStatus,
+    ExtractionLeaseRequest,
+};
 pub use search::{
     ExpansionQuery, HybridSourceDiverseOptions, HybridSourceDiverseQuery, SourceSpanSelection,
 };
@@ -106,6 +113,7 @@ pub struct MemoryStore {
     dependency_traces: Arc<dyn MemoryTable>,
     slots: Arc<dyn MemoryTable>,
     pub(crate) slot_aliases: Arc<dyn MemoryTable>,
+    extraction_jobs: Arc<dyn MemoryTable>,
     pub(crate) session: Arc<PgSession>,
 }
 
@@ -161,8 +169,27 @@ impl MemoryStore {
         mutate: impl FnOnce() -> ZResult<T>,
     ) -> ZResult<T> {
         let (broader, own) = scope_lock_keys(scope);
-        self.session.begin_write(&broader, own)?;
-        match mutate() {
+        self.session.begin_write(&broader, Some(own))?;
+        self.end_write(mutate())
+    }
+
+    /// Runs the writes of `write` in one transaction that holds no scope lock. A thread that is
+    /// already inside a transaction runs them in that transaction.
+    pub(crate) fn with_write_transaction<T>(
+        &self,
+        write: impl FnOnce() -> ZResult<T>,
+    ) -> ZResult<T> {
+        if self.session.in_transaction() {
+            return write();
+        }
+        self.session.begin_write(&[], None)?;
+        self.end_write(write())
+    }
+
+    /// Commits the calling thread's write transaction after success and rolls it back after an
+    /// error.
+    fn end_write<T>(&self, result: ZResult<T>) -> ZResult<T> {
+        match result {
             Ok(value) => {
                 self.session.commit()?;
                 Ok(value)
@@ -857,12 +884,19 @@ impl MemoryStore {
             ),
             slots: read_cached(id, SLOTS_COLLECTION, table(SLOTS_COLLECTION)?),
             slot_aliases: read_cached(id, SLOT_ALIASES_COLLECTION, table(SLOT_ALIASES_COLLECTION)?),
+            extraction_jobs: table(EXTRACTION_JOBS_COLLECTION)?,
             session,
         })
     }
 
+    /// Writes the episode and its extraction job in one transaction.
     pub(crate) fn append_episode(&self, record: &EpisodeRecord) -> ZResult<()> {
-        insert_one(&self.episodes, episode_doc(record).map_err(json_error)?)
+        let episode = episode_doc(record).map_err(json_error)?;
+        let job = extraction_job_doc(record).map_err(json_error)?;
+        self.with_write_transaction(|| {
+            insert_one(&self.episodes, episode)?;
+            insert_one(&self.extraction_jobs, job)
+        })
     }
 
     pub(crate) fn append_span(
@@ -876,12 +910,14 @@ impl MemoryStore {
         )
     }
 
-    /// Writes ingested episodes with one embedding for each span. Fails when the counts differ.
+    /// Writes ingested episodes with one embedding for each span, and one extraction job for
+    /// each episode, in one transaction. Fails when the counts differ.
     pub fn append_ingested_episodes_with_embeddings(
         &self,
         records: &[(IngestedEpisode, Vec<Vec<f32>>)],
     ) -> ZResult<()> {
         let mut episode_docs = Vec::new();
+        let mut job_docs = Vec::new();
         let mut span_docs = Vec::new();
 
         for (ingested, embeddings) in records {
@@ -891,13 +927,17 @@ impl MemoryStore {
                 ));
             }
             episode_docs.push(episode_doc(&ingested.episode).map_err(json_error)?);
+            job_docs.push(extraction_job_doc(&ingested.episode).map_err(json_error)?);
             for (span, embedding) in ingested.spans.iter().zip(embeddings) {
                 span_docs.push(span_doc(span, Some(embedding), true).map_err(json_error)?);
             }
         }
 
-        insert_many(&self.episodes, episode_docs)?;
-        insert_many(&self.spans, span_docs)
+        self.with_write_transaction(|| {
+            insert_many(&self.episodes, episode_docs)?;
+            insert_many(&self.extraction_jobs, job_docs)?;
+            insert_many(&self.spans, span_docs)
+        })
     }
 
     /// Writes spans with their embeddings.

@@ -237,7 +237,7 @@ fn a_write_on_one_store_does_not_skip_the_snapshot_of_another() {
         .each_ref()
         .map(|dir| crate::test_store(dir, 3).unwrap());
 
-    a.session.begin_write(&[], 0).unwrap();
+    a.session.begin_write(&[], Some(0)).unwrap();
     let a_snapshot = a.lock_state_read().unwrap().takes_snapshot();
     let b_snapshot = b.lock_state_read().unwrap().takes_snapshot();
     a.session.rollback().unwrap();

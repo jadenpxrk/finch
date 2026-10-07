@@ -227,6 +227,32 @@ writes the episode and the spans. Each span row holds its vector and the list of
 words in it, with a GIN index on that list. Ingest writes no claims. The caller runs its own extractor over the spans and writes
 the claims it finds.
 
+### Extraction queue
+
+Each episode write also adds one extraction job in the same transaction. Thus a message write
+returns before the extractor runs, and no episode is lost from the queue. A background worker
+calls `lease_extraction_jobs` with its worker id and a lease time. It gets up to a limit of jobs,
+in sequence order. Then it runs the extractor and calls `complete_extraction_job`. This call
+deletes the job, so the queue holds only the jobs that are not complete.
+
+Each extraction reads the state that the earlier extractions of its scope wrote. Thus a job is
+free only when no earlier job of the same exact scope is pending, leased, or failed. Jobs of
+different scopes lease in parallel. Two workers never get the same job, because the lease locks
+each row with `FOR UPDATE SKIP LOCKED`. A partial index on the scope, the sequence number, and
+the id of open jobs keeps the check of earlier jobs fast on a long queue.
+
+When a lease expires, another worker can lease the job. Each expired lease counts as one attempt,
+because a worker that stops never calls fail. At the `max_attempts` of the lease request, the job
+becomes failed with an error that says the lease expired.
+
+Only the worker that holds the lease can complete or fail the job. `fail_extraction_job` returns
+the job to pending, or marks it failed at its maximum number of attempts. A failed job stops the
+later jobs of its scope. The caller then calls `retry_extraction_job` or `skip_extraction_job`.
+
+`extraction_backlog` gives the number of jobs that wait and the write time of the oldest. A
+nonzero backlog tells a reader that the state is behind the conversation. Span search finds the
+raw text before extraction.
+
 ## 10. Claims and state
 
 ```mermaid

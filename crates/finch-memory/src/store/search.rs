@@ -299,7 +299,8 @@ fn interleave_by_rank(per_source: Vec<Vec<SpanSearchHit>>, max_rank: usize) -> V
 }
 
 impl MemoryStore {
-    /// Cuts an episode into spans and writes the episode and spans.
+    /// Cuts an episode into spans and writes the episode, its spans, and its extraction job in
+    /// one transaction.
     pub fn ingest_episode(
         &self,
         input: EpisodeInput,
@@ -307,10 +308,13 @@ impl MemoryStore {
         chunk_options: &ChunkOptions,
     ) -> ZResult<IngestedEpisode> {
         let ingested = ingest_episode(input, ingested_at_ms, chunk_options);
-        self.append_episode(&ingested.episode)?;
-        for span in &ingested.spans {
-            self.append_span(span, None)?;
-        }
+        self.with_write_transaction(|| {
+            self.append_episode(&ingested.episode)?;
+            for span in &ingested.spans {
+                self.append_span(span, None)?;
+            }
+            Ok(())
+        })?;
         Ok(ingested)
     }
 

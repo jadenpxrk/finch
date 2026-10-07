@@ -294,6 +294,27 @@ pub(crate) fn episode_doc(record: &EpisodeRecord) -> Result<Doc, serde_json::Err
         .set("metadata_json", opt_string(&record.metadata_json)))
 }
 
+/// The pending extraction job of `record`, ordered by the episode's sequence number.
+pub(crate) fn extraction_job_doc(record: &EpisodeRecord) -> Result<Doc, serde_json::Error> {
+    let doc = set_scope(
+        Doc::new(format!("xjob_{}", record.id)),
+        &record.scope,
+        record.visibility,
+        &record.policy_tags,
+    )?;
+    Ok(doc
+        .set("episode_id", Value::String(record.id.clone()))
+        .set("sequence_no", Value::I64(record.sequence_no))
+        .set("event_time_ms", opt_i64(record.temporal.event_time_ms))
+        .set(
+            "status",
+            Value::String(enum_name(crate::ExtractionJobStatus::Pending)?),
+        )
+        .set("attempt_count", Value::I64(0))
+        .set("created_at_ms", Value::I64(record.temporal.ingested_at_ms))
+        .set("updated_at_ms", Value::I64(record.temporal.ingested_at_ms)))
+}
+
 pub(crate) fn artifact_doc(record: &ArtifactRecord) -> Result<Doc, serde_json::Error> {
     let doc = set_scope(
         Doc::new(record.id.clone()).set("id", Value::String(record.id.clone())),

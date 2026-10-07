@@ -70,6 +70,8 @@ from .memory import (
     ClaimInput,
     CorrectionInput,
     EpisodeInput,
+    ExtractionFailure,
+    ExtractionLeaseRequest,
     FinchMemory,
     GroundedAnswerClaim,
     MemoryScope,
@@ -117,6 +119,8 @@ __all__ = [
     "AnswerEmission",
     "ValidateAnswerRequest",
     "SlotAliasInput",
+    "ExtractionLeaseRequest",
+    "ExtractionFailure",
     # Parameters
     "VectorQuery",
     "InvertIndexParam",

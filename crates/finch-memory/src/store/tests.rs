@@ -387,6 +387,7 @@ impl EvidencedStore {
 }
 
 mod claims;
+mod extraction_jobs;
 mod fetch_by_id;
 mod generated_ids;
 mod graph;

@@ -222,6 +222,43 @@ class FinchMemory {
     return this.addCorrection({ ...input, operation: 'restore' });
   }
 
+  async leaseExtractionJobs(input) {
+    const payload = {
+      worker_id: input.workerId,
+      limit: input.limit ?? 10,
+      lease_ms: input.leaseMs ?? 60000,
+      max_attempts: input.maxAttempts ?? 3,
+      now_ms: toMs(input.now) ?? null,
+    };
+    return { jobs: parse(await this.store.leaseExtractionJobsJson(JSON.stringify(payload))) };
+  }
+
+  completeExtractionJob(jobId, workerId) {
+    return this.store.completeExtractionJobJson(jobId, workerId).then(parse);
+  }
+
+  failExtractionJob(input) {
+    const payload = {
+      job_id: input.jobId,
+      worker_id: input.workerId,
+      error: String(input.error),
+      max_attempts: input.maxAttempts ?? 3,
+    };
+    return this.store.failExtractionJobJson(JSON.stringify(payload)).then(parse);
+  }
+
+  retryExtractionJob(jobId) {
+    return this.store.retryExtractionJobJson(jobId).then(parse);
+  }
+
+  skipExtractionJob(jobId) {
+    return this.store.skipExtractionJobJson(jobId).then(parse);
+  }
+
+  extractionBacklog(input) {
+    return Promise.resolve(parse(this.store.extractionBacklogJson(JSON.stringify(scope(input)))));
+  }
+
   addSlotAlias(input) {
     const payload = {
       id: input.id ?? null,

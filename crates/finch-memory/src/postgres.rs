@@ -2,7 +2,7 @@
 //! each state mutation in one transaction.
 
 use crate::schema::span_schema;
-use crate::store::{collection_schemas, take_schema, MemoryStore};
+use crate::store::{collection_schemas, take_schema, MemoryStore, OPEN_JOBS_INDEX_DDL};
 use crate::table::MemoryTable;
 use finch_db::sqlengine::{parse_filter, FilterExpr};
 use finch_types::{
@@ -67,11 +67,13 @@ impl MemoryStore {
             return Err(error);
         }
         let mut schemas = collection_schemas(embedding_dim, span_schema(embedding_dim));
-        Self::from_tables(session.clone(), |table| {
+        let store = Self::from_tables(session.clone(), |table| {
             let table = PgTable::new(session.clone(), take_schema(&mut schemas, table)?)?;
             table.create(vector_index)?;
             Ok(Arc::new(table))
-        })
+        })?;
+        session.with_client(|client| client.batch_execute(OPEN_JOBS_INDEX_DDL))?;
+        Ok(store)
     }
 
     /// Opens the store in the schema `store.name`.
@@ -202,7 +204,7 @@ impl PgSession {
         self.released.notify_one();
     }
 
-    fn with_client<T>(
+    pub(crate) fn with_client<T>(
         &self,
         mut run: impl FnMut(&mut Client) -> Result<T, postgres::Error>,
     ) -> ZResult<T> {
@@ -242,9 +244,9 @@ impl PgSession {
     }
 
     /// Starts a write transaction that the calling thread's operations join. It holds the
-    /// `shared` advisory locks and then the `exclusive` one until the transaction ends, so it waits
+    /// `shared` advisory locks and then any `exclusive` one until the transaction ends, so it waits
     /// for every write that holds one of them in the conflicting mode, in any process.
-    pub(crate) fn begin_write(&self, shared: &[i64], exclusive: i64) -> ZResult<()> {
+    pub(crate) fn begin_write(&self, shared: &[i64], exclusive: Option<i64>) -> ZResult<()> {
         self.begin("BEGIN", Some((shared, exclusive)))
     }
 
@@ -253,7 +255,7 @@ impl PgSession {
         self.begin("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", None)
     }
 
-    fn begin(&self, statement: &str, locks: Option<(&[i64], i64)>) -> ZResult<()> {
+    fn begin(&self, statement: &str, locks: Option<(&[i64], Option<i64>)>) -> ZResult<()> {
         if self.in_transaction() {
             return Err(Status::internal("a postgres transaction is already open"));
         }
@@ -267,7 +269,9 @@ impl PgSession {
                 for key in shared {
                     client.execute("SELECT pg_advisory_xact_lock_shared($1)", &[key])?;
                 }
-                client.execute("SELECT pg_advisory_xact_lock($1)", &[&exclusive])?;
+                if let Some(exclusive) = exclusive {
+                    client.execute("SELECT pg_advisory_xact_lock($1)", &[&exclusive])?;
+                }
             }
             Ok(())
         };
@@ -1129,7 +1133,7 @@ fn quote(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
-fn pg_error(error: postgres::Error) -> Status {
+pub(crate) fn pg_error(error: postgres::Error) -> Status {
     match error.as_db_error() {
         Some(db) => Status::io_error(format!("postgres: {} ({})", db.message(), db.code().code())),
         None => Status::io_error(format!("postgres: {error}")),
