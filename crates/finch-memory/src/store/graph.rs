@@ -226,7 +226,66 @@ impl MemoryStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(json_error)?;
         upsert_many(&self.entity_aliases, docs)?;
+        self.move_name_slots_to_entities(entities)?;
         Ok(aliases)
+    }
+
+    /// Moves the claims a name held before its entity existed into the entity's slots, so the
+    /// claims and rules written before and after the entity share one slot and one subject. Only
+    /// names that resolve to this entity alone move.
+    fn move_name_slots_to_entities(&self, entities: &[EntityRecord]) -> ZResult<()> {
+        let mut moved_scopes = BTreeSet::new();
+        for entity in entities {
+            let names = std::iter::once(entity.canonical_name.as_str())
+                .chain(entity.aliases.iter().map(String::as_str));
+            let registry = self.canonical_registry_for_names(&entity.scope, names.clone())?;
+            let own_names = names
+                .filter(|name| registry.subject_entity_id(Some(name)).as_ref() == Some(&entity.id))
+                .map(canonical_slot_part)
+                .collect::<BTreeSet<_>>();
+            if own_names.is_empty() {
+                continue;
+            }
+            let mut query = VectorQuery::new("", Vec::new(), usize::MAX).with_filter(format!(
+                "{} AND subject_entity_id IS NULL AND {}",
+                scope_filter(&entity.scope),
+                sql_or_eq_list("subject_key", own_names.iter().map(String::as_str))
+            ));
+            query.include_vector = true;
+            let mut docs = Vec::new();
+            for doc in self.claims.scan_filter_only(query)? {
+                let claim = claim_from_doc(&doc)?;
+                let (Some(subject), Some(predicate)) = (&claim.subject, &claim.predicate) else {
+                    continue;
+                };
+                let subject_key = canonical_slot_part(subject);
+                let predicate_key = canonical_slot_part(predicate);
+                // A claim the binder or an alias placed in another slot keeps that slot.
+                let in_name_slot = claim.slot_id.as_deref()
+                    == Some(canonical_slot_id(None, &subject_key, &predicate_key).as_str());
+                if claim.scope != entity.scope || !in_name_slot {
+                    continue;
+                }
+                let slot_id = canonical_slot_id(Some(&entity.id), &subject_key, &predicate_key);
+                docs.push(
+                    (*doc)
+                        .clone()
+                        .set("subject_entity_id", entity.id.clone())
+                        .set("slot_id", slot_id)
+                        .set("slot_facet", finch_types::Value::Null),
+                );
+            }
+            if !docs.is_empty() {
+                upsert_many(&self.claims, docs)?;
+                moved_scopes.insert(&entity.scope);
+            }
+        }
+        // Rules and states still name the slots the moved claims left.
+        for scope in moved_scopes {
+            self.rebind_rules_for_scope(scope, None)?;
+            self.rebuild_state_projection(scope, None)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn entity_aliases_for_keys(

@@ -1716,3 +1716,164 @@ fn subject_wide_invalidation_with_a_concrete_target_slot_only_retires_that_slot(
         Some((ClaimPolarity::Affirmative, Some("Python".to_string())))
     );
 }
+
+#[test]
+fn a_subject_that_gains_an_entity_keeps_one_slot_and_its_rules_still_fire() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("entity_keeps_name_slots");
+    let store = EvidencedStore::create(&dir, 3).unwrap();
+    let scope = scope();
+    let fact = (ClaimKind::Fact, ClaimPolarity::Affirmative);
+    let old_database = make_claim(
+        &scope,
+        "claim_db_old",
+        "project team",
+        "database",
+        Some("Pyravar"),
+        10,
+        fact,
+    );
+    let mut rule = make_derived_rule_inputs();
+    rule.id = Some("rule_database_invalidates_migration_tool".to_string());
+    rule.trigger_subject_key = "project team".to_string();
+    rule.trigger_predicate_key = "database".to_string();
+    rule.target_subject_key = "project team".to_string();
+    rule.target_predicate_key = "migration tool".to_string();
+    rule.trigger_subject = Some("project team".to_string());
+    rule.trigger_predicate = Some("database".to_string());
+    rule.target_subject = Some("project team".to_string());
+    rule.target_predicate = Some("migration tool".to_string());
+    rule.activation = RuleActivation::OnChange;
+    rule.action = RuleAction::MarkUnsupported;
+    rule.value_template = None;
+    store
+        .apply_state_mutation_batch(StateMutationBatch {
+            scope: scope.clone(),
+            transaction_time_ms: 10,
+            propagation_seed: "before-entity".to_string(),
+            max_rule_hops: 8,
+            claims: vec![
+                old_database.clone(),
+                make_claim(
+                    &scope,
+                    "claim_tool",
+                    "project team",
+                    "migration tool",
+                    Some("Zyndra Alter"),
+                    10,
+                    fact,
+                ),
+            ],
+            entities: Vec::new(),
+            rules: vec![rule],
+            slot_aliases: Vec::new(),
+            corrections: Vec::new(),
+        })
+        .unwrap();
+
+    let result = store
+        .apply_state_mutation_batch(StateMutationBatch {
+            scope: scope.clone(),
+            transaction_time_ms: 20,
+            propagation_seed: "entity-and-change".to_string(),
+            max_rule_hops: 8,
+            claims: vec![make_claim(
+                &scope,
+                "claim_db_new",
+                "project team",
+                "database",
+                Some("Zyndra Base"),
+                20,
+                fact,
+            )],
+            entities: vec![EntityInput {
+                id: Some("entity_project_team".to_string()),
+                scope: scope.clone(),
+                visibility: Visibility::Private,
+                policy_tags: Vec::new(),
+                entity_type: "team".to_string(),
+                canonical_name: "project team".to_string(),
+                aliases: Vec::new(),
+                source_claim_ids: vec![old_database.id.clone()],
+                merge_parent_ids: Vec::new(),
+                split_from_id: None,
+                confidence: Some(1.0),
+            }],
+            rules: Vec::new(),
+            slot_aliases: Vec::new(),
+            corrections: Vec::new(),
+        })
+        .unwrap();
+
+    let moved_slot = store
+        .claims_by_ids(&scope, &["claim_db_old".to_string()])
+        .unwrap()[0]
+        .slot_id
+        .clone();
+    assert_eq!(result.claims[0].slot_id, moved_slot);
+    let states = store
+        .scan_state_records(&scope, state_scan(usize::MAX, Some(20)))
+        .unwrap();
+    let tool_states = states
+        .iter()
+        .filter(|state| state.predicate.as_deref() == Some("migration tool"))
+        .map(|state| state.state_kind)
+        .collect::<Vec<_>>();
+    assert!(
+        tool_states.contains(&StateRecordKind::Unsupported),
+        "{tool_states:?}"
+    );
+    assert!(
+        !tool_states.contains(&StateRecordKind::Current),
+        "{tool_states:?}"
+    );
+}
+
+#[test]
+fn a_name_shared_by_two_entities_leaves_its_claims_unlinked() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("shared_name_slot_unlinked");
+    let store = EvidencedStore::create(&dir, 3).unwrap();
+    let scope = scope();
+    let fact = (ClaimKind::Fact, ClaimPolarity::Affirmative);
+    let job = make_claim(
+        &scope,
+        "claim_sarah_job",
+        "sarah",
+        "job",
+        Some("nurse"),
+        10,
+        fact,
+    );
+    let person = |id: &str| EntityInput {
+        id: Some(id.to_string()),
+        scope: scope.clone(),
+        visibility: Visibility::Private,
+        policy_tags: Vec::new(),
+        entity_type: "person".to_string(),
+        canonical_name: "sarah".to_string(),
+        aliases: Vec::new(),
+        source_claim_ids: vec![job.id.clone()],
+        merge_parent_ids: Vec::new(),
+        split_from_id: None,
+        confidence: Some(1.0),
+    };
+    store
+        .apply_state_mutation_batch(StateMutationBatch {
+            scope: scope.clone(),
+            transaction_time_ms: 10,
+            propagation_seed: "two-sarahs".to_string(),
+            max_rule_hops: 8,
+            claims: vec![job.clone()],
+            entities: vec![person("entity_sarah_a"), person("entity_sarah_b")],
+            rules: Vec::new(),
+            slot_aliases: Vec::new(),
+            corrections: Vec::new(),
+        })
+        .unwrap();
+
+    assert!(store
+        .scan_slot_aliases(&scope, usize::MAX, None)
+        .unwrap()
+        .is_empty());
+}

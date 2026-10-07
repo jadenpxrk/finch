@@ -241,10 +241,12 @@ flowchart TD
 ```
 
 A claim write binds the claim to a slot. Finch normalizes the subject and the predicate into
-keys, and an alias table maps a subject such as "my brother" to the entity it names. Then Finch
-stores the claim and runs the rules that the slot triggers. It stores the claims those rules
-derive and projects new state records for every slot the write touched. The write returns after the
-projection, so the next read sees the new state.
+keys, and an alias table maps a subject such as "my brother" to the entity it names. When a
+subject gets an entity later, Finch moves the claims of that name into the entity's slots and binds
+the rules again, so the old and new claims stay in one slot. A name that two entities share stays
+unlinked. Then Finch stores the claim and runs the rules that the slot triggers. It stores the
+claims those rules derive and projects new state records for every slot the write touched. The
+write returns after the projection, so the next read sees the new state.
 
 A state record has two timelines. Valid time says when the fact held in the world. Transaction
 time says when Finch recorded and superseded the record. Say the user moved to Denver in March and
