@@ -140,7 +140,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SlotAliasRecord>> {
-        let _state_guard = self.lock_state_read()?;
+        let _state_guard = self.lock_state_read(scope)?;
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -165,7 +165,7 @@ impl MemoryStore {
 
     /// Returns up to `limit` active entities.
     pub fn scan_entities(&self, scope: &MemoryScope, limit: usize) -> ZResult<Vec<EntityRecord>> {
-        let _state_guard = self.lock_state_read()?;
+        let _state_guard = self.lock_state_read(scope)?;
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -410,7 +410,7 @@ impl MemoryStore {
         limit: usize,
         at_ms: Option<i64>,
     ) -> ZResult<Vec<GraphExpansionHit>> {
-        let _state_guard = self.lock_state_read()?;
+        let _state_guard = self.lock_state_read(scope)?;
         if max_depth == 0 || limit == 0 || seed_entity_ids.is_empty() {
             return Ok(Vec::new());
         }

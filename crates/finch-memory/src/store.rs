@@ -139,14 +139,15 @@ impl Drop for StateReadGuard<'_> {
 }
 
 impl MemoryStore {
-    pub(crate) fn lock_state_read(&self) -> ZResult<StateReadGuard<'_>> {
+    /// Starts the snapshot of a public read at `scope`, unless the thread is in a transaction.
+    pub(crate) fn lock_state_read(&self, scope: &MemoryScope) -> ZResult<StateReadGuard<'_>> {
         if self.session.in_transaction() {
             return Ok(StateReadGuard {
                 session: None,
                 ends_cache: false,
             });
         }
-        self.session.begin_snapshot()?;
+        self.session.begin_snapshot(self.bound_tenant(scope)?)?;
         Ok(StateReadGuard {
             session: Some(&self.session),
             ends_cache: crate::table::begin_read_cache(),
@@ -161,18 +162,35 @@ impl MemoryStore {
         mutate: impl FnOnce() -> ZResult<T>,
     ) -> ZResult<T> {
         let (broader, own) = scope_lock_keys(scope);
-        self.session.begin_write(&broader, own)?;
-        match mutate() {
-            Ok(value) => {
-                self.session.commit()?;
-                Ok(value)
-            }
-            Err(error) => match self.session.rollback() {
-                Ok(()) => Err(error),
-                Err(rollback) => Err(Status::internal(format!(
-                    "{error}; rolling it back failed: {rollback}"
-                ))),
-            },
+        self.session
+            .begin_write(Some((&broader, own)), self.bound_tenant(scope)?)?;
+        self.session.finish(mutate())
+    }
+
+    /// Runs the writes of `write` in one transaction bound to `scope`'s tenant when tenant
+    /// isolation is on and the thread has no transaction; otherwise runs them as they are.
+    pub(crate) fn with_scope_tenant<T>(
+        &self,
+        scope: &MemoryScope,
+        write: impl FnOnce() -> ZResult<T>,
+    ) -> ZResult<T> {
+        if !self.session.tenant_isolation || self.session.in_transaction() {
+            return write();
+        }
+        self.session.begin_write(None, self.bound_tenant(scope)?)?;
+        self.session.finish(write())
+    }
+
+    /// The tenant that a transaction at `scope` sets: none while tenant isolation is off.
+    fn bound_tenant<'a>(&self, scope: &'a MemoryScope) -> ZResult<Option<&'a str>> {
+        if !self.session.tenant_isolation {
+            return Ok(None);
+        }
+        match scope.tenant_id.as_deref() {
+            Some(tenant) if !tenant.is_empty() => Ok(Some(tenant)),
+            _ => Err(Status::permission_denied(
+                "tenant isolation is on, so the operation needs a scope with a tenant_id",
+            )),
         }
     }
 }
@@ -896,8 +914,13 @@ impl MemoryStore {
             }
         }
 
-        insert_many(&self.episodes, episode_docs)?;
-        insert_many(&self.spans, span_docs)
+        let Some((first, _)) = records.first() else {
+            return Ok(());
+        };
+        self.with_scope_tenant(&first.episode.scope, || {
+            insert_many(&self.episodes, episode_docs)?;
+            insert_many(&self.spans, span_docs)
+        })
     }
 
     /// Writes spans with their embeddings.
@@ -906,11 +929,16 @@ impl MemoryStore {
             .iter()
             .map(|(span, embedding)| span_doc(span, Some(embedding), false).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        insert_many(&self.spans, docs)
+        let Some((first, _)) = records.first() else {
+            return Ok(());
+        };
+        self.with_scope_tenant(&first.scope, || insert_many(&self.spans, docs))
     }
 
     pub(crate) fn append_artifact(&self, record: &ArtifactRecord) -> ZResult<()> {
-        insert_one(&self.artifacts, artifact_doc(record).map_err(json_error)?)
+        self.with_scope_tenant(&record.scope, || {
+            insert_one(&self.artifacts, artifact_doc(record).map_err(json_error)?)
+        })
     }
 
     pub(crate) fn ingest_artifact_text(
@@ -920,10 +948,13 @@ impl MemoryStore {
         chunk_options: &ChunkOptions,
     ) -> ZResult<IngestedArtifact> {
         let spans = chunk_artifact_text(&record, text, chunk_options);
-        self.append_artifact(&record)?;
-        for span in &spans {
-            self.append_span(span, None)?;
-        }
+        self.with_scope_tenant(&record.scope, || {
+            self.append_artifact(&record)?;
+            for span in &spans {
+                self.append_span(span, None)?;
+            }
+            Ok(())
+        })?;
         Ok(IngestedArtifact {
             artifact: record,
             spans,

@@ -22,7 +22,9 @@ impl PyMemoryStore {
 #[pymethods]
 impl PyMemoryStore {
     #[staticmethod]
-    #[pyo3(signature = (url, name, embedding_dim, vector_index=false, max_connections=8))]
+    #[pyo3(signature = (
+        url, name, embedding_dim, vector_index=false, max_connections=8, tenant_isolation=false
+    ))]
     fn create(
         py: Python<'_>,
         url: &str,
@@ -30,9 +32,11 @@ impl PyMemoryStore {
         embedding_dim: usize,
         vector_index: bool,
         max_connections: usize,
+        tenant_isolation: bool,
     ) -> PyResult<Self> {
         let store = PostgresStore {
             max_connections,
+            tenant_isolation,
             ..PostgresStore::new(url, name)
         };
         let inner = py
@@ -42,10 +46,17 @@ impl PyMemoryStore {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (url, name, max_connections=8))]
-    fn open(py: Python<'_>, url: &str, name: &str, max_connections: usize) -> PyResult<Self> {
+    #[pyo3(signature = (url, name, max_connections=8, tenant_isolation=false))]
+    fn open(
+        py: Python<'_>,
+        url: &str,
+        name: &str,
+        max_connections: usize,
+        tenant_isolation: bool,
+    ) -> PyResult<Self> {
         let store = PostgresStore {
             max_connections,
+            tenant_isolation,
             ..PostgresStore::new(url, name)
         };
         let inner = py

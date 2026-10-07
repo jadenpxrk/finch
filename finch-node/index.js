@@ -93,14 +93,23 @@ class FinchMemory {
     this.evals = new MemoryEvalApi(this);
   }
 
-  static async create({ url, name, embeddingDim, vectorIndex, maxConnections }) {
+  static async create({ url, name, embeddingDim, vectorIndex, maxConnections, tenantIsolation }) {
     return new FinchMemory(
-      await native.MemoryStore.create(url, name, embeddingDim, vectorIndex, maxConnections),
+      await native.MemoryStore.create(
+        url,
+        name,
+        embeddingDim,
+        vectorIndex,
+        maxConnections,
+        tenantIsolation,
+      ),
     );
   }
 
-  static async open({ url, name, maxConnections }) {
-    return new FinchMemory(await native.MemoryStore.open(url, name, maxConnections));
+  static async open({ url, name, maxConnections, tenantIsolation }) {
+    return new FinchMemory(
+      await native.MemoryStore.open(url, name, maxConnections, tenantIsolation),
+    );
   }
 
   ingestEpisode(input) {

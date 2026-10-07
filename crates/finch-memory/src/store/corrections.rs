@@ -14,7 +14,7 @@ impl MemoryStore {
         correction: &CorrectionRecord,
         pending_claims: &[ClaimRecord],
     ) -> ZResult<CorrectionRecord> {
-        let _state_guard = self.lock_state_read()?;
+        let _state_guard = self.lock_state_read(&correction.scope)?;
         let (mut correction, pending_claims) =
             self.canonicalize_correction_inputs(correction, pending_claims)?;
         if correction.target_type != "claim"

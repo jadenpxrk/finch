@@ -81,7 +81,7 @@ impl MemoryStore {
         projection: &AnswerReadyStateProjection,
         retrieved_hits: &[SpanSearchHit],
     ) -> ZResult<Vec<SpanSearchHit>> {
-        let _state_guard = self.lock_state_read()?;
+        let _state_guard = self.lock_state_read(scope)?;
         let mut required_span_ids = projection
             .resolved_answer_slots()
             .into_iter()
@@ -134,7 +134,7 @@ impl MemoryStore {
         scope: &MemoryScope,
         request: &AnswerReadyStateRequest<'_>,
     ) -> ZResult<AnswerReadyStateProjection> {
-        let _state_guard = self.lock_state_read()?;
+        let _state_guard = self.lock_state_read(scope)?;
         let (selection_views, answer_target_slot_ids) = answer_ready_read_plan(request)?;
         self.project_answer_ready_state_from_views(
             scope,

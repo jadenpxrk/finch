@@ -5,12 +5,19 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::sync::Arc;
 
-/// The store `name` at `url`, holding at most `max_connections` connections (default 8).
-fn postgres_store(url: String, name: String, max_connections: Option<u32>) -> PostgresStore {
+/// The store `name` at `url`, holding at most `max_connections` connections (default 8), with
+/// tenant isolation when `tenant_isolation` is true (default false).
+fn postgres_store(
+    url: String,
+    name: String,
+    max_connections: Option<u32>,
+    tenant_isolation: Option<bool>,
+) -> PostgresStore {
     let mut store = PostgresStore::new(url, name);
     if let Some(max_connections) = max_connections {
         store.max_connections = max_connections as usize;
     }
+    store.tenant_isolation = tenant_isolation.unwrap_or(false);
     store
 }
 
@@ -46,8 +53,9 @@ impl MemoryStore {
         embedding_dim: u32,
         vector_index: Option<bool>,
         max_connections: Option<u32>,
+        tenant_isolation: Option<bool>,
     ) -> AsyncTask<BlockingTask<MemoryStore>> {
-        let store = postgres_store(url, name, max_connections);
+        let store = postgres_store(url, name, max_connections, tenant_isolation);
         BlockingTask::spawn(move || {
             let store = RustMemoryStore::create(
                 &store,
@@ -66,8 +74,9 @@ impl MemoryStore {
         url: String,
         name: String,
         max_connections: Option<u32>,
+        tenant_isolation: Option<bool>,
     ) -> AsyncTask<BlockingTask<MemoryStore>> {
-        let store = postgres_store(url, name, max_connections);
+        let store = postgres_store(url, name, max_connections, tenant_isolation);
         BlockingTask::spawn(move || {
             let store = RustMemoryStore::open(&store)?;
             Ok(Self {
