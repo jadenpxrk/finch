@@ -131,7 +131,7 @@ impl MemoryStore {
 
     pub(crate) fn add_profile(&self, input: ProfileInput) -> ZResult<ProfileRecord> {
         let profile = crate::ingest::create_profile(input);
-        self.with_scope_tenant(&profile.scope, || self.append_profile(&profile))?;
+        self.with_write_transaction(&profile.scope, || self.append_profile(&profile))?;
         Ok(profile)
     }
 
@@ -192,7 +192,7 @@ impl MemoryStore {
 
     pub(crate) fn add_edge(&self, input: EdgeInput) -> ZResult<EdgeRecord> {
         let edge = create_edge(input);
-        self.with_scope_tenant(&edge.scope, || self.append_edge(&edge))?;
+        self.with_write_transaction(&edge.scope, || self.append_edge(&edge))?;
         Ok(edge)
     }
 }

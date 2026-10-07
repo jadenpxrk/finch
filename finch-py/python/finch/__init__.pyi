@@ -15,6 +15,8 @@ from .memory import (
     ClaimInput,
     CorrectionInput,
     EpisodeInput,
+    ExtractionFailure,
+    ExtractionLeaseRequest,
     FinchMemory,
     GroundedAnswerClaim,
     MemoryScope,

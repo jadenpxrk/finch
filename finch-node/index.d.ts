@@ -301,6 +301,42 @@ export interface SlotAliasInput {
   validTo?: string | number | Date
 }
 
+export interface ExtractionLeaseRequest {
+  workerId: string
+  limit?: number
+  leaseMs?: number
+  maxAttempts?: number
+  now?: string | number | Date
+}
+
+export interface ExtractionFailure {
+  jobId: string
+  workerId: string
+  error: string
+  maxAttempts?: number
+}
+
+export interface ExtractionJob {
+  id: string
+  scope: Record<string, string | null>
+  episode_id: string
+  sequence_no: number
+  event_time_ms: number | null
+  status: 'pending' | 'leased' | 'done' | 'failed' | 'skipped'
+  attempt_count: number
+  lease_owner: string | null
+  lease_expires_at_ms: number | null
+  last_error: string | null
+  created_at_ms: number
+  updated_at_ms: number
+}
+
+export interface ExtractionBacklog {
+  jobs: number
+  failed_jobs: number
+  oldest_created_at_ms: number | null
+}
+
 export interface SearchResponse {
   hits: Record<string, unknown>[]
 }
@@ -333,6 +369,12 @@ export declare class FinchMemory {
   tombstone(input: Omit<CorrectionInput, 'operation'>): Promise<Record<string, unknown>>
   restore(input: Omit<CorrectionInput, 'operation'>): Promise<Record<string, unknown>>
   addSlotAlias(input: SlotAliasInput): Promise<Record<string, unknown>>
+  leaseExtractionJobs(input: ExtractionLeaseRequest): Promise<{ jobs: ExtractionJob[] }>
+  completeExtractionJob(jobId: string, workerId: string): Promise<ExtractionJob>
+  failExtractionJob(input: ExtractionFailure): Promise<ExtractionJob>
+  retryExtractionJob(jobId: string): Promise<ExtractionJob>
+  skipExtractionJob(jobId: string): Promise<ExtractionJob>
+  extractionBacklog(scope: MemoryScope): Promise<ExtractionBacklog>
   search(input: SearchRequest): Promise<SearchResponse>
   projectAnswerReadyState(input: ProjectAnswerReadyStateRequest): Promise<Record<string, unknown>>
   packContext(input: PackContextRequest): Promise<PackedMemoryContext>
@@ -358,6 +400,14 @@ export declare class MemoryStore {
   addEntityJson(inputJson: string, embedding?: number[]): Promise<string>
   addEdgeJson(inputJson: string): Promise<string>
   addSlotAliasJson(inputJson: string, recordedAtMs: number): Promise<string>
+  /** JSON of `ExtractionLeaseRequest`. */
+  leaseExtractionJobsJson(requestJson: string): Promise<string>
+  completeExtractionJobJson(jobId: string, workerId: string): Promise<string>
+  /** JSON of `ExtractionFailure`. */
+  failExtractionJobJson(failureJson: string): Promise<string>
+  retryExtractionJobJson(jobId: string): Promise<string>
+  skipExtractionJobJson(jobId: string): Promise<string>
+  extractionBacklogJson(scopeJson: string): string
   scanSlotAliasesJson(scopeJson: string, limit: number, atMs?: number): string
   querySpansJson(
     scopeJson: string,

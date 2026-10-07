@@ -112,6 +112,35 @@ impl PyMemoryStore {
         })
     }
 
+    fn lease_extraction_jobs_json(&self, py: Python<'_>, request_json: &str) -> PyResult<String> {
+        self.without_gil(py, |m| m.lease_extraction_jobs_json(request_json))
+    }
+
+    fn complete_extraction_job_json(
+        &self,
+        py: Python<'_>,
+        job_id: &str,
+        worker_id: &str,
+    ) -> PyResult<String> {
+        self.without_gil(py, |m| m.complete_extraction_job_json(job_id, worker_id))
+    }
+
+    fn fail_extraction_job_json(&self, py: Python<'_>, failure_json: &str) -> PyResult<String> {
+        self.without_gil(py, |m| m.fail_extraction_job_json(failure_json))
+    }
+
+    fn retry_extraction_job_json(&self, py: Python<'_>, job_id: &str) -> PyResult<String> {
+        self.without_gil(py, |m| m.retry_extraction_job_json(job_id))
+    }
+
+    fn skip_extraction_job_json(&self, py: Python<'_>, job_id: &str) -> PyResult<String> {
+        self.without_gil(py, |m| m.skip_extraction_job_json(job_id))
+    }
+
+    fn extraction_backlog_json(&self, py: Python<'_>, scope_json: &str) -> PyResult<String> {
+        self.without_gil(py, |m| m.extraction_backlog_json(scope_json))
+    }
+
     fn add_correction_json(
         &self,
         py: Python<'_>,

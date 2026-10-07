@@ -17,6 +17,7 @@ pub(crate) const STATE_RECORDS_COLLECTION: &str = "memory_state_records";
 pub(crate) const DEPENDENCY_TRACES_COLLECTION: &str = "memory_dependency_traces";
 pub(crate) const SLOTS_COLLECTION: &str = "memory_slots";
 pub(crate) const SLOT_ALIASES_COLLECTION: &str = "memory_slot_aliases";
+pub(crate) const EXTRACTION_JOBS_COLLECTION: &str = "memory_extraction_jobs";
 
 /// String fields with an inverted index in every memory collection that has them.
 pub(crate) const INDEXED_STRING_FIELDS: [&str; 3] = ["space_id", "slot_id", "subject_entity_id"];
@@ -385,6 +386,20 @@ pub(crate) fn slot_schema() -> CollectionSchema {
         .with_field(i64_field("superseded_at_ms"))
 }
 
+pub(crate) fn extraction_job_schema() -> CollectionSchema {
+    add_scope_fields(CollectionSchema::new(EXTRACTION_JOBS_COLLECTION))
+        .with_field(string_field("episode_id"))
+        .with_field(i64_field("sequence_no"))
+        .with_field(i64_field("event_time_ms"))
+        .with_field(string_field("status").with_index(string_index_params()))
+        .with_field(i64_field("attempt_count"))
+        .with_field(string_field("lease_owner"))
+        .with_field(i64_field("lease_expires_at_ms"))
+        .with_field(string_field("last_error"))
+        .with_field(i64_field("created_at_ms"))
+        .with_field(i64_field("updated_at_ms"))
+}
+
 pub(crate) fn active_collection_schemas(embedding_dim: usize) -> Vec<CollectionSchema> {
     vec![
         episode_schema(),
@@ -401,6 +416,7 @@ pub(crate) fn active_collection_schemas(embedding_dim: usize) -> Vec<CollectionS
         dependency_trace_schema(),
         slot_schema(),
         slot_alias_schema(),
+        extraction_job_schema(),
     ]
 }
 

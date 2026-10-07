@@ -219,6 +219,23 @@ class SlotAliasInput:
     valid_to: object = None
 
 
+@dataclass(frozen=True)
+class ExtractionLeaseRequest:
+    worker_id: str
+    limit: int = 10
+    lease_ms: int = 60_000
+    max_attempts: int = 3
+    now: object = None
+
+
+@dataclass(frozen=True)
+class ExtractionFailure:
+    job_id: str
+    worker_id: str
+    error: str
+    max_attempts: int = 3
+
+
 class _EvalApi:
     def __init__(self, memory: "FinchMemory") -> None:
         self._memory = memory
@@ -355,6 +372,49 @@ class FinchMemory:
             "metadata_json": _json(raw.get("metadata", {})),
         }
         return _parse(self._store.ingest_artifact_text_json(_json(payload), text, None))
+
+    def lease_extraction_jobs(
+        self, input: Union[ExtractionLeaseRequest, Mapping[str, Any]]
+    ) -> Dict[str, Any]:
+        """Lease the next episodes that wait for extraction to the worker `worker_id`."""
+        raw = _raw(input)
+        payload = {
+            "worker_id": raw["worker_id"],
+            "limit": int(raw.get("limit", 10)),
+            "lease_ms": int(raw.get("lease_ms", 60_000)),
+            "max_attempts": int(raw.get("max_attempts", 3)),
+            "now_ms": _ms(raw.get("now")),
+        }
+        return {"jobs": _parse(self._store.lease_extraction_jobs_json(_json(payload)))}
+
+    def complete_extraction_job(self, job_id: str, worker_id: str) -> Dict[str, Any]:
+        """Mark a leased extraction job done."""
+        return _parse(self._store.complete_extraction_job_json(job_id, worker_id))
+
+    def fail_extraction_job(
+        self, input: Union[ExtractionFailure, Mapping[str, Any]]
+    ) -> Dict[str, Any]:
+        """Record a failed extraction attempt of a leased job."""
+        raw = _raw(input)
+        payload = {
+            "job_id": raw["job_id"],
+            "worker_id": raw["worker_id"],
+            "error": str(raw["error"]),
+            "max_attempts": int(raw.get("max_attempts", 3)),
+        }
+        return _parse(self._store.fail_extraction_job_json(_json(payload)))
+
+    def retry_extraction_job(self, job_id: str) -> Dict[str, Any]:
+        """Return a failed extraction job to pending."""
+        return _parse(self._store.retry_extraction_job_json(job_id))
+
+    def skip_extraction_job(self, job_id: str) -> Dict[str, Any]:
+        """Mark a failed extraction job skipped, so later jobs of its scope can run."""
+        return _parse(self._store.skip_extraction_job_json(job_id))
+
+    def extraction_backlog(self, scope: Union[MemoryScope, Mapping[str, Any]]) -> Dict[str, Any]:
+        """Count the jobs of `scope` that wait for extraction or failed."""
+        return _parse(self._store.extraction_backlog_json(_json(_scope(scope))))
 
     def add_claim(self, input: Union[ClaimInput, Mapping[str, Any]]) -> Dict[str, Any]:
         raw = _raw(input)

@@ -3,8 +3,9 @@ use crate::{
     evaluate_retrieval_baseline, evaluate_span_hits_with_admission, lexical_terms, AnswerEmission,
     AnswerReadyStateRequest, AnswerSupportContract, ArtifactRecord, BiTemporalQuery, ChunkOptions,
     ContextInput, ContextOptions, CorrectionInput, EdgeInput, EntityInput, EpisodeInput,
-    HybridSpanSearch, ManualClaimInput, MemoryScope, MemoryStore, ProfileInput, SlotAliasInput,
-    SpanSearchHit, StateMutationBatch, StateReadSelection,
+    ExtractionFailure, ExtractionLeaseRequest, HybridSpanSearch, ManualClaimInput, MemoryScope,
+    MemoryStore, ProfileInput, SlotAliasInput, SpanSearchHit, StateMutationBatch,
+    StateReadSelection,
 };
 use finch_types::{Status, ZResult};
 use serde::Deserialize;
@@ -327,6 +328,47 @@ impl MemoryStore {
         let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
         let records = self.scan_corrections(&scope, limit)?;
         serde_json::to_string(&records).map_err(json_status)
+    }
+
+    /// Leases extraction jobs for a JSON `ExtractionLeaseRequest`. Returns the jobs as JSON.
+    pub fn lease_extraction_jobs_json(&self, request_json: &str) -> ZResult<String> {
+        let request =
+            serde_json::from_str::<ExtractionLeaseRequest>(request_json).map_err(json_status)?;
+        let jobs = self.lease_extraction_jobs(&request)?;
+        serde_json::to_string(&jobs).map_err(json_status)
+    }
+
+    /// Marks a leased extraction job done. Returns the job as JSON.
+    pub fn complete_extraction_job_json(&self, job_id: &str, worker_id: &str) -> ZResult<String> {
+        let job = self.complete_extraction_job(job_id, worker_id)?;
+        serde_json::to_string(&job).map_err(json_status)
+    }
+
+    /// Records a JSON `ExtractionFailure`. Returns the job as JSON.
+    pub fn fail_extraction_job_json(&self, failure_json: &str) -> ZResult<String> {
+        let failure =
+            serde_json::from_str::<ExtractionFailure>(failure_json).map_err(json_status)?;
+        let job = self.fail_extraction_job(&failure)?;
+        serde_json::to_string(&job).map_err(json_status)
+    }
+
+    /// Returns a failed extraction job to pending. Returns the job as JSON.
+    pub fn retry_extraction_job_json(&self, job_id: &str) -> ZResult<String> {
+        let job = self.retry_extraction_job(job_id)?;
+        serde_json::to_string(&job).map_err(json_status)
+    }
+
+    /// Marks a failed extraction job skipped. Returns the job as JSON.
+    pub fn skip_extraction_job_json(&self, job_id: &str) -> ZResult<String> {
+        let job = self.skip_extraction_job(job_id)?;
+        serde_json::to_string(&job).map_err(json_status)
+    }
+
+    /// Returns the extraction backlog of a JSON scope, as JSON.
+    pub fn extraction_backlog_json(&self, scope_json: &str) -> ZResult<String> {
+        let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
+        let backlog = self.extraction_backlog(&scope)?;
+        serde_json::to_string(&backlog).map_err(json_status)
     }
 
     /// Returns up to `limit` active claim versions valid at `at_ms`, as JSON.

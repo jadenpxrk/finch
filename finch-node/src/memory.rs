@@ -137,6 +137,54 @@ impl MemoryStore {
     }
 
     #[napi]
+    pub fn lease_extraction_jobs_json(
+        &self,
+        request_json: String,
+    ) -> Result<AsyncTask<BlockingTask<String>>> {
+        self.spawn(move |m| m.lease_extraction_jobs_json(&request_json))
+    }
+
+    #[napi]
+    pub fn complete_extraction_job_json(
+        &self,
+        job_id: String,
+        worker_id: String,
+    ) -> Result<AsyncTask<BlockingTask<String>>> {
+        self.spawn(move |m| m.complete_extraction_job_json(&job_id, &worker_id))
+    }
+
+    #[napi]
+    pub fn fail_extraction_job_json(
+        &self,
+        failure_json: String,
+    ) -> Result<AsyncTask<BlockingTask<String>>> {
+        self.spawn(move |m| m.fail_extraction_job_json(&failure_json))
+    }
+
+    #[napi]
+    pub fn retry_extraction_job_json(
+        &self,
+        job_id: String,
+    ) -> Result<AsyncTask<BlockingTask<String>>> {
+        self.spawn(move |m| m.retry_extraction_job_json(&job_id))
+    }
+
+    #[napi]
+    pub fn skip_extraction_job_json(
+        &self,
+        job_id: String,
+    ) -> Result<AsyncTask<BlockingTask<String>>> {
+        self.spawn(move |m| m.skip_extraction_job_json(&job_id))
+    }
+
+    #[napi]
+    pub fn extraction_backlog_json(&self, env: Env, scope_json: String) -> Result<String> {
+        self.inner()?
+            .extraction_backlog_json(&scope_json)
+            .map_err(|e| finch_err(&env, e))
+    }
+
+    #[napi]
     pub fn add_correction_json(
         &self,
         input_json: String,

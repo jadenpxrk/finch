@@ -4,7 +4,9 @@
 use crate::row::{span_from_doc, state_record_from_doc};
 use crate::schema::{span_schema, CLAIMS_COLLECTION, SPANS_COLLECTION, STATE_RECORDS_COLLECTION};
 use crate::store::state_records::state_lexical_terms;
-use crate::store::{collection_schemas, span_term_counts, take_schema, MemoryStore};
+use crate::store::{
+    collection_schemas, span_term_counts, take_schema, MemoryStore, OPEN_JOBS_INDEX_DDL,
+};
 use crate::table::MemoryTable;
 use finch_db::sqlengine::{parse_filter, FilterExpr};
 use finch_types::{
@@ -85,6 +87,7 @@ impl MemoryStore {
             table.create(vector_index)?;
             Ok(Arc::new(table))
         })?;
+        session.with_client(|client| client.batch_execute(OPEN_JOBS_INDEX_DDL))?;
         session.with_client(|client| write_schema_version(client, SCHEMA_VERSION))?;
         prepare_schema(&session, embedding_dim)?;
         Ok(store)
@@ -203,7 +206,8 @@ fn migrate_to_1(session: &Arc<PgSession>, embedding_dim: usize) -> ZResult<()> {
              UPDATE {claims} SET evidence_ids = ARRAY(SELECT DISTINCT id COLLATE \"C\" \
                FROM jsonb_array_elements_text(COALESCE(source_spans_json, '[]')::jsonb \
                  || COALESCE(source_eps_json, '[]')::jsonb) AS e(id) ORDER BY 1) \
-             WHERE evidence_ids IS NULL;",
+             WHERE evidence_ids IS NULL; \
+             {OPEN_JOBS_INDEX_DDL};",
             claims = quote(CLAIMS_COLLECTION)
         ))
     })
@@ -392,7 +396,7 @@ impl PgSession {
         self.released.notify_one();
     }
 
-    fn with_client<T>(
+    pub(crate) fn with_client<T>(
         &self,
         mut run: impl FnMut(&mut Client) -> Result<T, postgres::Error>,
     ) -> ZResult<T> {
@@ -1433,7 +1437,7 @@ fn quote(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
-fn pg_error(error: postgres::Error) -> Status {
+pub(crate) fn pg_error(error: postgres::Error) -> Status {
     match error.as_db_error() {
         Some(db) => Status::io_error(format!("postgres: {} ({})", db.message(), db.code().code())),
         None => Status::io_error(format!("postgres: {error}")),
