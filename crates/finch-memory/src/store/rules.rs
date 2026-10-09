@@ -19,7 +19,7 @@ pub(super) struct DependencyChainResolution {
 
 impl MemoryStore {
     pub(crate) fn append_rule(&self, record: &RuleRecord) -> ZResult<()> {
-        self.with_state_mutation(&record.scope, || {
+        self.with_state_mutation(&record.scope, false, || {
             self.validate_evidence_references(
                 &record.scope,
                 &record.source_span_ids,

@@ -1,6 +1,36 @@
 use super::*;
 use crate::ingest::EpisodeInput;
 use std::collections::BTreeMap;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+fn wait_for_advisory_waiter(transaction: &mut postgres::Transaction<'_>, key: i64) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let waiting: bool = transaction
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks \
+                 WHERE locktype = 'advisory' AND NOT granted \
+                 AND classid::bigint = $1 AND objid::bigint = $2 AND objsubid = 1 \
+                 AND pg_backend_pid() = ANY(pg_blocking_pids(pid)))",
+                &[
+                    &((key as u64 >> 32) as i64),
+                    &((key as u64 & 0xffff_ffff) as i64),
+                ],
+            )
+            .unwrap()
+            .get(0);
+        if waiting {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "write did not wait for the advisory lock"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
 
 fn user_scope(user: &str) -> MemoryScope {
     let mut scope = scope();
@@ -212,6 +242,226 @@ fn write_user(store: &MemoryStore, scope: &MemoryScope, user: &str) {
     retract.target_selector = None;
     retract.target_ids = vec![old.id];
     store.add_correction(&retract).unwrap();
+}
+
+#[test]
+fn ingestion_waits_for_an_erase_of_its_scope() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("ingestion_waits_for_erase");
+    let store = crate::test_store(&path, 3).unwrap();
+    let a = user_scope("user_a");
+    let mut child = a.clone();
+    child.thread_id = Some("thread_a".to_string());
+    let (_, key) = scope_lock_keys(&a, true);
+
+    let ingested = thread::scope(|threads| {
+        let mut client =
+            postgres::Client::connect(&crate::test_postgres_url(), postgres::NoTls).unwrap();
+        let mut transaction = client.transaction().unwrap();
+        transaction
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&key])
+            .unwrap();
+        let writer = threads.spawn(|| ingest(&store, &child, "ep_a", "A lives in Porto", 10));
+        wait_for_advisory_waiter(&mut transaction, key);
+        assert!(!writer.is_finished());
+        assert!(raw_rows(&path, "user_id = $1", "user_a").is_empty());
+        transaction.commit().unwrap();
+        writer.join().unwrap()
+    });
+
+    assert_eq!(
+        raw_rows(&path, "user_id = $1", "user_a"),
+        BTreeMap::from([
+            (EPISODES_COLLECTION.to_string(), 1),
+            (SPANS_COLLECTION.to_string(), ingested.spans.len() as i64),
+            (EXTRACTION_JOBS_COLLECTION.to_string(), 1),
+        ])
+    );
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn erase_waits_for_an_ingestion_in_flight() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("erase_waits_for_ingestion");
+    let store = crate::test_store(&path, 3).unwrap();
+    let a = user_scope("user_a");
+    write_user(&store, &a, "user_a");
+    let before = raw_rows(&path, "user_id = $1", "user_a");
+    let (_, key) = scope_lock_keys(&a, true);
+
+    thread::scope(|threads| {
+        let mut client =
+            postgres::Client::connect(&crate::test_postgres_url(), postgres::NoTls).unwrap();
+        let mut transaction = client.transaction().unwrap();
+        transaction
+            .execute("SELECT pg_advisory_xact_lock_shared($1)", &[&key])
+            .unwrap();
+        let eraser = threads.spawn(|| store.erase_scope(&a));
+        wait_for_advisory_waiter(&mut transaction, key);
+        assert!(!eraser.is_finished());
+        assert_eq!(raw_rows(&path, "user_id = $1", "user_a"), before);
+        transaction.commit().unwrap();
+        eraser.join().unwrap().unwrap();
+    });
+
+    assert!(raw_rows(&path, "user_id = $1", "user_a").is_empty());
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn bulk_write_locks_every_record_scope() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("bulk_erase_locks");
+    let store = crate::test_store(&path, 3).unwrap();
+    let (a, b) = (user_scope("user_a"), user_scope("user_b"));
+    let mut span_a = span_record("span_a", MemoryStatus::Active, None);
+    span_a.scope = a.clone();
+    let mut span_b = span_record("span_b", MemoryStatus::Active, None);
+    span_b.scope = b;
+    let records = vec![(span_b, vec![0.0, 1.0, 0.0]), (span_a, vec![1.0, 0.0, 0.0])];
+    let (_, key) = scope_lock_keys(&a, true);
+
+    thread::scope(|threads| {
+        let mut client =
+            postgres::Client::connect(&crate::test_postgres_url(), postgres::NoTls).unwrap();
+        let mut transaction = client.transaction().unwrap();
+        transaction
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&key])
+            .unwrap();
+        let writer = threads.spawn(|| store.append_vector_spans(&records));
+        wait_for_advisory_waiter(&mut transaction, key);
+        assert!(!writer.is_finished());
+        assert!(raw_rows(&path, "space_id = $1", "default").is_empty());
+        transaction.commit().unwrap();
+        writer.join().unwrap().unwrap();
+    });
+
+    assert_eq!(
+        raw_rows(&path, "space_id = $1", "default"),
+        BTreeMap::from([(SPANS_COLLECTION.to_string(), 2),])
+    );
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn sibling_and_state_writes_do_not_wait_for_ingestion_locks() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("independent_ingestion_locks");
+    let store = crate::test_store(&path, 3).unwrap();
+    let (a, b) = (user_scope("user_a"), user_scope("user_b"));
+    let mut claim = make_claim(
+        &a,
+        "claim_a",
+        "user",
+        "city",
+        Some("Porto"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    claim.source_span_ids.clear();
+    claim.source_episode_ids.clear();
+    let (_, key) = scope_lock_keys(&a, true);
+
+    thread::scope(|threads| {
+        let mut client =
+            postgres::Client::connect(&crate::test_postgres_url(), postgres::NoTls).unwrap();
+        let mut transaction = client.transaction().unwrap();
+        transaction
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&key])
+            .unwrap();
+        let blocked = threads.spawn(|| ingest(&store, &a, "ep_a", "A lives in Porto", 10));
+        wait_for_advisory_waiter(&mut transaction, key);
+        let (sent, done) = mpsc::channel();
+        let sibling_done = sent.clone();
+        let store = &store;
+        threads.spawn(move || {
+            ingest(store, &b, "ep_b", "B lives in Lisbon", 10);
+            sibling_done.send(()).unwrap();
+        });
+        threads.spawn(move || {
+            store.append_claim(&claim, None).unwrap();
+            sent.send(()).unwrap();
+        });
+        for _ in 0..2 {
+            done.recv_timeout(Duration::from_secs(10))
+                .expect("sibling and state writes must finish while the erase lock is held");
+        }
+        assert!(!blocked.is_finished());
+        transaction.commit().unwrap();
+        blocked.join().unwrap();
+    });
+
+    assert_eq!(
+        store
+            .claims_by_ids(&a, &["claim_a".to_string()])
+            .unwrap()
+            .len(),
+        1
+    );
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn batch_rejects_evidence_erased_before_it_takes_the_lock() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("batch_evidence_under_lock");
+    let store = crate::test_store(&path, 3).unwrap();
+    let a = user_scope("user_a");
+    let evidence = ingest(&store, &a, "ep_a", "A lives in Porto", 10);
+    let mut write = batch(&a, 20);
+    write.claims = vec![cited_claim(
+        &a,
+        "claim_a",
+        ("user", "city", "Porto"),
+        10,
+        &evidence,
+    )];
+    let (_, key) = scope_lock_keys(&a, false);
+    let schema = crate::test_store_name(&path);
+
+    let result = thread::scope(|threads| {
+        let mut client =
+            postgres::Client::connect(&crate::test_postgres_url(), postgres::NoTls).unwrap();
+        let mut transaction = client.transaction().unwrap();
+        transaction
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&key])
+            .unwrap();
+        let store = &store;
+        let writer = threads.spawn(move || store.apply_state_mutation_batch(write));
+        wait_for_advisory_waiter(&mut transaction, key);
+        transaction
+            .execute(
+                &format!("DELETE FROM \"{schema}\".memory_spans WHERE source_id = $1"),
+                &[&evidence.episode.id],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                &format!("DELETE FROM \"{schema}\".memory_episodes WHERE id = $1"),
+                &[&evidence.episode.id],
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        writer.join().unwrap()
+    });
+
+    let error = result.expect_err("batch accepted evidence deleted before its write lock");
+    assert_eq!(error.code, finch_types::StatusCode::InvalidArgument);
+    assert_eq!(
+        error.message,
+        "evidence spans must exist in the requested scope"
+    );
+    assert_eq!(
+        raw_rows(&path, "user_id = $1", "user_a"),
+        BTreeMap::from([(EXTRACTION_JOBS_COLLECTION.to_string(), 1),])
+    );
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
 }
 
 #[test]

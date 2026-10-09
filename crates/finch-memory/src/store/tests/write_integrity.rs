@@ -237,7 +237,7 @@ fn a_write_on_one_store_does_not_skip_the_snapshot_of_another() {
         .each_ref()
         .map(|dir| crate::test_store(dir, 3).unwrap());
 
-    a.session.begin_write(Some((&[], 0)), None).unwrap();
+    a.session.begin_write(&[(&[], Some(0))], None).unwrap();
     let a_snapshot = a.lock_state_read(&scope()).unwrap().takes_snapshot();
     let b_snapshot = b.lock_state_read(&scope()).unwrap().takes_snapshot();
     a.session.rollback().unwrap();
@@ -276,7 +276,7 @@ fn writes_of_different_scopes_do_not_wait_for_each_other() {
         let alice = &alice;
         threads.spawn(move || {
             store
-                .with_state_mutation(alice, || {
+                .with_state_mutation(alice, false, || {
                     started.send(()).unwrap();
                     released.recv().unwrap();
                     Ok(())
@@ -285,7 +285,7 @@ fn writes_of_different_scopes_do_not_wait_for_each_other() {
         });
         held.recv().unwrap();
         // Alice's write is open; Bob's must commit without waiting for it.
-        store.with_state_mutation(&bob, || Ok(())).unwrap();
+        store.with_state_mutation(&bob, false, || Ok(())).unwrap();
         release.send(()).unwrap();
     });
     drop(store);
@@ -310,7 +310,7 @@ fn a_space_write_waits_for_an_open_user_write_in_that_space() {
         let (user, space, space_done) = (&user, &space, &space_done);
         threads.spawn(move || {
             store
-                .with_state_mutation(user, || {
+                .with_state_mutation(user, false, || {
                     started.send(()).unwrap();
                     released.recv().unwrap();
                     Ok(())
@@ -319,7 +319,7 @@ fn a_space_write_waits_for_an_open_user_write_in_that_space() {
         });
         held.recv().unwrap();
         threads.spawn(move || {
-            store.with_state_mutation(space, || Ok(())).unwrap();
+            store.with_state_mutation(space, false, || Ok(())).unwrap();
             space_done.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         std::thread::sleep(std::time::Duration::from_millis(300));

@@ -3,7 +3,7 @@ use super::*;
 impl MemoryStore {
     /// Writes a claim with an optional embedding.
     pub fn append_claim(&self, record: &ClaimRecord, embedding: Option<&[f32]>) -> ZResult<()> {
-        self.with_state_mutation(&record.scope, || {
+        self.with_state_mutation(&record.scope, false, || {
             if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {
                 self.validate_evidence_references(
                     &record.scope,
@@ -131,7 +131,7 @@ impl MemoryStore {
 
     pub(crate) fn add_profile(&self, input: ProfileInput) -> ZResult<ProfileRecord> {
         let profile = crate::ingest::create_profile(input);
-        self.with_write_transaction(&profile.scope, || self.append_profile(&profile))?;
+        self.with_write_transaction(&[&profile.scope], || self.append_profile(&profile))?;
         Ok(profile)
     }
 
@@ -142,7 +142,7 @@ impl MemoryStore {
         record: &EntityRecord,
         embedding: Option<&[f32]>,
     ) -> ZResult<EntityRecord> {
-        self.with_state_mutation(&record.scope, || {
+        self.with_state_mutation(&record.scope, false, || {
             let mut record = record.clone();
             if let Some(mut existing) = self
                 .entities_by_ids(&record.scope, std::slice::from_ref(&record.id))?
@@ -192,7 +192,7 @@ impl MemoryStore {
 
     pub(crate) fn add_edge(&self, input: EdgeInput) -> ZResult<EdgeRecord> {
         let edge = create_edge(input);
-        self.with_write_transaction(&edge.scope, || self.append_edge(&edge))?;
+        self.with_write_transaction(&[&edge.scope], || self.append_edge(&edge))?;
         Ok(edge)
     }
 }

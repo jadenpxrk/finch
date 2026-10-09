@@ -447,6 +447,9 @@ tenant setting shows no rows. The Postgres role must not be a superuser and must
 - Every read and write of the memory layer stays inside its scope.
 - A memory-layer write is one Postgres transaction: it takes effect whole or not at all, and it
   is durable when the transaction commits.
+- An erase waits for writes in its scope to commit, or those writes wait for the erase to commit.
+- A state mutation batch checks its evidence and provenance after it takes state locks and before it
+  writes rows.
 - A claim, a correction, and a rule never change after Finch stores them. A new record
   supersedes an old one. Only a forget or an erase deletes one.
 - A forget, `erase_scope`, and `erase_episodes` delete rows with SQL `DELETE`. After the

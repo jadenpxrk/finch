@@ -119,7 +119,7 @@ impl MemoryStore {
 fn prepare_schema(session: &Arc<PgSession>, embedding_dim: usize) -> ZResult<()> {
     let lock = crate::ingest::stable_hash_hex(&["finch_schema", &session.schema]);
     let lock = u64::from_str_radix(&lock, 16).map_or(0, |key| key as i64);
-    session.begin_write(Some((&[], lock)), None)?;
+    session.begin_write(&[(&[], Some(lock))], None)?;
     let prepared = (|| {
         let version = session.with_client(|client| {
             let table = client.query_opt(
@@ -435,13 +435,13 @@ impl PgSession {
         self.bound.lock().contains_key(&thread::current().id())
     }
 
-    /// Starts a write transaction that the calling thread's operations join. With `locks`, it
-    /// holds the shared advisory locks and then the exclusive one until the transaction ends, so
-    /// it waits for every write that holds one of them in the conflicting mode, in any process.
+    /// Starts a write transaction that the calling thread's operations join.
+    /// Takes each lock group in order: shared keys, then the optional exclusive key.
+    /// Holds the locks until the transaction ends.
     /// With `tenant`, row-level security shows the transaction only that tenant's rows.
     pub(crate) fn begin_write(
         &self,
-        locks: Option<(&[i64], i64)>,
+        locks: &[(&[i64], Option<i64>)],
         tenant: Option<&str>,
     ) -> ZResult<()> {
         self.begin("BEGIN", locks, tenant)
@@ -451,7 +451,7 @@ impl PgSession {
     pub(crate) fn begin_snapshot(&self, tenant: Option<&str>) -> ZResult<()> {
         self.begin(
             "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
-            None,
+            &[],
             tenant,
         )
     }
@@ -459,7 +459,7 @@ impl PgSession {
     fn begin(
         &self,
         statement: &str,
-        locks: Option<(&[i64], i64)>,
+        locks: &[(&[i64], Option<i64>)],
         tenant: Option<&str>,
     ) -> ZResult<()> {
         if self.in_transaction() {
@@ -471,11 +471,13 @@ impl PgSession {
         }
         let start = |client: &mut Client| {
             client.batch_execute(statement)?;
-            if let Some((shared, exclusive)) = locks {
-                for key in shared {
+            for (shared, exclusive) in locks {
+                for key in *shared {
                     client.execute("SELECT pg_advisory_xact_lock_shared($1)", &[key])?;
                 }
-                client.execute("SELECT pg_advisory_xact_lock($1)", &[&exclusive])?;
+                if let Some(key) = exclusive {
+                    client.execute("SELECT pg_advisory_xact_lock($1)", &[key])?;
+                }
             }
             if let Some(tenant) = tenant {
                 client.execute("SELECT set_config('finch.tenant_id', $1, true)", &[&tenant])?;

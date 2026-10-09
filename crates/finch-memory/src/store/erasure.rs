@@ -61,7 +61,7 @@ impl MemoryStore {
     /// Deletes every row of `scope` and of each scope inside it, in every table, as one write.
     /// Rows of broader and sibling scopes stay unchanged.
     pub fn erase_scope(&self, scope: &MemoryScope) -> ZResult<ErasureReport> {
-        self.with_state_mutation(scope, || {
+        self.with_state_mutation(scope, true, || {
             let filter = scope_filter(scope);
             let mut report = ErasureReport::default();
             for (table, rows) in self.tables() {
@@ -82,7 +82,7 @@ impl MemoryStore {
         scope: &MemoryScope,
         episode_ids: &[MemoryId],
     ) -> ZResult<ErasureReport> {
-        self.with_state_mutation(scope, || {
+        self.with_state_mutation(scope, true, || {
             let ids = episode_ids.iter().map(String::as_str).collect::<Vec<_>>();
             let episodes =
                 scan_in_chunks(&self.episodes, &ids, usize::MAX, SCOPE_FIELDS, |chunk| {

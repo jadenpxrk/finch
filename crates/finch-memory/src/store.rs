@@ -165,30 +165,53 @@ impl MemoryStore {
         })
     }
 
-    /// The one entry point of a state mutation: runs every write of `mutate` in one transaction,
-    /// after any other write of the same scope, and commits on success or rolls back on error.
+    /// Runs a state mutation under state locks and, for erasure, erase locks.
+    /// Commits on success or rolls back on error.
     pub(crate) fn with_state_mutation<T>(
         &self,
         scope: &MemoryScope,
+        erase: bool,
         mutate: impl FnOnce() -> ZResult<T>,
     ) -> ZResult<T> {
-        let (broader, own) = scope_lock_keys(scope);
-        self.session
-            .begin_write(Some((&broader, own)), self.bound_tenant(scope)?)?;
+        let (broader, own) = scope_lock_keys(scope, false);
+        let (erase_broader, erase_own) = if erase {
+            let (broader, own) = scope_lock_keys(scope, true);
+            (broader, Some(own))
+        } else {
+            (Vec::new(), None)
+        };
+        self.session.begin_write(
+            &[(&broader, Some(own)), (&erase_broader, erase_own)],
+            self.bound_tenant(scope)?,
+        )?;
         self.session.finish(mutate())
     }
 
-    /// Runs the writes of `write` in one transaction that holds no scope lock and sets `scope`'s
-    /// tenant while tenant isolation is on. A thread inside a transaction runs them in it.
+    /// Runs writes under shared erase locks for every record scope and its broader scopes.
+    /// Uses the first scope's tenant when tenant isolation is on.
+    /// A thread inside a transaction runs the writes in it.
     pub(crate) fn with_write_transaction<T>(
         &self,
-        scope: &MemoryScope,
+        scopes: &[&MemoryScope],
         write: impl FnOnce() -> ZResult<T>,
     ) -> ZResult<T> {
         if self.session.in_transaction() {
             return write();
         }
-        self.session.begin_write(None, self.bound_tenant(scope)?)?;
+        let mut shared = Vec::new();
+        for scope in scopes.iter().copied().collect::<BTreeSet<_>>() {
+            let (broader, own) = scope_lock_keys(scope, true);
+            shared.extend(broader);
+            shared.push(own);
+        }
+        shared.sort_unstable();
+        shared.dedup();
+        let tenant = scopes
+            .first()
+            .map(|scope| self.bound_tenant(scope))
+            .transpose()?
+            .flatten();
+        self.session.begin_write(&[(&shared, None)], tenant)?;
         self.session.finish(write())
     }
 
@@ -206,10 +229,8 @@ impl MemoryStore {
     }
 }
 
-/// The advisory lock keys of a write at `scope`: shared keys for every broader scope and the
-/// exclusive key of the scope itself. Writes of one scope run one at a time, a write of a broader
-/// scope waits for writes of the scopes inside it, and writes of sibling scopes run in parallel.
-fn scope_lock_keys(scope: &MemoryScope) -> (Vec<i64>, i64) {
+/// Returns broader scope keys and the exact scope key in the state or erase namespace.
+fn scope_lock_keys(scope: &MemoryScope, erase: bool) -> (Vec<i64>, i64) {
     let fields = [
         scope.tenant_id.as_deref(),
         scope.user_id.as_deref(),
@@ -225,13 +246,20 @@ fn scope_lock_keys(scope: &MemoryScope) -> (Vec<i64>, i64) {
         .collect::<Vec<_>>();
     let key = |kept: &[usize]| {
         let parts =
-            std::iter::once(scope.space_id.as_str())
+            std::iter::once(if erase { "erase" } else { "state" })
+                .chain(std::iter::once(scope.space_id.as_str()))
                 .chain(fields.iter().enumerate().map(|(index, field)| {
                     field.filter(|_| kept.contains(&index)).unwrap_or("\u{0}")
                 }))
                 .collect::<Vec<_>>();
         let hash = crate::ingest::stable_hash_hex(&parts);
-        u64::from_str_radix(&hash, 16).map_or(0, |key| key as i64)
+        let key = u64::from_str_radix(&hash, 16).map_or(0, |key| key as i64) & i64::MAX;
+        // The sign bit keeps the erase and state key spaces disjoint.
+        if erase {
+            key | i64::MIN
+        } else {
+            key
+        }
     };
     let mut broader = (0..(1usize << set.len()) - 1)
         .map(|mask| {
@@ -895,7 +923,7 @@ impl MemoryStore {
     pub(crate) fn append_episode(&self, record: &EpisodeRecord) -> ZResult<()> {
         let episode = episode_doc(record).map_err(json_error)?;
         let job = extraction_job_doc(record).map_err(json_error)?;
-        self.with_write_transaction(&record.scope, || {
+        self.with_write_transaction(&[&record.scope], || {
             insert_one(&self.episodes, episode)?;
             insert_one(&self.extraction_jobs, job)
         })
@@ -935,10 +963,17 @@ impl MemoryStore {
             }
         }
 
-        let Some((first, _)) = records.first() else {
+        if records.is_empty() {
             return Ok(());
-        };
-        self.with_write_transaction(&first.episode.scope, || {
+        }
+        let scopes = records
+            .iter()
+            .flat_map(|(ingested, _)| {
+                std::iter::once(&ingested.episode.scope)
+                    .chain(ingested.spans.iter().map(|span| &span.scope))
+            })
+            .collect::<Vec<_>>();
+        self.with_write_transaction(&scopes, || {
             insert_many(&self.episodes, episode_docs)?;
             insert_many(&self.extraction_jobs, job_docs)?;
             insert_many(&self.spans, span_docs)
@@ -951,14 +986,18 @@ impl MemoryStore {
             .iter()
             .map(|(span, embedding)| span_doc(span, Some(embedding), false).map_err(json_error))
             .collect::<ZResult<Vec<_>>>()?;
-        let Some((first, _)) = records.first() else {
+        if records.is_empty() {
             return Ok(());
-        };
-        self.with_write_transaction(&first.scope, || insert_many(&self.spans, docs))
+        }
+        let scopes = records
+            .iter()
+            .map(|(span, _)| &span.scope)
+            .collect::<Vec<_>>();
+        self.with_write_transaction(&scopes, || insert_many(&self.spans, docs))
     }
 
     pub(crate) fn append_artifact(&self, record: &ArtifactRecord) -> ZResult<()> {
-        self.with_write_transaction(&record.scope, || {
+        self.with_write_transaction(&[&record.scope], || {
             insert_one(&self.artifacts, artifact_doc(record).map_err(json_error)?)
         })
     }
@@ -970,7 +1009,7 @@ impl MemoryStore {
         chunk_options: &ChunkOptions,
     ) -> ZResult<IngestedArtifact> {
         let spans = chunk_artifact_text(&record, text, chunk_options);
-        self.with_write_transaction(&record.scope, || {
+        self.with_write_transaction(&[&record.scope], || {
             self.append_artifact(&record)?;
             for span in &spans {
                 self.append_span(span, None)?;
@@ -985,7 +1024,7 @@ impl MemoryStore {
 
     /// Writes a correction after a check of its evidence.
     pub fn add_correction(&self, record: &CorrectionRecord) -> ZResult<()> {
-        self.with_state_mutation(&record.scope, || {
+        self.with_state_mutation(&record.scope, false, || {
             if !record.source_span_ids.is_empty() || !record.source_episode_ids.is_empty() {
                 self.validate_evidence_references(
                     &record.scope,

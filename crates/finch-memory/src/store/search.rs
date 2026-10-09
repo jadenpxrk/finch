@@ -308,7 +308,7 @@ impl MemoryStore {
         chunk_options: &ChunkOptions,
     ) -> ZResult<IngestedEpisode> {
         let ingested = ingest_episode(input, ingested_at_ms, chunk_options);
-        self.with_write_transaction(&ingested.episode.scope, || {
+        self.with_write_transaction(&[&ingested.episode.scope], || {
             self.append_episode(&ingested.episode)?;
             for span in &ingested.spans {
                 self.append_span(span, None)?;

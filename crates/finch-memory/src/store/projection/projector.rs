@@ -7,7 +7,9 @@ impl MemoryStore {
         scope: &MemoryScope,
         valid_at_ms: Option<i64>,
     ) -> ZResult<()> {
-        self.with_state_mutation(scope, || self.rebuild_state_projection(scope, valid_at_ms))
+        self.with_state_mutation(scope, false, || {
+            self.rebuild_state_projection(scope, valid_at_ms)
+        })
     }
 
     /// The write-time projector run over every slot of `scope` that has current evidence or a
