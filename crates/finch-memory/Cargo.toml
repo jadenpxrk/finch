@@ -10,5 +10,9 @@ finch-types.workspace = true
 parking_lot.workspace = true
 pgvector = { version = "0.4.2", features = ["postgres"] }
 postgres = "0.19.14"
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
 serde.workspace = true
 serde_json.workspace = true
+tokio-postgres-rustls = "0.14.0"
+webpki-roots = "1.0.9"

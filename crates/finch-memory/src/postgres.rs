@@ -16,10 +16,11 @@ use finch_types::{
 use parking_lot::{Condvar, Mutex};
 use pgvector::Vector;
 use postgres::types::ToSql;
-use postgres::{Client, NoTls, Row};
+use postgres::{Client, Row};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
+use tokio_postgres_rustls::MakeRustlsConnect;
 
 type Param = Box<dyn ToSql + Sync>;
 type Migration = fn(&Arc<PgSession>, usize) -> ZResult<()>;
@@ -27,7 +28,8 @@ type Migration = fn(&Arc<PgSession>, usize) -> ZResult<()>;
 /// Where a memory store lives in Postgres, and how many connections it may hold at once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostgresStore {
-    /// Connection URL of the server, for example `postgres://user:password@host:5432/db`.
+    /// Connection URL of the server, for example `postgres://user:password@host:5432/db`. Its
+    /// `sslmode` sets TLS: `disable`, `prefer` (the default), or `require`.
     pub url: String,
     /// Schema that holds the store: 1 to 63 characters of a-z, 0-9, or _.
     pub name: String,
@@ -37,6 +39,9 @@ pub struct PostgresStore {
     /// tenant, and an operation without a tenant fails. The role must not bypass row-level
     /// security.
     pub tenant_isolation: bool,
+    /// PEM file of certificate authorities that TLS trusts in addition to the public web roots.
+    /// Amazon RDS needs its own bundle here. TLS always verifies the server certificate.
+    pub tls_root_certificates: Option<std::path::PathBuf>,
 }
 
 impl PostgresStore {
@@ -47,6 +52,7 @@ impl PostgresStore {
             name: name.into(),
             max_connections: 8,
             tenant_isolation: false,
+            tls_root_certificates: None,
         }
     }
 }
@@ -306,6 +312,7 @@ pub(crate) struct PgSession {
     open: Mutex<usize>,
     released: Condvar,
     bound: Mutex<HashMap<ThreadId, Client>>,
+    tls: MakeRustlsConnect,
     max_connections: usize,
     pub(crate) tenant_isolation: bool,
 }
@@ -328,10 +335,12 @@ impl PgSession {
                 "postgres store name {schema:?} must be 1-63 characters of a-z, 0-9, or _"
             )));
         }
-        let first = open_connection(url, schema)?;
+        let tls = tls_connector(store.tls_root_certificates.as_deref())?;
+        let first = open_connection(url, schema, &tls)?;
         Ok(Self {
             url: url.to_string(),
             schema: schema.to_string(),
+            tls,
             idle: Mutex::new(vec![first]),
             open: Mutex::new(1),
             released: Condvar::new(),
@@ -378,7 +387,7 @@ impl PgSession {
                 *open += 1;
                 drop(open);
                 drop(idle);
-                return open_connection(&self.url, &self.schema).inspect_err(|_| {
+                return open_connection(&self.url, &self.schema, &self.tls).inspect_err(|_| {
                     *self.open.lock() -= 1;
                 });
             }
@@ -411,12 +420,12 @@ impl PgSession {
         }
         let mut client = self.checkout()?;
         if client.is_closed() {
-            client = open_connection(&self.url, &self.schema)?;
+            client = open_connection(&self.url, &self.schema, &self.tls)?;
         }
         let result = match run(&mut client) {
             // A closed or terminated connection never ran the statement, so it runs once more.
             Err(error) if connection_lost(&error) => {
-                match open_connection(&self.url, &self.schema) {
+                match open_connection(&self.url, &self.schema, &self.tls) {
                     Ok(fresh) => {
                         client = fresh;
                         run(&mut client).map_err(pg_error)
@@ -467,7 +476,7 @@ impl PgSession {
         }
         let mut client = self.checkout()?;
         if client.is_closed() {
-            client = open_connection(&self.url, &self.schema)?;
+            client = open_connection(&self.url, &self.schema, &self.tls)?;
         }
         let start = |client: &mut Client| {
             client.batch_execute(statement)?;
@@ -487,7 +496,7 @@ impl PgSession {
         let mut started = start(&mut client);
         // A lost connection started no transaction, so it starts once more on a new one.
         if started.as_ref().is_err_and(connection_lost) {
-            match open_connection(&self.url, &self.schema) {
+            match open_connection(&self.url, &self.schema, &self.tls) {
                 Ok(fresh) => {
                     client = fresh;
                     started = start(&mut client);
@@ -565,8 +574,40 @@ impl PgSession {
 }
 
 /// A connection with the store's schema first on the search path.
-fn open_connection(url: &str, schema: &str) -> ZResult<Client> {
-    let mut client = Client::connect(url, NoTls).map_err(pg_error)?;
+/// TLS that verifies the server against the public web roots and the PEM file at `extra_roots`.
+fn tls_connector(extra_roots: Option<&std::path::Path>) -> ZResult<MakeRustlsConnect> {
+    use rustls_pki_types::pem::PemObject;
+    let mut roots =
+        rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if let Some(path) = extra_roots {
+        let certificates = rustls_pki_types::CertificateDer::pem_file_iter(path)
+            .and_then(|certificates| certificates.collect::<Result<Vec<_>, _>>())
+            .map_err(|e| {
+                Status::invalid_argument(format!("TLS root certificates {}: {e}", path.display()))
+            })?;
+        if certificates.is_empty() {
+            return Err(Status::invalid_argument(format!(
+                "TLS root certificates {} holds no certificate",
+                path.display()
+            )));
+        }
+        for certificate in certificates {
+            roots.add(certificate).map_err(|e| {
+                Status::invalid_argument(format!("TLS root certificates {}: {e}", path.display()))
+            })?;
+        }
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| Status::internal(format!("TLS setup: {e}")))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(MakeRustlsConnect::new(config))
+}
+
+fn open_connection(url: &str, schema: &str, tls: &MakeRustlsConnect) -> ZResult<Client> {
+    let mut client = Client::connect(url, tls.clone()).map_err(pg_error)?;
     // Filtered HNSW scans keep searching until they find `LIMIT` matches, in exact order. A larger
     // ef_search makes the planner cost the index above a full scan and skip it.
     client
@@ -1458,7 +1499,10 @@ fn quote(identifier: &str) -> String {
 pub(crate) fn pg_error(error: postgres::Error) -> Status {
     match error.as_db_error() {
         Some(db) => Status::io_error(format!("postgres: {} ({})", db.message(), db.code().code())),
-        None => Status::io_error(format!("postgres: {error}")),
+        None => match std::error::Error::source(&error) {
+            Some(cause) => Status::io_error(format!("postgres: {error}: {cause}")),
+            None => Status::io_error(format!("postgres: {error}")),
+        },
     }
 }
 
@@ -1477,6 +1521,47 @@ mod tests {
         ActorKind, ChunkOptions, ClaimKind, ClaimPolarity, EpisodeInput, ManualClaimInput,
         MemoryScope, SourceKind, Visibility,
     };
+    use postgres::NoTls;
+
+    #[test]
+    fn sslmode_require_refuses_a_server_without_tls() {
+        let url = crate::test_postgres_url();
+        let separator = if url.contains('?') { '&' } else { '?' };
+        let store = PostgresStore::new(format!("{url}{separator}sslmode=require"), "t_tls_require");
+        let error = MemoryStore::open(&store)
+            .err()
+            .expect("a server without TLS must be refused");
+        assert!(
+            error.message().contains("server does not support TLS"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn tls_root_certificates_must_name_a_file_with_certificates() {
+        let url = crate::test_postgres_url();
+        let dir = std::env::temp_dir().join(format!("finch_tls_roots_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("empty.pem");
+        std::fs::write(&empty, "not a certificate\n").unwrap();
+        for path in [dir.join("missing.pem"), empty] {
+            let store = PostgresStore {
+                tls_root_certificates: Some(path.clone()),
+                ..PostgresStore::new(&url, "t_tls_roots")
+            };
+            let error = MemoryStore::open(&store)
+                .err()
+                .expect("bad roots must be refused");
+            assert!(
+                error.code() == finch_types::StatusCode::InvalidArgument,
+                "{}: {}",
+                path.display(),
+                error.message()
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     fn episode(scope: &MemoryScope, id: &str, text: &str) -> EpisodeInput {
         EpisodeInput {

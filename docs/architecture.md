@@ -394,9 +394,21 @@ gives the server URL, the schema name, and the maximum number of connections, wh
 that schema exists. `MemoryStore::open(&store)` opens it. `drop_store(&store)` deletes it with all
 its rows.
 
-A write holds a Postgres advisory lock on its exact scope. Writes of one scope therefore run one
-at a time, in every process, and writes of different scopes run in parallel. A store opens
-connections as it needs them, up to its maximum, and a connection that the server closes opens again.
+The `sslmode` value in the URL sets TLS: `disable`, `prefer` (the default), or `require`. TLS always
+verifies the server certificate against the public web roots. A server with its own certificate
+authority, such as Amazon RDS, also needs its PEM bundle in `tls_root_certificates`.
+
+A state mutation holds an exclusive state lock on its exact scope and shared state locks on every
+broader scope. An erase also holds an exclusive erase lock on its exact scope and shared erase locks
+on every broader scope. Erase keys and state keys use separate advisory lock namespaces. Other
+writes hold shared erase locks on every record scope and every broader scope. Bulk writes sort these
+keys and remove duplicates before they write rows. Shared erase locks let these writes run together
+and with state mutations.
+
+Each erase and each write in its scope run in sequence, in every process. A state mutation batch
+checks evidence and provenance under its state locks, in the transaction that writes the batch. A
+store opens connections as it needs them, up to its maximum. A connection that the server closes
+opens again.
 
 With `vector_index`, each embedding column gets an HNSW index on its halfvec form. That index
 accepts up to 4,000 dimensions and is half the size of a full-precision index. When the index
