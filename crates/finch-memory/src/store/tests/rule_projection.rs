@@ -224,6 +224,7 @@ fn retrieved_derived_consequence_of_selected_trigger_becomes_answer_authority() 
     };
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 20,
             propagation_seed: "read-set-lifecycle".to_string(),
@@ -612,6 +613,7 @@ fn answer_ready_projection_fails_closed_for_an_unresolved_dependency_until_direc
     };
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 20,
             propagation_seed: "unresolved-dependency".to_string(),
@@ -770,6 +772,7 @@ fn unresolved_dependency_propagates_unsupported_state_through_multiple_hops() {
     };
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 20,
             propagation_seed: "unresolved-multihop".to_string(),
@@ -1066,6 +1069,7 @@ fn late_slot_alias_binding_reconciles_dependency_state_without_another_trigger_w
     };
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 25,
             propagation_seed: "late-alias-before".to_string(),
@@ -1095,6 +1099,7 @@ fn late_slot_alias_binding_reconciles_dependency_state_without_another_trigger_w
 
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 30,
             propagation_seed: "late-alias-after".to_string(),
@@ -1179,6 +1184,7 @@ fn late_dependency_rule_persists_unsupported_state_until_direct_evidence_returns
     );
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 25,
             propagation_seed: "late-rule-before".to_string(),
@@ -1200,6 +1206,7 @@ fn late_dependency_rule_persists_unsupported_state_until_direct_evidence_returns
 
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 30,
             propagation_seed: "late-rule-after".to_string(),

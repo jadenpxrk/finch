@@ -986,6 +986,7 @@ fn proposed_claim_slot_binding_is_admitted_only_with_subject_identity_and_become
     cliente.slot_id = Some(slot_id.clone());
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 20,
             propagation_seed: "admit-bindings".to_string(),

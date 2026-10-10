@@ -520,6 +520,7 @@ fn standing_derive_rule_in_a_later_batch_applies_to_existing_trigger() {
     let scope = scope();
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 10,
             propagation_seed: "trigger-first".to_string(),
@@ -554,6 +555,7 @@ fn standing_derive_rule_in_a_later_batch_applies_to_existing_trigger() {
     standing.valid_from_ms = Some(20);
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 20,
             propagation_seed: "rule-later".to_string(),
@@ -1676,6 +1678,7 @@ fn subject_wide_invalidation_with_a_concrete_target_slot_only_retires_that_slot(
     rule.valid_from_ms = Some(10);
     let result = store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 10,
             propagation_seed: "wildcard-concrete".to_string(),
@@ -1748,6 +1751,7 @@ fn a_subject_that_gains_an_entity_keeps_one_slot_and_its_rules_still_fire() {
     rule.value_template = None;
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 10,
             propagation_seed: "before-entity".to_string(),
@@ -1773,6 +1777,7 @@ fn a_subject_that_gains_an_entity_keeps_one_slot_and_its_rules_still_fire() {
 
     let result = store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 20,
             propagation_seed: "entity-and-change".to_string(),
@@ -1860,6 +1865,7 @@ fn a_name_shared_by_two_entities_leaves_its_claims_unlinked() {
     };
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 10,
             propagation_seed: "two-sarahs".to_string(),

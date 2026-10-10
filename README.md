@@ -154,7 +154,7 @@ until a release contains it.
 
 The database crates are `finch-types`, `finch-proto`, `finch-storage`, `finch-core`, and
 `finch-db`. They have 401 tests. One test carries the ignore attribute. The memory layer,
-`finch-memory`, has 342 tests, which run against a Postgres server with pgvector. All of them
+`finch-memory`, has 343 tests, which run against a Postgres server with pgvector. All of them
 use synthetic data. The repository contains no
 cached benchmark replays.
 

@@ -75,6 +75,10 @@ pub struct StateMutationBatch {
     pub slot_aliases: Vec<crate::SlotAliasInput>,
     /// Corrections to write.
     pub corrections: Vec<CorrectionRecord>,
+    /// Leased extraction job that the batch completes in its own transaction. When the worker
+    /// no longer holds the lease, the batch writes nothing.
+    #[serde(default)]
+    pub extraction_job: Option<crate::ExtractionJobCompletion>,
 }
 
 /// Records that a state mutation batch wrote, and the state it projected.

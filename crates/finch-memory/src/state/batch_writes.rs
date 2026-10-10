@@ -27,6 +27,16 @@ impl MemoryStore {
     ) -> ZResult<StateMutationResult> {
         let scope = batch.scope.clone();
         self.with_state_mutation(&scope, false, || {
+            if let Some(completion) = &batch.extraction_job {
+                let job =
+                    self.complete_extraction_job(&completion.job_id, &completion.worker_id)?;
+                if job.scope != scope {
+                    return Err(Status::invalid_argument(format!(
+                        "extraction job {} belongs to another scope than the batch",
+                        job.id
+                    )));
+                }
+            }
             self.validate_batch_evidence(&batch)?;
             for correction in &mut batch.corrections {
                 *correction =

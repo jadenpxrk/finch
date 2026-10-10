@@ -86,6 +86,15 @@ pub struct ExtractionFailure {
     pub max_attempts: u32,
 }
 
+/// A worker's leased job that a state mutation batch completes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractionJobCompletion {
+    /// Id of the job.
+    pub job_id: MemoryId,
+    /// Id of the worker that holds the lease.
+    pub worker_id: String,
+}
+
 /// The jobs of a scope and its narrower scopes that are not complete or skipped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractionBacklog {

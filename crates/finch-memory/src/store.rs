@@ -62,8 +62,8 @@ mod timeline;
 pub use erasure::ErasureReport;
 pub(crate) use extraction_jobs::OPEN_JOBS_INDEX_DDL;
 pub use extraction_jobs::{
-    ExtractionBacklog, ExtractionFailure, ExtractionJob, ExtractionJobStatus,
-    ExtractionLeaseRequest,
+    ExtractionBacklog, ExtractionFailure, ExtractionJob, ExtractionJobCompletion,
+    ExtractionJobStatus, ExtractionLeaseRequest,
 };
 pub use search::{
     ExpansionQuery, HybridSourceDiverseOptions, HybridSourceDiverseQuery, SourceSpanSelection,

@@ -373,6 +373,7 @@ fn entity_upsert_does_not_overwrite_another_tenant() {
             .unwrap();
         store
             .apply_state_mutation_batch(StateMutationBatch {
+                extraction_job: None,
                 scope: scope.clone(),
                 transaction_time_ms: 1,
                 propagation_seed: "review".into(),

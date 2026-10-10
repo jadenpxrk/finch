@@ -128,6 +128,7 @@ fn entity(scope: &MemoryScope, name: &str, claim_id: &str) -> EntityInput {
 
 fn batch(scope: &MemoryScope, at_ms: i64) -> StateMutationBatch {
     StateMutationBatch {
+        extraction_job: None,
         scope: scope.clone(),
         transaction_time_ms: at_ms,
         propagation_seed: format!("erase-{at_ms}"),

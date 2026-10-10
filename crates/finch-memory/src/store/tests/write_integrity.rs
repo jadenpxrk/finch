@@ -498,6 +498,7 @@ fn state_mutation_batch_rejects_evidence_that_does_not_exist() {
     assert_invalid_argument(
         rejected_write("reject_batch_evidence", |store| {
             store.apply_state_mutation_batch(StateMutationBatch {
+                extraction_job: None,
                 scope: scope(),
                 transaction_time_ms: 30,
                 propagation_seed: "reject_batch_evidence".to_string(),
@@ -553,6 +554,7 @@ fn correction_reevaluates_every_current_claim_of_its_slot() {
         .collect();
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 15,
             propagation_seed: "drinks".to_string(),
@@ -667,6 +669,7 @@ fn concurrent_claim_scan_sees_a_mutation_batch_whole_or_not_at_all() {
                     .collect();
                 store
                     .apply_state_mutation_batch(StateMutationBatch {
+                        extraction_job: None,
                         scope: scope.clone(),
                         transaction_time_ms: 100 + batch_index,
                         propagation_seed: format!("batch_{batch_index}"),

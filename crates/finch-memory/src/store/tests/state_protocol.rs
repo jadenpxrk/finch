@@ -957,6 +957,7 @@ fn mutation(
     corrections: Vec<CorrectionRecord>,
 ) -> StateMutationBatch {
     StateMutationBatch {
+        extraction_job: None,
         scope: scope.clone(),
         transaction_time_ms,
         propagation_seed: format!("mutation_{transaction_time_ms}"),

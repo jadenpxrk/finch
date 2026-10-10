@@ -245,6 +245,11 @@ When a lease expires, another worker can lease the job. Each expired lease count
 because a worker that stops never calls fail. At the `max_attempts` of the lease request, the job
 becomes failed with an error that says the lease expired.
 
+A worker can also name its job in the state mutation batch that holds the extracted records.
+The batch then completes the job in its own transaction. If the worker no longer holds the
+lease, the batch writes nothing. Thus a worker that stops after its write never writes the
+same extraction twice.
+
 Only the worker that holds the lease can complete or fail the job. `fail_extraction_job` returns
 the job to pending, or marks it failed at its maximum number of attempts. A failed job stops the
 later jobs of its scope. The caller then calls `retry_extraction_job` or `skip_extraction_job`.

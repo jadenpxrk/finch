@@ -1,5 +1,7 @@
 use super::*;
-use crate::{ExtractionFailure, ExtractionJobStatus, ExtractionLeaseRequest};
+use crate::{
+    ExtractionFailure, ExtractionJobCompletion, ExtractionJobStatus, ExtractionLeaseRequest,
+};
 use std::sync::Barrier;
 
 fn thread(id: &str) -> MemoryScope {
@@ -9,6 +11,10 @@ fn thread(id: &str) -> MemoryScope {
 }
 
 fn ingest(store: &MemoryStore, scope: &MemoryScope, sequence_no: i64) -> MemoryId {
+    ingested(store, scope, sequence_no).episode.id
+}
+
+fn ingested(store: &MemoryStore, scope: &MemoryScope, sequence_no: i64) -> crate::IngestedEpisode {
     let input = EpisodeInput {
         id: None,
         scope: scope.clone(),
@@ -29,8 +35,6 @@ fn ingest(store: &MemoryStore, scope: &MemoryScope, sequence_no: i64) -> MemoryI
     store
         .ingest_episode(input, 1_000 + sequence_no, &ChunkOptions::default())
         .unwrap()
-        .episode
-        .id
 }
 
 fn lease(worker: &str, limit: usize, now_ms: i64) -> ExtractionLeaseRequest {
@@ -261,6 +265,70 @@ fn an_expired_lease_leases_again_and_only_the_owner_finishes_a_job() {
     let done = store.complete_extraction_job(&job.id, "w2").unwrap();
     assert_eq!(done.status, ExtractionJobStatus::Done);
     assert!(store.complete_extraction_job(&job.id, "w2").is_err());
+}
+
+fn extraction_batch(
+    claim_id: &str,
+    evidence: &crate::IngestedEpisode,
+    job: &crate::ExtractionJob,
+    worker: &str,
+) -> StateMutationBatch {
+    let mut claim = make_claim(
+        &scope(),
+        claim_id,
+        "user",
+        "city",
+        Some("Denver"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    claim.source_span_ids = vec![evidence.spans[0].id.clone()];
+    claim.source_episode_ids = vec![evidence.episode.id.clone()];
+    StateMutationBatch {
+        extraction_job: Some(ExtractionJobCompletion {
+            job_id: job.id.clone(),
+            worker_id: worker.to_string(),
+        }),
+        scope: scope(),
+        transaction_time_ms: 20,
+        propagation_seed: claim_id.to_string(),
+        max_rule_hops: 8,
+        claims: vec![claim],
+        entities: Vec::new(),
+        rules: Vec::new(),
+        slot_aliases: Vec::new(),
+        corrections: Vec::new(),
+    }
+}
+
+fn claim_ids(store: &MemoryStore) -> Vec<MemoryId> {
+    let claims = store.scan_claims(&scope(), usize::MAX, None).unwrap();
+    claims.into_iter().map(|claim| claim.id).collect()
+}
+
+#[test]
+fn a_batch_completes_its_job_or_writes_nothing() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let store = crate::test_store(&temp_dir("extraction_jobs_batch"), 3).unwrap();
+    let evidence = ingested(&store, &scope(), 1);
+    let job = store.lease_extraction_jobs(&lease("w1", 1, 1_000)).unwrap()[0].clone();
+    store.lease_extraction_jobs(&lease("w2", 1, 1_100)).unwrap();
+
+    // w1 lost its lease, so its late batch must not write.
+    assert!(store
+        .apply_state_mutation_batch(extraction_batch("claim_w1", &evidence, &job, "w1"))
+        .is_err());
+    assert_eq!(claim_ids(&store), Vec::<MemoryId>::new());
+
+    store
+        .apply_state_mutation_batch(extraction_batch("claim_w2", &evidence, &job, "w2"))
+        .unwrap();
+    assert_eq!(store.extraction_backlog(&scope()).unwrap().jobs, 0);
+    // A retry after a crash finds the job complete and writes nothing twice.
+    assert!(store
+        .apply_state_mutation_batch(extraction_batch("claim_w2_retry", &evidence, &job, "w2"))
+        .is_err());
+    assert_eq!(claim_ids(&store), vec!["claim_w2".to_string()]);
 }
 
 #[test]

@@ -486,6 +486,7 @@ fn atomic_claim_embedding_projects_current_state_for_a_matched_historical_claim(
     store
         .apply_state_mutation_batch_with_claim_embeddings(
             StateMutationBatch {
+                extraction_job: None,
                 scope: scope.clone(),
                 transaction_time_ms: 30,
                 propagation_seed: "atomic-claim".to_string(),
@@ -557,6 +558,7 @@ fn grounded_claims_inherit_source_span_embeddings_for_slot_selection() {
     }
     store
         .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 20,
             propagation_seed: "grounded-claim-source-embedding".to_string(),
@@ -626,6 +628,7 @@ fn claim_vector_retrieval_applies_limit_after_canonical_slot_deduplication() {
     store
         .apply_state_mutation_batch_with_claim_embeddings(
             StateMutationBatch {
+                extraction_job: None,
                 scope: scope.clone(),
                 transaction_time_ms: 30,
                 propagation_seed: "claim-vector-slot-limit".to_string(),
@@ -1175,6 +1178,7 @@ fn entity_alias_index_resolves_among_1100_aliases() {
         .collect();
     store
         .apply_state_mutation_batch(crate::state::StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 100,
             propagation_seed: "stream".to_string(),
@@ -1189,6 +1193,7 @@ fn entity_alias_index_resolves_among_1100_aliases() {
 
     let result = store
         .apply_state_mutation_batch(crate::state::StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 200,
             propagation_seed: "stream".to_string(),
@@ -1241,6 +1246,7 @@ fn entity_alias_index_fails_closed_on_ambiguous_unicode_alias() {
         .collect();
     store
         .apply_state_mutation_batch(crate::state::StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 100,
             propagation_seed: "stream".to_string(),
@@ -1255,6 +1261,7 @@ fn entity_alias_index_fails_closed_on_ambiguous_unicode_alias() {
 
     let result = store
         .apply_state_mutation_batch(crate::state::StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 200,
             propagation_seed: "stream".to_string(),
@@ -1303,6 +1310,7 @@ fn structured_slot_deletion_invalidates_explicit_dependent_state() {
 
     store
         .apply_state_mutation_batch(crate::state::StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 100,
             propagation_seed: "flux".to_string(),
@@ -1363,6 +1371,7 @@ fn structured_slot_deletion_invalidates_explicit_dependent_state() {
 
     let result = store
         .apply_state_mutation_batch(crate::state::StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 200,
             propagation_seed: "flux".to_string(),
@@ -1400,6 +1409,7 @@ fn memory_store_queries_valid_time_independently_from_transaction_time() {
 
     store
         .apply_state_mutation_batch(crate::state::StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 100,
             propagation_seed: "stream".to_string(),
@@ -1432,6 +1442,7 @@ fn memory_store_queries_valid_time_independently_from_transaction_time() {
         .unwrap();
     store
         .apply_state_mutation_batch(crate::state::StateMutationBatch {
+            extraction_job: None,
             scope: scope.clone(),
             transaction_time_ms: 200,
             propagation_seed: "stream".to_string(),
