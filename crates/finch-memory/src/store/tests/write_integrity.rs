@@ -293,6 +293,46 @@ fn writes_of_different_scopes_do_not_wait_for_each_other() {
 }
 
 #[test]
+fn stores_in_one_database_do_not_share_scope_locks() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let (first_dir, second_dir) = (temp_dir("scope_lock_first"), temp_dir("scope_lock_second"));
+    let first = crate::test_store(&first_dir, 3).unwrap();
+    let second = crate::test_store(&second_dir, 3).unwrap();
+    let scope = scope();
+    let second_done = std::sync::atomic::AtomicBool::new(false);
+    let (started, held) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let done_while_first_open = std::thread::scope(|threads| {
+        let (first, second, scope, second_done) = (&first, &second, &scope, &second_done);
+        threads.spawn(move || {
+            first
+                .with_state_mutation(scope, false, || {
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        held.recv().unwrap();
+        threads.spawn(move || {
+            second.with_state_mutation(scope, false, || Ok(())).unwrap();
+            second_done.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let done = second_done.load(std::sync::atomic::Ordering::SeqCst);
+        release.send(()).unwrap();
+        done
+    });
+    drop((first, second));
+    let _ = std::fs::remove_dir_all(first_dir);
+    let _ = std::fs::remove_dir_all(second_dir);
+    assert!(
+        done_while_first_open,
+        "a write in one store waited for the same scope in another store"
+    );
+}
+
+#[test]
 fn a_space_write_waits_for_an_open_user_write_in_that_space() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("nested_scope_writes");

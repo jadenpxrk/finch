@@ -403,7 +403,8 @@ authority, such as Amazon RDS, also needs its PEM bundle in `tls_root_certificat
 
 A state mutation holds an exclusive state lock on its exact scope and shared state locks on every
 broader scope. An erase also holds an exclusive erase lock on its exact scope and shared erase locks
-on every broader scope. Erase keys and state keys use separate advisory lock namespaces. Other
+on every broader scope. Erase keys and state keys use separate advisory lock namespaces. Each key
+also includes the store name, so stores in one database do not wait for each other. Other
 writes hold shared erase locks on every record scope and every broader scope. Bulk writes sort these
 keys and remove duplicates before they write rows. Shared erase locks let these writes run together
 and with state mutations.

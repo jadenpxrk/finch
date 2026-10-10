@@ -252,7 +252,7 @@ fn ingestion_waits_for_an_erase_of_its_scope() {
     let a = user_scope("user_a");
     let mut child = a.clone();
     child.thread_id = Some("thread_a".to_string());
-    let (_, key) = scope_lock_keys(&a, true);
+    let key = store.session.advisory_key(scope_lock_keys(&a, true).1);
 
     let ingested = thread::scope(|threads| {
         let mut client =
@@ -289,7 +289,7 @@ fn erase_waits_for_an_ingestion_in_flight() {
     let a = user_scope("user_a");
     write_user(&store, &a, "user_a");
     let before = raw_rows(&path, "user_id = $1", "user_a");
-    let (_, key) = scope_lock_keys(&a, true);
+    let key = store.session.advisory_key(scope_lock_keys(&a, true).1);
 
     thread::scope(|threads| {
         let mut client =
@@ -322,7 +322,7 @@ fn bulk_write_locks_every_record_scope() {
     let mut span_b = span_record("span_b", MemoryStatus::Active, None);
     span_b.scope = b;
     let records = vec![(span_b, vec![0.0, 1.0, 0.0]), (span_a, vec![1.0, 0.0, 0.0])];
-    let (_, key) = scope_lock_keys(&a, true);
+    let key = store.session.advisory_key(scope_lock_keys(&a, true).1);
 
     thread::scope(|threads| {
         let mut client =
@@ -364,7 +364,7 @@ fn sibling_and_state_writes_do_not_wait_for_ingestion_locks() {
     );
     claim.source_span_ids.clear();
     claim.source_episode_ids.clear();
-    let (_, key) = scope_lock_keys(&a, true);
+    let key = store.session.advisory_key(scope_lock_keys(&a, true).1);
 
     thread::scope(|threads| {
         let mut client =
@@ -421,7 +421,7 @@ fn batch_rejects_evidence_erased_before_it_takes_the_lock() {
         10,
         &evidence,
     )];
-    let (_, key) = scope_lock_keys(&a, false);
+    let key = store.session.advisory_key(scope_lock_keys(&a, false).1);
     let schema = crate::test_store_name(&path);
 
     let result = thread::scope(|threads| {

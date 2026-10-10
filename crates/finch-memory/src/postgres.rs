@@ -301,6 +301,12 @@ pub fn drop_store(store: &PostgresStore) -> ZResult<()> {
     })
 }
 
+/// A per-schema salt that keeps the sign bit clear, so erase and state lock keys stay disjoint.
+fn schema_lock_salt(schema: &str) -> i64 {
+    let salt = crate::ingest::stable_hash_hex(&["finch_lock", schema]);
+    u64::from_str_radix(&salt, 16).map_or(0, |salt| salt as i64) & i64::MAX
+}
+
 /// Connections to one store's schema. A thread inside a transaction, a write or a snapshot read,
 /// uses the connection bound to it; every other operation autocommits on a pooled connection.
 /// The pool opens connections on demand, up to `max_connections`, and a closed pooled
@@ -315,6 +321,8 @@ pub(crate) struct PgSession {
     tls: MakeRustlsConnect,
     max_connections: usize,
     pub(crate) tenant_isolation: bool,
+    /// Mixed into every advisory lock key: Postgres shares advisory locks across a database.
+    lock_salt: i64,
 }
 
 impl PgSession {
@@ -347,7 +355,13 @@ impl PgSession {
             bound: Mutex::new(HashMap::new()),
             max_connections: store.max_connections,
             tenant_isolation: store.tenant_isolation,
+            lock_salt: schema_lock_salt(schema),
         })
+    }
+
+    /// The key Postgres holds for a lock key of this store.
+    pub(crate) fn advisory_key(&self, key: i64) -> i64 {
+        key ^ self.lock_salt
     }
 
     fn schema_exists(&self) -> ZResult<bool> {
@@ -482,10 +496,12 @@ impl PgSession {
             client.batch_execute(statement)?;
             for (shared, exclusive) in locks {
                 for key in *shared {
-                    client.execute("SELECT pg_advisory_xact_lock_shared($1)", &[key])?;
+                    let key = self.advisory_key(*key);
+                    client.execute("SELECT pg_advisory_xact_lock_shared($1)", &[&key])?;
                 }
                 if let Some(key) = exclusive {
-                    client.execute("SELECT pg_advisory_xact_lock($1)", &[key])?;
+                    let key = self.advisory_key(*key);
+                    client.execute("SELECT pg_advisory_xact_lock($1)", &[&key])?;
                 }
             }
             if let Some(tenant) = tenant {
