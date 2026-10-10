@@ -2,8 +2,8 @@ use crate::ingest::{create_entity, stable_hash_hex};
 use crate::row::{claim_doc, correction_doc, entity_doc, rule_doc, slot_alias_doc};
 use crate::store::canonical::{canonicalize_claim, canonicalize_correction};
 use crate::store::{
-    dedupe_claims_by_id, insert_many, json_error, retain_first_by_id, upsert_many, ForgetPlan,
-    MemoryStore, ProjectionWrite, StateProjectionFrontier,
+    dedupe_claims_by_id, insert_many, json_error, retain_first_by_id, upsert_many, MemoryStore,
+    ProjectionWrite, StateProjectionFrontier,
 };
 use crate::{
     ActorKind, ClaimRecord, CompiledMemoryContext, CorrectionRecord, EntityInput, EntityRecord,

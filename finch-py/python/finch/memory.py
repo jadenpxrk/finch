@@ -494,6 +494,11 @@ class FinchMemory:
     ) -> Dict[str, Any]:
         return _parse(self._store.erase_episodes_json(_json(_scope(scope)), list(episode_ids)))
 
+    def purge_forgotten(
+        self, scope: Union[MemoryScope, Mapping[str, Any]], before_ms: int
+    ) -> Dict[str, Any]:
+        return _parse(self._store.purge_forgotten_json(_json(_scope(scope)), before_ms))
+
     def add_slot_alias(self, input: Union[SlotAliasInput, Mapping[str, Any]]) -> Dict[str, Any]:
         raw = _raw(input)
         payload = {

@@ -156,6 +156,14 @@ impl MemoryStore {
         serde_json::to_string(&report).map_err(json_status)
     }
 
+    /// Deletes what the forgets of a JSON scope hide, for forgets that took effect before
+    /// `before_ms`. Returns the report as JSON.
+    pub fn purge_forgotten_json(&self, scope_json: &str, before_ms: i64) -> ZResult<String> {
+        let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
+        let report = self.purge_forgotten(&scope, before_ms)?;
+        serde_json::to_string(&report).map_err(json_status)
+    }
+
     /// Writes a claim from JSON input with an optional embedding. Returns the record as JSON.
     pub fn add_manual_claim_json(
         &self,

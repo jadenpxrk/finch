@@ -278,6 +278,12 @@ class FinchMemory {
       .then(parse);
   }
 
+  purgeForgotten(input) {
+    return this.store
+      .purgeForgottenJson(JSON.stringify(scope(input.scope)), toMs(input.before))
+      .then(parse);
+  }
+
   addSlotAlias(input) {
     const payload = {
       id: input.id ?? null,

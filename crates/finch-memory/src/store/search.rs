@@ -339,7 +339,7 @@ impl MemoryStore {
         let corrections = self.scan_span_corrections_for_hits(scope, &hits, at_ms)?;
         hits = apply_corrections_to_span_hits_at(&hits, &corrections, at_ms);
         hits.truncate(k);
-        Ok(hits)
+        self.mask_forgotten(scope, hits, at_ms)
     }
 
     #[cfg(test)]
@@ -435,7 +435,7 @@ impl MemoryStore {
             .map(|plan| plan.into_hits(|span_id| hydrated_by_id.get(span_id).cloned()))
             .collect::<Vec<_>>();
         let max_spans = per_source.iter().map(Vec::len).max().unwrap_or(0);
-        Ok(interleave_by_rank(per_source, max_spans))
+        self.mask_forgotten(scope, interleave_by_rank(per_source, max_spans), at_ms)
     }
 
     /// Hybrid company-knowledge retrieval: dense span candidates and
@@ -507,7 +507,7 @@ impl MemoryStore {
                 options.supplemental_spans_per_source
             },
         );
-        Ok(interleave_by_rank(per_source, max_span_cap))
+        self.mask_forgotten(scope, interleave_by_rank(per_source, max_span_cap), at_ms)
     }
 
     /// Sources the supplemental queries rank outside the primary sources, each planned with its
@@ -890,7 +890,8 @@ impl MemoryStore {
             }
         }
         let corrections = self.scan_span_corrections_for_hits(scope, &out, at_ms)?;
-        Ok(apply_corrections_to_span_hits_at(&out, &corrections, at_ms))
+        let hits = apply_corrections_to_span_hits_at(&out, &corrections, at_ms);
+        self.mask_forgotten(scope, hits, at_ms)
     }
 
     /// Returns up to `limit` corrections.

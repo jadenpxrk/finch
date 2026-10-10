@@ -163,6 +163,15 @@ impl PyMemoryStore {
         self.without_gil(py, |m| m.erase_episodes_json(scope_json, episode_ids))
     }
 
+    fn purge_forgotten_json(
+        &self,
+        py: Python<'_>,
+        scope_json: &str,
+        before_ms: i64,
+    ) -> PyResult<String> {
+        self.without_gil(py, |m| m.purge_forgotten_json(scope_json, before_ms))
+    }
+
     #[pyo3(signature = (input_json, embedding=None))]
     fn add_manual_claim_json(
         &self,

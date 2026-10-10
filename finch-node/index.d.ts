@@ -350,6 +350,13 @@ export interface ErasureReport {
   deleted_rows: Record<string, number>
 }
 
+export interface PurgeReport {
+  /** Number of deleted rows by table name. */
+  deleted_rows: Record<string, number>
+  /** Spans whose text lost a forgotten value. Embed them again. */
+  redacted_span_ids: string[]
+}
+
 export interface MemoryEvalApi {
   runRetrieval(input: Record<string, unknown>): Promise<Record<string, unknown>>
   compareSearchModes(input: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -375,6 +382,7 @@ export declare class FinchMemory {
   restore(input: Omit<CorrectionInput, 'operation'>): Promise<Record<string, unknown>>
   eraseScope(input: { scope: MemoryScope }): Promise<ErasureReport>
   eraseEpisodes(input: { scope: MemoryScope; episodeIds: string[] }): Promise<ErasureReport>
+  purgeForgotten(input: { scope: MemoryScope; before: Date | number }): Promise<PurgeReport>
   addSlotAlias(input: SlotAliasInput): Promise<Record<string, unknown>>
   leaseExtractionJobs(input: ExtractionLeaseRequest): Promise<{ jobs: ExtractionJob[] }>
   completeExtractionJob(jobId: string, workerId: string): Promise<ExtractionJob>
@@ -404,6 +412,7 @@ export declare class MemoryStore {
   addCorrectionJson(inputJson: string, createdAtMs: number): Promise<string>
   eraseScopeJson(scopeJson: string): Promise<string>
   eraseEpisodesJson(scopeJson: string, episodeIds: string[]): Promise<string>
+  purgeForgottenJson(scopeJson: string, beforeMs: number): Promise<string>
   addManualClaimJson(inputJson: string, embedding?: number[]): Promise<string>
   addProfileJson(inputJson: string): Promise<string>
   addEntityJson(inputJson: string, embedding?: number[]): Promise<string>

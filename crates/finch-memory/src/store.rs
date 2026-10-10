@@ -60,7 +60,6 @@ pub(crate) mod state_records;
 mod timeline;
 
 pub use erasure::ErasureReport;
-pub(crate) use erasure::{retain_unerased, ForgetPlan};
 pub(crate) use extraction_jobs::OPEN_JOBS_INDEX_DDL;
 pub use extraction_jobs::{
     ExtractionBacklog, ExtractionFailure, ExtractionJob, ExtractionJobStatus,
@@ -1039,15 +1038,9 @@ impl MemoryStore {
             let mut record = self.resolve_existing_correction_target(record)?;
             record.source_sequence_no =
                 self.source_sequence_no_for_episode_ids(&record.scope, &record.source_episode_ids)?;
-            let mut forget = ForgetPlan::default();
-            let record = self.plan_forget(record, &mut forget)?;
             let correction_docs = vec![correction_doc(&record).map_err(json_error)?];
             insert_many(&self.corrections, correction_docs)?;
             if record.target_type != "claim" {
-                return Ok(());
-            }
-            if record.operation == CorrectionOperation::Forget {
-                self.apply_forget(&record.scope, forget)?;
                 return Ok(());
             }
             let affected_slot_ids = self.correction_target_slot_ids_of(&record)?;

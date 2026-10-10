@@ -327,24 +327,27 @@ ends the claim's validity at that time. A replace also writes a new claim with t
 restore brings a retracted claim back. Any rule that depends on the affected slot fires again,
 so a derived value falls with its source.
 
-A forget deletes its target claims. It also deletes the records that Finch derived from them:
-derived claims, state records, dependency traces, edges, and profiles. Entities, aliases, and
-slots lose the ids of the deleted claims, and Finch deletes the ones that have no evidence left.
-The correction record stays, but it holds no selector, new value, reason, or metadata that names
-a forgotten value. If its id names a forgotten value, Finch gives it an id from a hash of its
-scope, slot, and times. Its target ids name only forget ids, not the deleted claims. In each
-single-valued slot of a deleted claim, Finch writes a marker claim with no value from the
-effective time of the forget. The forget targets the marker, so the slot holds a tombstone. An
-older claim of the slot stays stored but does not become current. A later claim with a new value
-becomes current. A set-valued slot, such as the user's allergies, gets no marker. The forget
-removes only the forgotten member, and the other members stay current. A forget does not delete the spans that quote the value. To delete them,
-erase their episodes.
+A forget hides its target claims, as a tombstone does, so the slot shows that the value is gone.
+Every search also replaces a forgotten value with `[forgotten]` in the span text that it returns,
+so a reader does not see the value in the raw text that stated it. The data stays stored, so a
+mistaken forget can be undone.
+
+`MemoryStore::purge_forgotten(&scope, before_ms)` deletes what the forgets of the scope hide, for
+each forget that took effect before `before_ms`. It deletes the forgotten claims and the records
+that Finch derived from them: derived claims, state records, dependency traces, edges, and
+profiles. Entities, aliases, and slots lose the ids of the deleted claims, and Finch deletes the
+ones that have no evidence left. Purge also replaces the forgotten values in the text of the
+cited episodes and spans, and clears the vectors of those spans. The report names these spans,
+so the caller can embed them again. The correction record stays, but it holds no selector, new
+value, reason, or metadata that names a forgotten value. In each single-valued slot, a marker
+claim with no value keeps the tombstone, so an older value does not become current. A purge
+that finds nothing left to delete changes nothing.
 
 Two calls delete stored data. `MemoryStore::erase_scope(&scope)` deletes every row of the scope
 and of each scope inside it, in every table. Rows of broader scopes and of other scopes stay.
 `MemoryStore::erase_episodes(&scope, &ids)` deletes the episodes and their spans. It also deletes
 each claim, rule, and correction that cites them, with the records derived from those, as a
-forget does. Then Finch projects the state of each affected scope again. A claim that another
+purge does. Then Finch projects the state of each affected scope again. A claim that another
 episode supports stays. Each call returns the number of deleted rows per table.
 
 Every state write changes several tables: the batch write API, the single writes of a claim,
@@ -463,8 +466,8 @@ tenant setting shows no rows. The Postgres role must not be a superuser and must
 - A state mutation batch checks its evidence and provenance after it takes state locks and before it
   writes rows.
 - A claim, a correction, and a rule never change after Finch stores them. A new record
-  supersedes an old one. Only a forget or an erase deletes one.
-- A forget, `erase_scope`, and `erase_episodes` delete rows with SQL `DELETE`. After the
+  supersedes an old one. Only a purge or an erase deletes one.
+- A purge, `erase_scope`, and `erase_episodes` delete rows with SQL `DELETE`. After the
   transaction commits, no read returns the deleted records. Postgres keeps the old row data in
   its files until `VACUUM` reuses that space.
 - A read at a past valid time or a past transaction time returns the versions that held then.

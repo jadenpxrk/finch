@@ -125,7 +125,7 @@ impl MemoryStore {
                 .filter(|hit| seen.insert(hit.span.id.clone()))
                 .cloned(),
         );
-        Ok(hydrated)
+        self.mask_forgotten(scope, hydrated, None)
     }
 
     /// Selects the claims, sets, histories, rules, and corrections that answer one query.

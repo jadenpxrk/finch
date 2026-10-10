@@ -208,6 +208,15 @@ impl MemoryStore {
     }
 
     #[napi]
+    pub fn purge_forgotten_json(
+        &self,
+        scope_json: String,
+        before_ms: i64,
+    ) -> Result<AsyncTask<BlockingTask<String>>> {
+        self.spawn(move |m| m.purge_forgotten_json(&scope_json, before_ms))
+    }
+
+    #[napi]
     pub fn add_manual_claim_json(
         &self,
         input_json: String,

@@ -22,7 +22,7 @@ impl MemoryStore {
         let corrections = self.scan_span_corrections_for_hits(scope, &hits, at_ms)?;
         hits = apply_corrections_to_span_hits_at(&hits, &corrections, at_ms);
         hits.truncate(k);
-        Ok(hits)
+        self.mask_forgotten(scope, hits, at_ms)
     }
 
     pub(crate) fn keyword_search_spans_with_corrections(

@@ -614,7 +614,7 @@ fn erase_episodes_deletes_their_text_and_derived_state_and_keeps_other_support()
 }
 
 #[test]
-fn forget_deletes_the_forgotten_value_and_keeps_the_correction() {
+fn purge_deletes_the_forgotten_value_and_keeps_the_correction() {
     let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let path = temp_dir("forget_deletes");
     let store = crate::test_store(&path, 3).unwrap();
@@ -660,7 +660,8 @@ fn forget_deletes_the_forgotten_value_and_keeps_the_correction() {
     correction.source_episode_ids = vec![request.episode.id.clone()];
     let mut write = batch(&scope, 30);
     write.corrections = vec![correction];
-    let result = store.apply_state_mutation_batch(write).unwrap();
+    store.apply_state_mutation_batch(write).unwrap();
+    store.purge_forgotten(&scope, i64::MAX).unwrap();
     drop(store);
     let store = crate::reopen_test_store(&path).unwrap();
     let city_after = rows_with_text(&path, "Quixadaville");
@@ -703,7 +704,9 @@ fn forget_deletes_the_forgotten_value_and_keeps_the_correction() {
         kept,
         vec![("forget_city", 1, true), ("forget_phone", 1, true)]
     );
-    assert_eq!(result.corrections[0].target_selector, None);
+    assert!(corrections
+        .iter()
+        .all(|correction| correction.target_selector.is_none()));
     assert!(
         current.iter().all(|claim| claim.object_value.is_none()),
         "claims with a value remain: {current:?}"
@@ -739,6 +742,7 @@ fn forget_leaves_a_tombstone_until_a_new_claim() {
     store
         .add_correction(&forget(&scope, "forget_denver", "Denver", 30))
         .unwrap();
+    store.purge_forgotten(&scope, i64::MAX).unwrap();
     let states_31 = store
         .scan_state_records(&scope, state_scan(usize::MAX, Some(31)))
         .unwrap();
@@ -807,6 +811,7 @@ fn forgetting_one_set_member_keeps_the_other_members() {
     store
         .add_correction(&forget(&scope, "forget_peanuts", "peanuts", 30))
         .unwrap();
+    store.purge_forgotten(&scope, i64::MAX).unwrap();
     let current = store
         .scan_current_claims(&scope, usize::MAX, Some(31))
         .unwrap();
@@ -825,4 +830,75 @@ fn forgetting_one_set_member_keeps_the_other_members() {
         .filter_map(|claim| claim.object_value.clone())
         .collect::<Vec<_>>();
     assert_eq!(values, vec!["shellfish".to_string()]);
+}
+
+#[test]
+fn forget_masks_the_value_in_search_results_and_purge_redacts_the_span() {
+    let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("forget_masks_raw_text");
+    let store = crate::test_store(&path, 3).unwrap();
+    let scope = user_scope("user_m");
+    let said = ingest(
+        &store,
+        &scope,
+        "ep_said",
+        "I go to Zefiro's Kitchen on Fridays.",
+        10,
+    );
+    let mut claim = make_claim(
+        &scope,
+        "claim_restaurant",
+        "user",
+        "favorite restaurant",
+        Some("Zefiro's Kitchen"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    claim.source_span_ids = said.spans.iter().map(|span| span.id.clone()).collect();
+    claim.source_episode_ids = vec![said.episode.id.clone()];
+    store.append_claim(&claim, None).unwrap();
+    store
+        .add_correction(&forget(&scope, "forget_restaurant", "Zefiro's Kitchen", 20))
+        .unwrap();
+
+    let hidden = store
+        .keyword_search_spans(&scope, "Fridays", 10, 1000, None)
+        .unwrap();
+    let stored_before = rows_with_text(&path, "Zefiro");
+    let report = store.purge_forgotten(&scope, i64::MAX).unwrap();
+    let stored_after = rows_with_text(&path, "Zefiro");
+    let found_after = store
+        .keyword_search_spans(&scope, "Zefiro", 10, 1000, None)
+        .unwrap();
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+    drop(guard);
+
+    assert_eq!(hidden.len(), 1, "{hidden:?}");
+    assert_eq!(hidden[0].span.text, "I go to [forgotten] on Fridays.");
+    assert!(
+        stored_before.contains_key("memory_spans"),
+        "{stored_before:?}"
+    );
+    assert!(
+        stored_after.is_empty(),
+        "the value remains: {stored_after:?}"
+    );
+    assert_eq!(
+        report.redacted_span_ids,
+        said.spans
+            .iter()
+            .map(|span| span.id.clone())
+            .collect::<Vec<_>>()
+    );
+    assert!(found_after.is_empty(), "{found_after:?}");
+}
+
+#[test]
+fn masking_replaces_whole_words_in_any_case() {
+    let values = BTreeSet::from(["keto".to_string(), "zefiro's kitchen".to_string()]);
+    assert_eq!(
+        crate::store::erasure::mask_values("Keto, not ketones, at ZEFIRO'S KITCHEN.", &values),
+        "[forgotten], not ketones, at [forgotten]."
+    );
 }
