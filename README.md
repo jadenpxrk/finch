@@ -117,17 +117,17 @@ name, question id, label, or gold answer.
 
 MEME tests whether an agent's memory keeps up with facts that change. Each of its 100 episodes
 is a conversation with 32k tokens of filler text, followed by questions in five task types.
-Finch extracted and selected memories with `gpt-6-luna` and answered with `gpt-6-luna` under
+Finch extracted and selected memories with `gpt-6-luna` and answered with `gpt-4.1-mini` under
 the official answer protocol. The official MEME evaluator judged the answers with `gpt-4o`.
 
 | Task | Correct | Share | What the task checks |
 |---|---:|---:|---|
-| All | 536 / 694 | 77.2% | |
-| Deletion | 91 / 100 | 91.0% | The agent drops a fact the user retracted. |
-| Absence | 110 / 130 | 84.6% | The agent says a fact was never stated. |
-| Tracking | 76 / 100 | 76.0% | The agent reports the current value after many updates. |
-| Aggregation | 61 / 100 | 61.0% | The agent combines several remembered items into one answer. |
-| Cascade | 98 / 164 | 59.8% | A changed fact updates the facts that depend on it. |
+| All | 481 / 694 | 69.3% | |
+| Deletion | 84 / 100 | 84.0% | The agent drops a fact the user retracted. |
+| Absence | 103 / 130 | 79.2% | The agent says a fact was never stated. |
+| Tracking | 78 / 100 | 78.0% | The agent reports the current value after many updates. |
+| Cascade | 99 / 164 | 60.4% | A changed fact updates the facts that depend on it. |
+| Aggregation | 18 / 100 | 18.0% | The agent combines several remembered items into one answer. |
 
 ### EnterpriseRAG-Bench
 
