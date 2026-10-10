@@ -656,6 +656,52 @@ fn inactive_claim_context_hides_stale_value() {
 }
 
 #[test]
+fn forget_context_names_its_slot_and_not_its_value() {
+    let mut forget = crate::ingest::add_correction(
+        crate::ingest::CorrectionInput {
+            id: Some("corr_forget_meetup".to_string()),
+            scope: MemoryScope::new("default"),
+            visibility: Visibility::Private,
+            policy_tags: Vec::new(),
+            operation: crate::CorrectionOperation::Forget,
+            target_type: "claim".to_string(),
+            target_ids: Vec::new(),
+            target_selector: Some("trivia night Wednesdays".to_string()),
+            new_value: None,
+            reason: Some("forget trivia night Wednesdays".to_string()),
+            actor: ActorKind::User,
+            authority: crate::CorrectionAuthority::User,
+            effective_at_ms: Some(30),
+            applies_valid_from_ms: None,
+            applies_valid_to_ms: None,
+            cascade_policy: None,
+            metadata_json: None,
+        },
+        30,
+    );
+    forget.target_subject_key = Some("user".to_string());
+    forget.target_predicate_key = Some("social_meetup".to_string());
+    for include_provenance in [true, false] {
+        let compiled = build_state_context(
+            &ContextInput {
+                corrections: std::slice::from_ref(&forget),
+                ..Default::default()
+            },
+            ContextOptions {
+                token_budget: 200,
+                include_provenance,
+            },
+        );
+        assert!(compiled
+            .body
+            .contains("### TombstoneState corr_forget_meetup"));
+        assert!(compiled.body.contains("target_slot: user / social_meetup"));
+        assert!(compiled.body.contains("Other slots are not affected."));
+        assert!(!compiled.body.contains("trivia"));
+    }
+}
+
+#[test]
 fn derived_claim_context_is_labeled() {
     let claim = ClaimRecord {
         id: "claim_derived".to_string(),

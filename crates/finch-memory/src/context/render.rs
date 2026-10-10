@@ -749,9 +749,10 @@ pub(super) fn set_state_id(
 pub(super) fn render_correction(correction: &CorrectionRecord, include_provenance: bool) -> String {
     let title = correction_context_title(correction);
     let state = correction_state_text(correction.operation);
+    let target_slot = correction_target_slot(correction);
     if include_provenance {
         format!(
-            "### {title} {}\noperation: {:?}\ntarget_type: {}\ntarget_match: {}\ntarget_ids: {:?}\neffective_at_ms: {}\napplies_valid_from_ms: {:?}\napplies_valid_to_ms: {:?}\n\n{state}\n",
+            "### {title} {}\noperation: {:?}\ntarget_slot: {target_slot}\ntarget_type: {}\ntarget_match: {}\ntarget_ids: {:?}\neffective_at_ms: {}\napplies_valid_from_ms: {:?}\napplies_valid_to_ms: {:?}\n\n{state}\n",
             correction.id,
             correction.operation,
             correction.target_type,
@@ -762,7 +763,23 @@ pub(super) fn render_correction(correction: &CorrectionRecord, include_provenanc
             correction.applies_valid_to_ms,
         )
     } else {
-        format!("### {title} {}\n{state}\n", correction.id)
+        format!(
+            "### {title} {}\ntarget_slot: {target_slot}\n{state}\n",
+            correction.id
+        )
+    }
+}
+
+/// The slot a correction changes, by name only: the selector and new value can hold the forgotten text.
+fn correction_target_slot(correction: &CorrectionRecord) -> String {
+    match (
+        correction.target_subject_key.as_deref(),
+        correction.target_predicate_key.as_deref(),
+    ) {
+        (Some(subject), Some(predicate)) => format!("{subject} / {predicate}"),
+        (Some(subject), None) => format!("{subject} / unknown"),
+        (None, Some(predicate)) => format!("unknown / {predicate}"),
+        (None, None) => "unknown".to_string(),
     }
 }
 
@@ -839,17 +856,17 @@ pub(super) fn correction_context_title(correction: &CorrectionRecord) -> &'stati
 pub(super) fn correction_state_text(operation: CorrectionOperation) -> &'static str {
     match operation {
         CorrectionOperation::Retract => {
-            "Matching memory is retracted and must not be treated as current."
+            "Memory of the target slot is retracted and must not be treated as current. Other slots are not affected."
         }
         CorrectionOperation::Tombstone | CorrectionOperation::Forget => {
-            "Matching memory is deleted and must not be treated as current."
+            "Memory of the target slot is deleted and must not be treated as current. Other slots are not affected."
         }
         CorrectionOperation::Replace | CorrectionOperation::MarkStale => {
-            "Matching memory is stale or unsupported unless a later active value is present."
+            "Memory of the target slot is stale or unsupported unless a later active value is present."
         }
-        CorrectionOperation::Restore => "Matching memory is restored.",
+        CorrectionOperation::Restore => "Memory of the target slot is restored.",
         CorrectionOperation::Assert | CorrectionOperation::Merge | CorrectionOperation::Split => {
-            "Matching memory state changed."
+            "Memory of the target slot changed."
         }
     }
 }
