@@ -503,7 +503,8 @@ pub(super) fn correction_applies_to_claim_time(
 ) -> bool {
     let claim_from = claim.valid_from_ms.unwrap_or(claim.observed_at_ms);
     if correction.applies_valid_from_ms.is_none() && correction.applies_valid_to_ms.is_none() {
-        return claim_from <= correction.effective_at_ms;
+        return claim_from <= correction.effective_at_ms
+            && !replaces_named_target(correction, claim, claim_from);
     }
     correction
         .applies_valid_from_ms
@@ -511,6 +512,44 @@ pub(super) fn correction_applies_to_claim_time(
         && correction
             .applies_valid_to_ms
             .is_none_or(|to| claim_from < to)
+}
+
+/// "My X has resolved, now I have Y": a claim from the correction's own message, or a later one at
+/// the same time, is the replacement when the correction names other targets. A forget still
+/// erases everything up to its position.
+fn replaces_named_target(
+    correction: &CorrectionRecord,
+    claim: &ClaimRecord,
+    claim_from: i64,
+) -> bool {
+    let ends_a_value = matches!(
+        correction.operation,
+        CorrectionOperation::Retract
+            | CorrectionOperation::Replace
+            | CorrectionOperation::MarkStale
+    );
+    let names_targets = !correction.target_ids.is_empty() || correction.target_selector.is_some();
+    let named = correction.target_ids.contains(&claim.id)
+        || correction
+            .target_selector
+            .as_deref()
+            .is_some_and(|selector| {
+                claim_matches_selector(claim, selector)
+                    || claim.object_value.as_deref().is_some_and(|value| {
+                        !value.trim().is_empty()
+                            && selector
+                                .to_lowercase()
+                                .contains(&value.trim().to_lowercase())
+                    })
+            });
+    ends_a_value
+        && names_targets
+        && !named
+        && claim_from == correction.effective_at_ms
+        && matches!(
+            (claim.source_sequence_no, correction.source_sequence_no),
+            (Some(claim_sequence), Some(correction_sequence)) if claim_sequence >= correction_sequence
+        )
 }
 
 pub(super) fn claim_matches_selector(claim: &ClaimRecord, selector: &str) -> bool {
@@ -659,6 +698,14 @@ pub(super) fn claim_is_newer(candidate: &ClaimRecord, current: &ClaimRecord) -> 
         if candidate_sequence != current_sequence {
             return candidate_sequence > current_sequence;
         }
+    }
+    // A correction moves the value it ends to its own position; a claim it spared there is the
+    // value that starts.
+    let ended = |claim: &ClaimRecord| {
+        !claim.correction_ids.is_empty() && !matches!(claim.status, MemoryStatus::Active)
+    };
+    if candidate.observed_at_ms == current.observed_at_ms && ended(candidate) != ended(current) {
+        return ended(current);
     }
     candidate.observed_at_ms > current.observed_at_ms
         || (candidate.observed_at_ms == current.observed_at_ms

@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::lifecycle::materialized_rule_value;
+use crate::store::lifecycle::{correction_targets_claim, materialized_rule_value};
 use crate::store::state_records::state_record_from_claim;
 
 #[test]
@@ -1862,4 +1862,187 @@ fn mixed_answer_targets_have_one_authoritative_state_per_slot() {
     assert!(!context.body.contains("### CurrentState"));
 
     let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn named_correction_spares_the_replacement_claim_from_its_own_message() {
+    let scope = scope();
+    let mut old = make_claim(
+        &scope,
+        "condition_old",
+        "user",
+        "health_condition",
+        Some("tendinitis"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    old.slot_id = Some("slot_condition".to_string());
+    old.source_sequence_no = Some(1);
+    let mut new = old.clone();
+    new.id = "condition_new".to_string();
+    new.object_value = Some("chronic migraine".to_string());
+    new.claim_text = "user health_condition is chronic migraine".to_string();
+    new.valid_from_ms = Some(20);
+    new.observed_at_ms = 20;
+    new.source_sequence_no = Some(2);
+    let mut correction = crate::ingest::add_correction(
+        CorrectionInput {
+            id: Some("retract_condition".to_string()),
+            scope: scope.clone(),
+            visibility: Visibility::Private,
+            policy_tags: Vec::new(),
+            operation: CorrectionOperation::Retract,
+            target_type: "claim".to_string(),
+            target_ids: Vec::new(),
+            target_selector: Some("tendinitis".to_string()),
+            new_value: None,
+            reason: None,
+            actor: ActorKind::User,
+            authority: CorrectionAuthority::User,
+            effective_at_ms: Some(20),
+            applies_valid_from_ms: None,
+            applies_valid_to_ms: None,
+            cascade_policy: None,
+            metadata_json: None,
+        },
+        20,
+    );
+    correction.target_match = CorrectionTargetMatch::CanonicalSlot;
+    correction.target_slot_id = Some("slot_condition".to_string());
+    correction.source_sequence_no = Some(2);
+
+    assert!(correction_targets_claim(&correction, &old));
+    assert!(!correction_targets_claim(&correction, &new));
+
+    correction.target_selector = None;
+    assert!(correction_targets_claim(&correction, &new));
+}
+
+#[test]
+fn named_retraction_keeps_the_value_from_its_own_message_current() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("named_retraction_same_message");
+    let store = EvidencedStore::create(&dir, 3).unwrap();
+    let scope = scope();
+    let old = make_claim(
+        &scope,
+        "condition_old",
+        "user",
+        "health_condition",
+        Some("tendinitis"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    let new = make_claim(
+        &scope,
+        "condition_new",
+        "user",
+        "health_condition",
+        Some("chronic migraine"),
+        20,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    store.append_claim(&old, None).unwrap();
+    store.append_claim(&new, None).unwrap();
+    let stored_new = store
+        .scan_claims(&scope, usize::MAX, None)
+        .unwrap()
+        .into_iter()
+        .find(|claim| claim.id == new.id)
+        .unwrap();
+    let slot_id = stored_new.slot_id.clone().unwrap();
+    let mut correction = crate::ingest::add_correction(
+        CorrectionInput {
+            id: Some("retract_condition".to_string()),
+            scope: scope.clone(),
+            visibility: Visibility::Private,
+            policy_tags: Vec::new(),
+            operation: CorrectionOperation::Retract,
+            target_type: "claim".to_string(),
+            target_ids: Vec::new(),
+            target_selector: Some("tendinitis".to_string()),
+            new_value: None,
+            reason: None,
+            actor: ActorKind::User,
+            authority: CorrectionAuthority::User,
+            effective_at_ms: Some(20),
+            applies_valid_from_ms: None,
+            applies_valid_to_ms: None,
+            cascade_policy: None,
+            metadata_json: None,
+        },
+        20,
+    );
+    correction.target_match = CorrectionTargetMatch::CanonicalSlot;
+    correction.target_slot_id = Some(slot_id.clone());
+    correction.source_span_ids = new.source_span_ids.clone();
+    correction.source_episode_ids = new.source_episode_ids.clone();
+    correction.source_sequence_no = stored_new.source_sequence_no;
+    store.add_correction(&correction).unwrap();
+
+    let states = store
+        .scan_state_records(&scope, state_scan(20, Some(20)))
+        .unwrap();
+    let slot_states = states
+        .iter()
+        .filter(|state| state.slot_id.as_ref() == Some(&slot_id))
+        .collect::<Vec<_>>();
+    assert!(
+        slot_states.iter().any(|state| {
+            matches!(state.state_kind, StateRecordKind::Current)
+                && state.object_value.as_deref() == Some("chronic migraine")
+        }),
+        "{slot_states:#?}"
+    );
+    assert!(!slot_states
+        .iter()
+        .any(|state| matches!(state.state_kind, StateRecordKind::Tombstone)));
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn forget_erases_a_value_restated_in_its_own_message() {
+    let scope = scope();
+    let mut restated = make_claim(
+        &scope,
+        "condition_restated",
+        "user",
+        "health_condition",
+        Some("High blood pressure"),
+        20,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    restated.slot_id = Some("slot_condition".to_string());
+    restated.source_sequence_no = Some(2);
+    let mut correction = crate::ingest::add_correction(
+        CorrectionInput {
+            id: Some("forget_condition".to_string()),
+            scope: scope.clone(),
+            visibility: Visibility::Private,
+            policy_tags: Vec::new(),
+            operation: CorrectionOperation::Retract,
+            target_type: "claim".to_string(),
+            target_ids: Vec::new(),
+            target_selector: Some("Previously stored value: High blood pressure".to_string()),
+            new_value: None,
+            reason: None,
+            actor: ActorKind::User,
+            authority: CorrectionAuthority::User,
+            effective_at_ms: Some(20),
+            applies_valid_from_ms: None,
+            applies_valid_to_ms: None,
+            cascade_policy: None,
+            metadata_json: None,
+        },
+        20,
+    );
+    correction.target_match = CorrectionTargetMatch::CanonicalSlot;
+    correction.target_slot_id = Some("slot_condition".to_string());
+    correction.source_sequence_no = Some(2);
+    assert!(correction_targets_claim(&correction, &restated));
+
+    correction.operation = CorrectionOperation::Forget;
+    correction.target_selector = Some("tendinitis".to_string());
+    assert!(correction_targets_claim(&correction, &restated));
 }
