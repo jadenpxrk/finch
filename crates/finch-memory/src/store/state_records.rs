@@ -23,6 +23,46 @@ pub(super) fn state_records_from_claims(
     records
 }
 
+/// "We used X, then moved to Y" on one day: both values start at the same valid instant, and only
+/// the later message wins it. The earlier value still happened, so it stays in history as an
+/// empty interval that ends where it starts.
+pub(super) fn same_instant_predecessors<'a>(
+    versions: &'a [ClaimRecord],
+    winners: &'a [ClaimRecord],
+) -> impl Iterator<Item = ClaimRecord> + 'a {
+    let start = |claim: &ClaimRecord| claim.valid_from_ms.unwrap_or(claim.observed_at_ms);
+    // A value a later message replaced held until then; a retracted or deleted one never did.
+    let as_held = move |claim: &ClaimRecord| {
+        let mut claim = claim.clone();
+        if matches!(claim.status, MemoryStatus::Superseded) {
+            claim.status = MemoryStatus::Active;
+        }
+        claim.valid_to_ms = Some(start(&claim));
+        claim
+    };
+    winners
+        .iter()
+        .filter(|winner| {
+            !is_projectable_set_member(winner)
+                && matches!(claim_state_record_kind(winner), StateRecordKind::Current)
+        })
+        .flat_map(move |winner| {
+            versions.iter().map(as_held).filter(move |claim| {
+                claim.id != winner.id
+                    && !is_projectable_set_member(claim)
+                    && claim_facet_lifecycle_key(claim) == claim_facet_lifecycle_key(winner)
+                    && matches!(claim_state_record_kind(claim), StateRecordKind::Current)
+                    && start(claim) == start(winner)
+                    && matches!(
+                        (claim.source_sequence_no, winner.source_sequence_no),
+                        (Some(claim_sequence), Some(winner_sequence)) if claim_sequence < winner_sequence
+                    )
+                    && claim.object_value.as_deref().map(canonical_slot_part)
+                        != winner.object_value.as_deref().map(canonical_slot_part)
+            })
+        })
+}
+
 pub(super) fn sorted_unique_ids<'a>(ids: impl IntoIterator<Item = &'a MemoryId>) -> Vec<MemoryId> {
     ids.into_iter()
         .collect::<BTreeSet<_>>()
@@ -961,6 +1001,7 @@ fn history_version_order(a: &StateRecord, b: &StateRecord) -> std::cmp::Ordering
     let start = |record: &StateRecord| record.valid_from_ms.unwrap_or(record.observed_at_ms);
     start(a)
         .cmp(&start(b))
+        .then_with(|| a.source_sequence_no.cmp(&b.source_sequence_no))
         .then_with(|| a.valid_to_ms.cmp(&b.valid_to_ms))
         .then_with(|| a.observed_at_ms.cmp(&b.observed_at_ms))
         .then_with(|| state_record_priority(a.state_kind).cmp(&state_record_priority(b.state_kind)))

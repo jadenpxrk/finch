@@ -2046,3 +2046,165 @@ fn forget_erases_a_value_restated_in_its_own_message() {
     correction.target_selector = Some("tendinitis".to_string());
     assert!(correction_targets_claim(&correction, &restated));
 }
+
+#[test]
+fn same_day_values_keep_their_message_order_in_history() {
+    assert_same_day_history(false, [10, 10, 20], false);
+    assert_same_day_history(false, [10, 20, 20], false);
+}
+
+#[test]
+fn same_day_values_written_in_one_batch_keep_their_message_order_in_history() {
+    assert_same_day_history(true, [10, 10, 20], false);
+    assert_same_day_history(true, [10, 20, 20], false);
+}
+
+#[test]
+fn a_value_replaced_by_a_correction_the_same_day_stays_in_history() {
+    assert_same_day_history(true, [10, 20, 20], true);
+}
+
+/// `replace_second` has the third message also replace the second value with a correction.
+fn assert_same_day_history(in_one_batch: bool, valid_from: [i64; 3], replace_second: bool) {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("same_day_history");
+    let store = EvidencedStore::create(&dir, 3).unwrap();
+    let scope = scope();
+    let mut claims = Vec::new();
+    for (sequence, (value, valid_from)) in ["Cryptara", "Verisigil", "Sigilix"]
+        .into_iter()
+        .zip(valid_from)
+        .enumerate()
+    {
+        let claim = make_claim(
+            &scope,
+            &format!("secret_manager_{value}"),
+            "team",
+            "secret_manager",
+            Some(value),
+            valid_from,
+            (ClaimKind::Fact, ClaimPolarity::Affirmative),
+        );
+        store
+            .append_episode(&EpisodeRecord {
+                id: claim.source_episode_ids[0].clone(),
+                scope: scope.clone(),
+                status: MemoryStatus::Active,
+                visibility: Visibility::Private,
+                policy_tags: Vec::new(),
+                source_kind: SourceKind::UserMessage,
+                actor: ActorKind::User,
+                sequence_no: sequence as i64 + 1,
+                temporal: crate::types::TemporalFields {
+                    created_at_ms: valid_from,
+                    ingested_at_ms: valid_from,
+                    event_time_ms: None,
+                    valid_from_ms: None,
+                    valid_to_ms: None,
+                },
+                raw_text: value.to_string(),
+                blob_ref: None,
+                mime_type: None,
+                content_hash: value.to_string(),
+                causal_parent_ids: Vec::new(),
+                metadata_json: None,
+            })
+            .unwrap();
+        claims.push(claim);
+    }
+    let corrections = if replace_second {
+        let mut correction = crate::ingest::add_correction(
+            CorrectionInput {
+                id: Some("replace_secret_manager".to_string()),
+                scope: scope.clone(),
+                visibility: Visibility::Private,
+                policy_tags: Vec::new(),
+                operation: CorrectionOperation::Replace,
+                target_type: "claim".to_string(),
+                target_ids: vec![claims[1].id.clone()],
+                target_selector: None,
+                new_value: Some("Sigilix".to_string()),
+                reason: None,
+                actor: ActorKind::User,
+                authority: CorrectionAuthority::User,
+                effective_at_ms: Some(valid_from[2]),
+                applies_valid_from_ms: None,
+                applies_valid_to_ms: None,
+                cascade_policy: None,
+                metadata_json: None,
+            },
+            valid_from[2],
+        );
+        correction.source_span_ids = claims[2].source_span_ids.clone();
+        correction.source_episode_ids = claims[2].source_episode_ids.clone();
+        vec![correction]
+    } else {
+        Vec::new()
+    };
+    if in_one_batch {
+        store
+            .apply_state_mutation_batch(StateMutationBatch {
+                extraction_job: None,
+                scope: scope.clone(),
+                transaction_time_ms: 20,
+                propagation_seed: "same-day".to_string(),
+                max_rule_hops: 8,
+                claims,
+                entities: Vec::new(),
+                rules: Vec::new(),
+                slot_aliases: Vec::new(),
+                corrections,
+            })
+            .unwrap();
+    } else {
+        for claim in &claims {
+            store.append_claim(claim, None).unwrap();
+        }
+    }
+    let slot_id = store
+        .scan_slots(&scope, usize::MAX, Some(30))
+        .unwrap()
+        .into_iter()
+        .find(|slot| slot.predicate.as_deref() == Some("secret_manager"))
+        .unwrap()
+        .slot_key;
+
+    let projection = store
+        .project_answer_ready_state(
+            &scope,
+            &AnswerReadyStateRequest {
+                selections: &[StateReadSelection {
+                    slot_id: slot_id.clone(),
+                    view: StateReadView::Timeline,
+                    role: StateReadRole::AnswerTarget,
+                }],
+                ..answer_request("history", "Which secret managers?", &[], 20, 20, Some(30))
+            },
+        )
+        .unwrap();
+    let history = projection
+        .slot_histories
+        .iter()
+        .find(|history| history.slot_id == slot_id)
+        .unwrap();
+    let values = history
+        .versions
+        .iter()
+        .filter(|version| matches!(version.state_kind, StateRecordKind::Current))
+        .filter_map(|version| version.object_value.as_deref())
+        .collect::<Vec<_>>();
+    let mut distinct = values.clone();
+    distinct.dedup();
+    assert_eq!(distinct, vec!["Cryptara", "Verisigil", "Sigilix"]);
+
+    let current = store
+        .scan_state_records(&scope, state_scan(10, Some(valid_from[2])))
+        .unwrap()
+        .into_iter()
+        .filter(|state| state.slot_id.as_ref() == Some(&slot_id))
+        .filter_map(|state| state.object_value)
+        .collect::<Vec<_>>();
+    assert_eq!(current, vec!["Sigilix"]);
+
+    let _ = std::fs::remove_dir_all(dir);
+}

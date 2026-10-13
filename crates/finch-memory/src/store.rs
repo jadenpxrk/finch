@@ -89,13 +89,13 @@ use state_records::{
     dependency_trace_from_application, dependency_trace_id, lexical_query_terms,
     mentioned_entity_ids, merge_slot_identity_records, merge_trace_rule_ids,
     normalized_phrase_present, prepare_slot_identity_revisions, proof_span_ids_for_claims,
-    reconcile_set_states_with_slot_lifecycle, select_state_records, slot_records_from_projection,
-    sorted_unique_ids, state_lexical_fields, state_record_priority, state_record_recorded_at,
-    state_record_sets_semantically_equal, state_record_valid_at, state_record_visible_at,
-    state_records_from_claims, state_records_semantically_equal, state_records_to_projection,
-    state_records_to_slot_histories, support_contract_for_claims, support_state_for_claim_refs,
-    system_time_ms, transaction_visible_at, versioned_projection_id, StateSelectionAssessment,
-    StateSelectionQuery,
+    reconcile_set_states_with_slot_lifecycle, same_instant_predecessors, select_state_records,
+    slot_records_from_projection, sorted_unique_ids, state_lexical_fields, state_record_from_claim,
+    state_record_priority, state_record_recorded_at, state_record_sets_semantically_equal,
+    state_record_valid_at, state_record_visible_at, state_records_from_claims,
+    state_records_semantically_equal, state_records_to_projection, state_records_to_slot_histories,
+    support_contract_for_claims, support_state_for_claim_refs, system_time_ms,
+    transaction_visible_at, versioned_projection_id, StateSelectionAssessment, StateSelectionQuery,
 };
 use timeline::{reconcile_dependency_trace_intervals, reconcile_state_record_intervals};
 

@@ -157,17 +157,29 @@ impl MemoryStore {
         if slot_ids.is_empty() {
             return Ok(Vec::new());
         }
+        let versions = {
+            let versions =
+                self.scan_claim_versions_for_slot_ids(scope, slot_ids, usize::MAX, valid_at_ms)?;
+            let corrections =
+                self.scan_claim_corrections_for_claims(scope, &versions, valid_at_ms)?;
+            let mut versions = apply_corrections_to_claims(versions, &corrections, valid_at_ms);
+            // The read filter also returns narrower scopes' claims; this write projects only its own.
+            versions.retain(|claim| claim.scope == *scope);
+            versions
+        };
         let mut claims = match claims {
             Some(claims) => claims,
-            None => {
-                self.scan_current_claims_for_slot_ids(scope, slot_ids, usize::MAX, valid_at_ms)?
-            }
+            None => resolve_current_claims(versions.clone(), usize::MAX),
         };
-        // The read filter also returns narrower scopes' claims; this write projects only its own.
         claims.retain(|claim| claim.scope == *scope);
         let rules = self.rules_touching_slots(scope, slot_ids, valid_at_ms)?;
         let rule_ids_by_claim = rule_ids_by_claim(applications);
         let mut records = versioned_state_records(scope, &claims, &rule_ids_by_claim, write);
+        records.extend(
+            same_instant_predecessors(&versions, &claims)
+                .map(|claim| state_record_from_claim(claim, &rule_ids_by_claim, write.time_ms))
+                .map(|record| versioned_state_record(record, write)),
+        );
         let mut slots = slot_records_from_projection(
             scope,
             &claims,
@@ -345,24 +357,30 @@ fn versioned_state_records(
     rule_ids_by_claim: &BTreeMap<MemoryId, Vec<MemoryId>>,
     write: ProjectionWrite<'_>,
 ) -> Vec<StateRecord> {
-    let mut records = state_records_from_claims(scope, claims, rule_ids_by_claim, write.time_ms);
-    for record in &mut records {
-        record.projected_at_ms = write.time_ms;
-        record.recorded_at_ms = write.time_ms;
-        record.superseded_at_ms = None;
-        record.id = versioned_projection_id(
-            &record.state_key,
-            write.key,
-            &[
-                record.state_kind.as_str(),
-                record.object_value.as_deref().unwrap_or_default(),
-                &record.members.join("\u{0}"),
-                &record.claim_ids.join("\u{0}"),
-            ],
-        );
-    }
+    let mut records = state_records_from_claims(scope, claims, rule_ids_by_claim, write.time_ms)
+        .into_iter()
+        .map(|record| versioned_state_record(record, write))
+        .collect::<Vec<_>>();
     records.sort_by(|a, b| a.id.cmp(&b.id));
     records
+}
+
+/// `record` as a new version of this write.
+fn versioned_state_record(mut record: StateRecord, write: ProjectionWrite<'_>) -> StateRecord {
+    record.projected_at_ms = write.time_ms;
+    record.recorded_at_ms = write.time_ms;
+    record.superseded_at_ms = None;
+    record.id = versioned_projection_id(
+        &record.state_key,
+        write.key,
+        &[
+            record.state_kind.as_str(),
+            record.object_value.as_deref().unwrap_or_default(),
+            &record.members.join("\u{0}"),
+            &record.claim_ids.join("\u{0}"),
+        ],
+    );
+    record
 }
 
 /// Dependency traces of the applications that derived a claim on one of `slot_ids`, as new
