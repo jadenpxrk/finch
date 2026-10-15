@@ -1,6 +1,7 @@
 //! Memory stores in Postgres with pgvector: one schema per store, one table per collection, and
 //! each state mutation in one transaction.
 
+use crate::filter::{parse_filter, FilterExpr};
 use crate::row::{span_from_doc, state_record_from_doc};
 use crate::schema::{span_schema, CLAIMS_COLLECTION, SPANS_COLLECTION, STATE_RECORDS_COLLECTION};
 use crate::store::state_records::state_lexical_terms;
@@ -8,7 +9,6 @@ use crate::store::{
     collection_schemas, span_term_counts, take_schema, MemoryStore, OPEN_JOBS_INDEX_DDL,
 };
 use crate::table::MemoryTable;
-use finch_db::sqlengine::{parse_filter, FilterExpr};
 use finch_types::{
     CollectionSchema, CompareOp, DataType, Doc, HnswIndexParams, Status, Value, VectorQuery,
     ZResult,
@@ -1003,7 +1003,6 @@ impl PgTable {
     ) -> ZResult<()> {
         match expr {
             FilterExpr::AlwaysTrue => sql.push_str("TRUE"),
-            FilterExpr::AlwaysFalse => sql.push_str("FALSE"),
             FilterExpr::And(left, right) | FilterExpr::Or(left, right) => {
                 let op = if matches!(expr, FilterExpr::And(..)) {
                     " AND "

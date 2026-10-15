@@ -79,9 +79,9 @@ fn sql_escape_round_trips_backslashes_and_quotes_through_the_filter_parser() {
         r"\\",
     ] {
         let sql = format!("project_id = '{}'", sql_escape(value));
-        let expr = finch_db::sqlengine::parse_filter(&sql).unwrap();
+        let expr = crate::filter::parse_filter(&sql).unwrap();
         assert!(
-            matches!(&expr, finch_db::sqlengine::FilterExpr::Compare { value: Value::String(s), .. } if s == value),
+            matches!(&expr, crate::filter::FilterExpr::Compare { value: Value::String(s), .. } if s == value),
             "{sql} parsed as {expr:?}"
         );
     }

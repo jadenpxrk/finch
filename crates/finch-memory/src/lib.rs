@@ -7,6 +7,7 @@
 
 mod context;
 mod eval;
+mod filter;
 mod ingest;
 mod json_api;
 mod postgres;

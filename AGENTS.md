@@ -6,17 +6,12 @@ This file is for people and for coding agents. Read it before the first change.
 
 | Path | Crate | Depends on |
 |---|---|---|
-| `crates/finch-types` | schema, query, document, and error types | nothing in the workspace |
-| `crates/finch-proto` | manifest encoding | finch-types |
-| `crates/finch-storage` | columnar forward store | finch-types |
-| `crates/finch-core` | vector index algorithms and quantization | finch-types |
-| `crates/finch-db` | collections, segments, WAL, SQL-like filters | all of the above |
-| `crates/finch-memory` | the agent memory layer | finch-db |
-| `finch-py`, `finch-node` | Python and Node.js bindings | finch-db, finch-memory |
+| `crates/finch-types` | value and error types | nothing in the workspace |
+| `crates/finch-memory` | the agent memory layer | finch-types |
+| `finch-py`, `finch-node` | Python and Node.js bindings | finch-memory |
 
-`docs/architecture.md` describes the database crates and the memory layer. Read it before you
-change `finch-db`, `finch-core`, or `finch-memory`. The benchmark harness that produced the numbers in the README is not in this
-repository.
+`docs/architecture.md` describes the memory layer. Read it before you change `finch-memory`.
+The benchmark harness that produced the numbers in the README is not in this repository.
 
 ## Commands
 
@@ -24,12 +19,10 @@ repository.
 
 ```bash
 cargo test                                   # all default workspace members
-cargo test -p finch-db                       # one crate
-cargo test -p finch-db --test wal_crash_recovery_test   # one test binary
-cargo test -p finch-db -- wal_replay          # tests whose name contains a word
+cargo test -p finch-memory                   # one crate
+cargo test -p finch-memory -- context        # tests whose name contains a word
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
-cargo run -q --example quickstart -p finch-db
 ```
 
 The `finch-memory` tests keep their stores in Postgres with pgvector. Start a server and name it
@@ -39,13 +32,6 @@ in `FINCH_MEMORY_TEST_POSTGRES_URL`:
 docker run -d --name finch-pg --shm-size=1g -p 55432:5432 -e POSTGRES_USER=finch \
   -e POSTGRES_PASSWORD=finch -e POSTGRES_DB=finch pgvector/pgvector:pg17
 export FINCH_MEMORY_TEST_POSTGRES_URL=postgres://finch:finch@localhost:55432/finch
-```
-
-Code under `cfg(target_arch = "x86_64")` does not compile on an ARM machine. Before you touch
-`crates/finch-core/src/simd`, run clippy for that target too:
-
-```bash
-cargo clippy -p finch-core --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
 ```
 
 ## Rules, with the reason for each

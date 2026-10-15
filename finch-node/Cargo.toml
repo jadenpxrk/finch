@@ -9,7 +9,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 finch-types.workspace = true
-finch-db.workspace = true
 finch-memory.workspace = true
 napi.workspace = true
 napi-derive.workspace = true

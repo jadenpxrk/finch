@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "finch"
 version = "0.1.0"
-description = "Python bindings for the finch vector database"
+description = "Python bindings for the Finch memory layer"
 requires-python = ">=3.8"
 license = { text = "AGPL-3.0-only" }
 

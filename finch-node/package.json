@@ -1,7 +1,7 @@
 {
   "name": "@finch/finch",
   "version": "0.1.0",
-  "description": "Node.js bindings for finch vector database",
+  "description": "Node.js bindings for the Finch memory layer",
   "main": "index.js",
   "types": "index.d.ts",
   "scripts": {

@@ -36,7 +36,7 @@ jobs:
 
       # The bindings build in their own jobs.
       - name: Test Rust crates
-        run: cargo test -p finch-types -p finch-proto -p finch-core -p finch-storage -p finch-db -p finch-memory --all-targets
+        run: cargo test -p finch-types -p finch-memory --all-targets
 
   clippy:
     runs-on: ubuntu-latest
@@ -75,14 +75,11 @@ jobs:
         run: |
           rm -rf .venv
           python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip maturin numpy
+          .venv/bin/python -m pip install --upgrade pip maturin
 
       - name: Build/install finch Python extension
         working-directory: finch-py
         run: ../.venv/bin/maturin develop -q
 
       - name: Import finch
-        run: .venv/bin/python -c "import finch; assert hasattr(finch, 'CollectionSchema')"
-
-      - name: Python smoke tests
-        run: .venv/bin/python -m unittest discover -s finch-py/python/tests -p "test_*.py" -v
+        run: .venv/bin/python -c "import finch; assert hasattr(finch, 'FinchMemory')"
