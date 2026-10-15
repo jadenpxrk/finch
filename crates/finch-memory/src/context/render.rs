@@ -445,6 +445,29 @@ pub(super) fn civil_date_utc(ms: i64) -> String {
     )
 }
 
+/// Lists every value of the supported current and set targets in one block, so that a read
+/// with several targets shows one answer with several values, not several competing answers.
+pub(super) fn render_answer_values(slots: &[ResolvedAnswerSlot]) -> Option<String> {
+    if slots
+        .iter()
+        .any(|slot| matches!(slot.read_view, crate::StateReadView::Timeline))
+    {
+        return None;
+    }
+    let lines = slots
+        .iter()
+        .filter(|slot| matches!(slot.support_state, crate::AnswerSupportState::Supported))
+        .flat_map(|slot| {
+            let rendered_slot = render_slot(slot.subject.as_deref(), slot.predicate.as_deref());
+            slot.current_value
+                .iter()
+                .chain(&slot.members)
+                .map(move |value| format!("- {rendered_slot}: {value}\n"))
+        })
+        .collect::<Vec<_>>();
+    (lines.len() > 1).then(|| format!("### AnswerValues\n{}", lines.concat()))
+}
+
 pub(super) fn render_resolved_answer_slot(
     slot: &ResolvedAnswerSlot,
     include_provenance: bool,

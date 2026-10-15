@@ -1018,3 +1018,47 @@ fn mixed_current_targets_withhold_raw_only_for_non_supported_slots() {
     assert!(!compiled.body.contains("### Memory span_contacto"));
     assert!(!compiled.body.contains("El contacto es Noël."));
 }
+
+#[test]
+fn several_answer_targets_pack_their_values_as_one_list() {
+    let target = |slot_id: &str, predicate: &str, value: Option<&str>, members: &[&str]| {
+        ResolvedAnswerSlot {
+            slot_id: slot_id.to_string(),
+            read_view: crate::StateReadView::Current,
+            support_state: crate::AnswerSupportState::Supported,
+            state_kind: None,
+            subject: Some("user".to_string()),
+            predicate: Some(predicate.to_string()),
+            current_value: value.map(str::to_string),
+            members: members.iter().map(|member| member.to_string()).collect(),
+            facets: Vec::new(),
+            source_claim_ids: Vec::new(),
+            source_span_ids: Vec::new(),
+            dependency_rule_ids: Vec::new(),
+            dependency_trigger_slot_ids: Vec::new(),
+            valid_from_ms: None,
+            valid_to_ms: None,
+        }
+    };
+    let mut deleted = target("slot_sport", "sport", Some("tennis"), &[]);
+    deleted.support_state = crate::AnswerSupportState::Deleted;
+    let targets = [
+        target("slot_hobby", "hobby", Some("guitar"), &[]),
+        target("slot_club", "club", None, &["hiking club", "book club"]),
+        deleted,
+    ];
+
+    let compiled = build_query_state_context_for_targets(
+        &ContextInput::default(),
+        &targets,
+        ContextOptions::default(),
+    );
+
+    assert!(compiled.body.starts_with(
+        "### AnswerValues\n- user / hobby: guitar\n- user / club: hiking club\n- user / club: book club\n\n"
+    ));
+    assert!(render_answer_values(&targets[..1]).is_none());
+    let mut timeline = targets.clone();
+    timeline[0].read_view = crate::StateReadView::Timeline;
+    assert!(render_answer_values(&timeline).is_none());
+}

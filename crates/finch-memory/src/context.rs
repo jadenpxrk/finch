@@ -244,6 +244,16 @@ fn build_query_state_context_for_targets(
     let targets = AnswerTargets::new(resolved_answer_slots);
     let state_items = collect_state_items(input, &targets, include_provenance);
     let (mut items, mut coverage_items) = order_state_items(state_items, &targets);
+    if let Some(rendered) = render_answer_values(resolved_answer_slots) {
+        items.insert(
+            0,
+            RenderedContextItem::from((
+                "answer_values".to_string(),
+                "state_answer_values",
+                rendered,
+            )),
+        );
+    }
     if targets.fail_closed_current_read {
         let raw_start = items.len();
         return build_rendered_context_with_raw_reserve(items, options.token_budget, raw_start, 0);
