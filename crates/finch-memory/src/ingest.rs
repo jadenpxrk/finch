@@ -191,7 +191,9 @@ pub fn ingest_episode(
     ingested_at_ms: i64,
     chunk_options: &ChunkOptions,
 ) -> IngestedEpisode {
-    let content_hash = stable_hash_hex(&[&input.raw_text]);
+    // Postgres text cannot hold NUL; a space keeps every byte offset into the text.
+    let raw_text = input.raw_text.replace('\0', " ");
+    let content_hash = stable_hash_hex(&[&raw_text]);
     let id = input.id.unwrap_or_else(|| {
         let sequence_no = input.sequence_no.to_string();
         let event_time_ms = input.event_time_ms.unwrap_or(ingested_at_ms).to_string();
@@ -218,7 +220,7 @@ pub fn ingest_episode(
         actor: input.actor,
         sequence_no: input.sequence_no,
         temporal: temporal.clone(),
-        raw_text: input.raw_text,
+        raw_text,
         blob_ref: input.blob_ref,
         mime_type: input.mime_type,
         content_hash,
@@ -610,6 +612,31 @@ mod tests {
             first.spans,
             "explicit chunk_episode helper should match ingest output"
         );
+    }
+
+    #[test]
+    fn ingest_episode_replaces_nul_with_a_space() {
+        let input = EpisodeInput {
+            id: Some("ep_nul".to_string()),
+            scope: scope(),
+            visibility: Visibility::Private,
+            policy_tags: Vec::new(),
+            source_kind: SourceKind::Import,
+            actor: ActorKind::External,
+            sequence_no: 1,
+            event_time_ms: None,
+            valid_from_ms: None,
+            valid_to_ms: None,
+            raw_text: "a\0b".to_string(),
+            blob_ref: None,
+            mime_type: None,
+            causal_parent_ids: Vec::new(),
+            metadata_json: None,
+        };
+        let ingested = ingest_episode(input, 1, &ChunkOptions::default());
+        assert_eq!(ingested.episode.raw_text, "a b");
+        assert_eq!(ingested.spans[0].text, "a b");
+        assert_eq!(ingested.spans[0].byte_end, 3);
     }
 
     #[test]
