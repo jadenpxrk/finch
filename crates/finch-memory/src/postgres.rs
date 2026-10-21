@@ -75,7 +75,8 @@ impl MemoryStore {
         let session = Arc::new(PgSession::connect(store)?);
         let created = session.with_client(|client| {
             client.batch_execute(&format!(
-                "CREATE SCHEMA {schema}; CREATE SEQUENCE {schema}.write_seq;",
+                "CREATE EXTENSION IF NOT EXISTS vector; \
+                 CREATE SCHEMA {schema}; CREATE SEQUENCE {schema}.write_seq;",
                 schema = quote(name)
             ))
         });
@@ -1904,6 +1905,22 @@ mod tests {
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(tenants.len(), 3);
+    }
+
+    #[test]
+    fn create_enables_pgvector_in_a_fresh_database() {
+        let url = crate::test_postgres_url();
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        let mut admin = Client::connect(&url, NoTls).unwrap();
+        let drop_database = "DROP DATABASE IF EXISTS finch_fresh WITH (FORCE)";
+        admin.batch_execute(drop_database).unwrap();
+        admin.batch_execute("CREATE DATABASE finch_fresh").unwrap();
+        let (base, query) = url.split_at(url.find('?').unwrap_or(url.len()));
+        let fresh_url = format!("{}/finch_fresh{query}", base.rsplit_once('/').unwrap().0);
+        let created =
+            MemoryStore::create(&PostgresStore::new(fresh_url, "t_fresh"), 3, true).map(drop);
+        admin.batch_execute(drop_database).unwrap();
+        created.unwrap();
     }
 
     #[test]
