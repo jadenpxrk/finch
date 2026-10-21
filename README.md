@@ -72,12 +72,12 @@ the official answer protocol. The official MEME evaluator judged the answers wit
 
 | Task | Correct | Share | What the task checks |
 |---|---:|---:|---|
-| All | 481 / 694 | 69.3% | |
-| Deletion | 84 / 100 | 84.0% | The agent drops a fact the user retracted. |
-| Absence | 103 / 130 | 79.2% | The agent says a fact was never stated. |
-| Tracking | 78 / 100 | 78.0% | The agent reports the current value after many updates. |
-| Cascade | 99 / 164 | 60.4% | A changed fact updates the facts that depend on it. |
-| Aggregation | 18 / 100 | 18.0% | The agent combines several remembered items into one answer. |
+| All | 518 / 694 | 74.6% | |
+| Deletion | 93 / 100 | 93.0% | The agent drops a fact the user retracted. |
+| Absence | 101 / 130 | 77.7% | The agent says a fact was never stated. |
+| Tracking | 89 / 100 | 89.0% | The agent reports the current value after many updates. |
+| Cascade | 119 / 164 | 72.6% | A changed fact updates the facts that depend on it. |
+| Aggregation | 17 / 100 | 17.0% | The agent combines several remembered items into one answer. |
 
 ### EnterpriseRAG-Bench
 
@@ -97,7 +97,7 @@ queries, reranked the results, and wrote the answers.
 
 ## Status
 
-The crates have 405 tests. The memory tests run against a Postgres server with pgvector. All
+The crates have 407 tests. The memory tests run against a Postgres server with pgvector. All
 tests use synthetic data. The repository contains no cached benchmark replays.
 
 The project has not had a public release.
