@@ -1,4 +1,5 @@
 use super::*;
+use crate::IndexedSource;
 
 #[test]
 fn memory_store_persists_active_records() {
@@ -419,22 +420,24 @@ fn memory_store_hybrid_source_diverse_search_fuses_lexical_sources_and_hydrates_
     let index_dir = temp_dir("hybrid_source_diverse_index");
     let mut builder = crate::source_index::SourceLexicalIndexBuilder::new();
     builder
-        .add_source(
-            "document_alpha",
-            "",
-            "",
-            "general overview more detail",
-            vec!["alpha_0".to_string(), "alpha_1".to_string()],
-        )
+        .add_source(IndexedSource {
+            source_id: "document_alpha",
+            title: "",
+            directory: "",
+            body: "general overview more detail",
+            date_ms: None,
+            span_ids: vec!["alpha_0".to_string(), "alpha_1".to_string()],
+        })
         .unwrap();
     builder
-        .add_source(
-            "document_beta",
-            "",
-            "",
-            "kestrel failover runbook kestrel steps",
-            vec!["beta_0".to_string(), "beta_1".to_string()],
-        )
+        .add_source(IndexedSource {
+            source_id: "document_beta",
+            title: "",
+            directory: "",
+            body: "kestrel failover runbook kestrel steps",
+            date_ms: None,
+            span_ids: vec!["beta_0".to_string(), "beta_1".to_string()],
+        })
         .unwrap();
     builder.write(&index_dir).unwrap();
     let index = crate::source_index::SourceLexicalIndex::open(&index_dir).unwrap();
@@ -515,31 +518,34 @@ fn memory_store_hybrid_source_diverse_search_fuses_expansion_lexical_sources() {
     let index_dir = temp_dir("hybrid_source_diverse_expansion_index");
     let mut builder = crate::source_index::SourceLexicalIndexBuilder::new();
     builder
-        .add_source(
-            "document_overview",
-            "",
-            "",
-            "general orientation",
-            vec!["overview_0".to_string()],
-        )
+        .add_source(IndexedSource {
+            source_id: "document_overview",
+            title: "",
+            directory: "",
+            body: "general orientation",
+            date_ms: None,
+            span_ids: vec!["overview_0".to_string()],
+        })
         .unwrap();
     builder
-        .add_source(
-            "document_checklist",
-            "",
-            "",
-            "avionics checklist",
-            vec!["checklist_0".to_string()],
-        )
+        .add_source(IndexedSource {
+            source_id: "document_checklist",
+            title: "",
+            directory: "",
+            body: "avionics checklist",
+            date_ms: None,
+            span_ids: vec!["checklist_0".to_string()],
+        })
         .unwrap();
     builder
-        .add_source(
-            "document_release",
-            "",
-            "",
-            "deployment playbook",
-            vec!["release_0".to_string()],
-        )
+        .add_source(IndexedSource {
+            source_id: "document_release",
+            title: "",
+            directory: "",
+            body: "deployment playbook",
+            date_ms: None,
+            span_ids: vec!["release_0".to_string()],
+        })
         .unwrap();
     builder.write(&index_dir).unwrap();
     let index = crate::source_index::SourceLexicalIndex::open(&index_dir).unwrap();
@@ -635,31 +641,34 @@ fn memory_store_hybrid_source_diverse_search_appends_supplemental_sources() {
     let index_dir = temp_dir("hybrid_source_diverse_supplemental_index");
     let mut builder = crate::source_index::SourceLexicalIndexBuilder::new();
     builder
-        .add_source(
-            "document_handbook",
-            "",
-            "",
-            "incident response handbook",
-            vec!["handbook_0".to_string()],
-        )
+        .add_source(IndexedSource {
+            source_id: "document_handbook",
+            title: "",
+            directory: "",
+            body: "incident response handbook",
+            date_ms: None,
+            span_ids: vec!["handbook_0".to_string()],
+        })
         .unwrap();
     builder
-        .add_source(
-            "document_runbook",
-            "",
-            "",
-            "incident response runbook",
-            vec!["runbook_0".to_string()],
-        )
+        .add_source(IndexedSource {
+            source_id: "document_runbook",
+            title: "",
+            directory: "",
+            body: "incident response runbook",
+            date_ms: None,
+            span_ids: vec!["runbook_0".to_string()],
+        })
         .unwrap();
     builder
-        .add_source(
-            "document_release",
-            "",
-            "",
-            "quarterly release schedule",
-            vec!["release_0".to_string()],
-        )
+        .add_source(IndexedSource {
+            source_id: "document_release",
+            title: "",
+            directory: "",
+            body: "quarterly release schedule",
+            date_ms: None,
+            span_ids: vec!["release_0".to_string()],
+        })
         .unwrap();
     builder.write(&index_dir).unwrap();
     let index = crate::source_index::SourceLexicalIndex::open(&index_dir).unwrap();
@@ -803,7 +812,14 @@ fn memory_store_searches_matching_passages_inside_selected_sources() {
             ids.push(id);
         }
         builder
-            .add_source(source_id, "", "", &texts.join(" "), ids)
+            .add_source(IndexedSource {
+                source_id,
+                title: "",
+                directory: "",
+                body: &texts.join(" "),
+                date_ms: None,
+                span_ids: ids,
+            })
             .unwrap();
     }
     builder.write(&index_dir).unwrap();
@@ -923,15 +939,16 @@ fn memory_store_hydrates_explicit_source_selections_in_round_robin_order() {
         ("document_gamma", 2),
     ] {
         builder
-            .add_source(
+            .add_source(IndexedSource {
                 source_id,
-                "",
-                "",
-                source_id,
-                (0..span_count)
+                title: "",
+                directory: "",
+                body: source_id,
+                date_ms: None,
+                span_ids: (0..span_count)
                     .map(|span_index| format!("{source_id}_{span_index}"))
                     .collect(),
-            )
+            })
             .unwrap();
     }
     builder.write(&index_dir).unwrap();
@@ -1352,7 +1369,14 @@ fn selected_source_hydration_skips_forgotten_span() {
         .unwrap();
     let mut builder = crate::source_index::SourceLexicalIndexBuilder::new();
     builder
-        .add_source(&span.source_id, "", "", &span.text, vec![span.id.clone()])
+        .add_source(IndexedSource {
+            source_id: &span.source_id,
+            title: "",
+            directory: "",
+            body: &span.text,
+            date_ms: None,
+            span_ids: vec![span.id.clone()],
+        })
         .unwrap();
     builder.write(&index_path).unwrap();
     let correction = crate::ingest::add_correction(
@@ -1406,4 +1430,116 @@ fn selected_source_hydration_skips_forgotten_span() {
         hydrated.is_empty(),
         "source hydration returned forgotten text: {hydrated:?}"
     );
+}
+
+#[test]
+fn memory_store_rebuilds_source_text_and_ranks_whole_sources() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("source_texts");
+    let store = crate::test_store(&dir, 3).unwrap();
+    let long_text = (0..400)
+        .map(|n| format!("Line {n} of the travel policy names reimbursement step {n}."))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let documents = [
+        (
+            "policy",
+            "Travel policy",
+            long_text.as_str(),
+            [1.0, 0.0, 0.0],
+        ),
+        (
+            "runbook",
+            "Kestrel runbook",
+            "kestrel failover runbook",
+            [0.0, 1.0, 0.0],
+        ),
+    ];
+    let index_dir = temp_dir("source_texts_index");
+    let mut builder = crate::source_index::SourceLexicalIndexBuilder::new();
+    for (sequence_no, (id, title, text, embedding)) in documents.iter().enumerate() {
+        let ingested = ingest_episode(
+            EpisodeInput {
+                id: Some(id.to_string()),
+                scope: scope(),
+                visibility: Visibility::Shared,
+                policy_tags: Vec::new(),
+                source_kind: SourceKind::Import,
+                actor: ActorKind::External,
+                sequence_no: sequence_no as i64,
+                event_time_ms: None,
+                valid_from_ms: None,
+                valid_to_ms: None,
+                raw_text: text.to_string(),
+                blob_ref: None,
+                mime_type: Some("text/plain".to_string()),
+                causal_parent_ids: Vec::new(),
+                metadata_json: None,
+            },
+            sequence_no as i64,
+            &ChunkOptions::default(),
+        );
+        let spans = ingested
+            .spans
+            .iter()
+            .map(|span| (span.clone(), embedding.to_vec()))
+            .collect::<Vec<_>>();
+        store.append_vector_spans(&spans).unwrap();
+        builder
+            .add_source(IndexedSource {
+                source_id: id,
+                title,
+                directory: "docs",
+                body: text,
+                date_ms: Some(1_000 * sequence_no as i64),
+                span_ids: ingested.spans.iter().map(|span| span.id.clone()).collect(),
+            })
+            .unwrap();
+    }
+    builder.write(&index_dir).unwrap();
+    let index = crate::source_index::SourceLexicalIndex::open(&index_dir).unwrap();
+    assert!(index.span_ids_for_source("policy").unwrap().len() > 1);
+
+    let texts = store
+        .source_texts(
+            &scope(),
+            &index,
+            &["policy".to_string(), "missing".to_string()],
+            None,
+        )
+        .unwrap();
+    assert_eq!(texts.len(), 1);
+    assert_eq!(texts["policy"], long_text);
+
+    let info = index.source_info("runbook").unwrap();
+    assert_eq!(
+        (info.directory, info.title, info.date_ms),
+        ("docs", "Kestrel runbook", Some(1_000))
+    );
+    assert_eq!(index.document_frequency("kestrel"), 1);
+
+    let search = |embedding: Option<Vec<f32>>| {
+        store
+            .search_sources(
+                &scope(),
+                SourceSearch {
+                    query_text: "kestrel",
+                    query_embedding: embedding,
+                    index: &index,
+                    k: 5,
+                    scan_limit: 10,
+                    at_ms: None,
+                },
+            )
+            .unwrap()
+            .into_iter()
+            .map(|(source_id, _)| source_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(search(None), vec!["runbook"]);
+    // The dense ranking adds the policy, which holds no query term.
+    let mut fused = search(Some(vec![1.0, 0.0, 0.0]));
+    fused.sort();
+    assert_eq!(fused, vec!["policy", "runbook"]);
+    let _ = std::fs::remove_dir_all(&index_dir);
 }

@@ -1,0 +1,16 @@
+[package]
+name = "finch-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "finch"
+path = "src/main.rs"
+
+[dependencies]
+finch-types.workspace = true
+finch-memory.workspace = true
+regex = "1"
+serde.workspace = true
+serde_json.workspace = true

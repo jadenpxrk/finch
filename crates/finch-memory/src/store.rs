@@ -66,7 +66,8 @@ pub use extraction_jobs::{
     ExtractionJobStatus, ExtractionLeaseRequest,
 };
 pub use search::{
-    ExpansionQuery, HybridSourceDiverseOptions, HybridSourceDiverseQuery, SourceSpanSelection,
+    ExpansionQuery, HybridSourceDiverseOptions, HybridSourceDiverseQuery, SourceSearch,
+    SourceSpanSelection,
 };
 
 use canonical::{

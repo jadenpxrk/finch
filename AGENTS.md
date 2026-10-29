@@ -9,8 +9,10 @@ This file is for people and for coding agents. Read it before the first change.
 | `crates/finch-types` | value and error types | nothing in the workspace |
 | `crates/finch-memory` | the agent memory layer | finch-types |
 | `finch-py`, `finch-node` | Python and Node.js bindings | finch-memory |
+| `crates/finch-cli` | the `finch` command that agents use to search documents | finch-memory |
 
 `docs/architecture.md` describes the memory layer. Read it before you change `finch-memory`.
+`docs/agent-search.md` tells how an agent uses the `finch` command.
 The benchmark harness that produced the numbers in the README is not in this repository.
 
 ## Commands

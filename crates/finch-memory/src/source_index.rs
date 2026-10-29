@@ -53,6 +53,37 @@ struct SourceRow {
     directory: String,
     len: u32,
     spans: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    date_ms: Option<i64>,
+}
+
+/// One source document to add to a lexical index.
+pub struct IndexedSource<'a> {
+    /// Id of the source.
+    pub source_id: &'a str,
+    /// Title of the source. Its words count in the BM25 score like body words.
+    pub title: &'a str,
+    /// Directory the source belongs to, such as a folder or a channel.
+    pub directory: &'a str,
+    /// Full text of the source.
+    pub body: &'a str,
+    /// Time the source was written, in Unix ms. `None` means unknown.
+    pub date_ms: Option<i64>,
+    /// Ids of the source's spans, in text order.
+    pub span_ids: Vec<String>,
+}
+
+/// What a lexical index records about one source.
+#[derive(Debug, Clone, Copy)]
+pub struct IndexedSourceInfo<'a> {
+    /// Directory of the source.
+    pub directory: &'a str,
+    /// Title of the source. Empty means no title.
+    pub title: &'a str,
+    /// Time the source was written, in Unix ms. `None` means unknown.
+    pub date_ms: Option<i64>,
 }
 
 /// A source that a lexical index search returned, with its BM25 score.
@@ -69,6 +100,8 @@ struct SourceEntry {
     directory: String,
     doc_len: u32,
     span_ids: Vec<String>,
+    title: String,
+    date_ms: Option<i64>,
 }
 
 #[derive(Clone, Copy)]
@@ -92,15 +125,16 @@ impl SourceLexicalIndexBuilder {
         Self::default()
     }
 
-    /// Add one source document: its title, directory, body, and ordered span ids.
-    pub fn add_source(
-        &mut self,
-        source_id: &str,
-        title: &str,
-        directory: &str,
-        body: &str,
-        span_ids: Vec<String>,
-    ) -> ZResult<()> {
+    /// Add one source document.
+    pub fn add_source(&mut self, source: IndexedSource<'_>) -> ZResult<()> {
+        let IndexedSource {
+            source_id,
+            title,
+            directory,
+            body,
+            date_ms,
+            span_ids,
+        } = source;
         let ordinal = u32::try_from(self.sources.len()).map_err(|_| {
             Status::invalid_argument("source lexical index supports at most 2^32 sources")
         })?;
@@ -123,6 +157,8 @@ impl SourceLexicalIndexBuilder {
             directory: directory.to_string(),
             len: doc_len,
             spans: span_ids,
+            title: title.to_string(),
+            date_ms,
         });
         Ok(())
     }
@@ -264,6 +300,8 @@ impl SourceLexicalIndex {
                 directory: row.directory,
                 doc_len: row.len,
                 span_ids: row.spans,
+                title: row.title,
+                date_ms: row.date_ms,
             });
         }
         if sources.len() != manifest.source_count {
@@ -320,6 +358,27 @@ impl SourceLexicalIndex {
     pub fn directory_of(&self, source_id: &str) -> Option<&str> {
         let ordinal = *self.ordinal_by_source.get(source_id)?;
         Some(&self.sources[ordinal as usize].directory)
+    }
+
+    /// Directory, title, and date recorded for one source, if the source is indexed.
+    pub fn source_info(&self, source_id: &str) -> Option<IndexedSourceInfo<'_>> {
+        let ordinal = *self.ordinal_by_source.get(source_id)?;
+        let source = &self.sources[ordinal as usize];
+        Some(IndexedSourceInfo {
+            directory: &source.directory,
+            title: &source.title,
+            date_ms: source.date_ms,
+        })
+    }
+
+    /// Number of sources that contain `term`, a term as `lexical_terms` writes it.
+    pub fn document_frequency(&self, term: &str) -> usize {
+        self.terms.get(term).map_or(0, |entry| entry.count as usize)
+    }
+
+    /// Ids of every indexed source, in index insertion order.
+    pub fn source_ids(&self) -> impl Iterator<Item = &str> {
+        self.sources.iter().map(|source| source.id.as_str())
     }
 
     /// Source ids in a directory, in index insertion order.
@@ -421,31 +480,20 @@ mod tests {
     fn build_index(dir: &Path) -> SourceLexicalIndex {
         let mut builder = SourceLexicalIndexBuilder::new();
         builder
-            .add_source(
-                "doc_alpha",
-                "",
-                "projects/kestrel",
-                "Kestrel deployment runbook. The kestrel rollout freezes traffic during failover.",
-                vec!["span_a0".to_string(), "span_a1".to_string()],
-            )
+            .add_source(IndexedSource { source_id: "doc_alpha", title: "", directory: "projects/kestrel", body: "Kestrel deployment runbook. The kestrel rollout freezes traffic during failover.", date_ms: None, span_ids: vec!["span_a0".to_string(), "span_a1".to_string()] })
             .unwrap();
         builder
-            .add_source(
-                "doc_beta",
-                "",
-                "departments/finance",
-                "Quarterly finance summary. Revenue grew while the deployment budget stayed flat.",
-                vec!["span_b0".to_string()],
-            )
+            .add_source(IndexedSource { source_id: "doc_beta", title: "", directory: "departments/finance", body: "Quarterly finance summary. Revenue grew while the deployment budget stayed flat.", date_ms: None, span_ids: vec!["span_b0".to_string()] })
             .unwrap();
         builder
-            .add_source(
-                "doc_gamma",
-                "",
-                "teams/people",
-                "Weekly team notes. The team discussed hiring, onboarding, and the offsite.",
-                vec!["span_c0".to_string()],
-            )
+            .add_source(IndexedSource {
+                source_id: "doc_gamma",
+                title: "",
+                directory: "teams/people",
+                body: "Weekly team notes. The team discussed hiring, onboarding, and the offsite.",
+                date_ms: None,
+                span_ids: vec!["span_c0".to_string()],
+            })
             .unwrap();
         builder.write(dir).unwrap();
         SourceLexicalIndex::open(dir).unwrap()
@@ -473,22 +521,24 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let mut builder = SourceLexicalIndexBuilder::new();
         builder
-            .add_source(
-                "title_match",
-                "Kestrel",
-                "",
-                "Operations brief",
-                vec!["title_span".to_string()],
-            )
+            .add_source(IndexedSource {
+                source_id: "title_match",
+                title: "Kestrel",
+                directory: "",
+                body: "Operations brief",
+                date_ms: None,
+                span_ids: vec!["title_span".to_string()],
+            })
             .unwrap();
         builder
-            .add_source(
-                "body_match",
-                "",
-                "",
-                "Kestrel operations brief",
-                vec!["body_span".to_string()],
-            )
+            .add_source(IndexedSource {
+                source_id: "body_match",
+                title: "",
+                directory: "",
+                body: "Kestrel operations brief",
+                date_ms: None,
+                span_ids: vec!["body_span".to_string()],
+            })
             .unwrap();
         builder.write(&dir).unwrap();
         let index = SourceLexicalIndex::open(&dir).unwrap();
@@ -525,13 +575,14 @@ mod tests {
             ("team_guide", "teams/people"),
         ] {
             builder
-                .add_source(
+                .add_source(IndexedSource {
                     source_id,
-                    "",
+                    title: "",
                     directory,
-                    "product knowledge",
-                    vec![format!("{source_id}_span")],
-                )
+                    body: "product knowledge",
+                    date_ms: None,
+                    span_ids: vec![format!("{source_id}_span")],
+                })
                 .unwrap();
         }
         builder.write(&dir).unwrap();
@@ -566,10 +617,24 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let mut builder = SourceLexicalIndexBuilder::new();
         builder
-            .add_source("doc_x", "", "", "kestrel kestrel", Vec::new())
+            .add_source(IndexedSource {
+                source_id: "doc_x",
+                title: "",
+                directory: "",
+                body: "kestrel kestrel",
+                date_ms: None,
+                span_ids: Vec::new(),
+            })
             .unwrap();
         builder
-            .add_source("doc_y", "", "", "osprey", Vec::new())
+            .add_source(IndexedSource {
+                source_id: "doc_y",
+                title: "",
+                directory: "",
+                body: "osprey",
+                date_ms: None,
+                span_ids: Vec::new(),
+            })
             .unwrap();
         builder.write(&dir).unwrap();
         let index = SourceLexicalIndex::open(&dir).unwrap();

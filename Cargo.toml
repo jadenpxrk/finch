@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/finch-types",
     "crates/finch-memory",
+    "crates/finch-cli",
     "finch-py",
     "finch-node",
 ]

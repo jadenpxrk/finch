@@ -53,6 +53,23 @@ pub struct SourceSpanSelection {
     pub max_spans: usize,
 }
 
+/// A search for whole sources: the keyword ranking of a source index, fused with the dense
+/// ranking of the spans when the query has an embedding.
+pub struct SourceSearch<'a> {
+    /// Query text for keyword matching.
+    pub query_text: &'a str,
+    /// Embedding of the query. `None` means keyword search only.
+    pub query_embedding: Option<Vec<f32>>,
+    /// Source lexical index to search.
+    pub index: &'a SourceLexicalIndex,
+    /// Number of sources to return.
+    pub k: usize,
+    /// Number of candidates each ranking reads.
+    pub scan_limit: usize,
+    /// Valid time to read at, in Unix ms. `None` means no time filter.
+    pub at_ms: Option<i64>,
+}
+
 /// An extra query that widens a retrieval.
 #[derive(Debug, Clone)]
 pub struct ExpansionQuery {
@@ -250,6 +267,19 @@ fn fuse_primary_sources(
     Ok(fused)
 }
 
+/// Joins spans in text order; neighbor spans overlap, and the byte offsets say how much is
+/// already written.
+fn join_overlapping_spans(spans: &[SpanRecord]) -> String {
+    let mut text = String::new();
+    let mut written_to = 0i64;
+    for span in spans {
+        let skip = usize::try_from(written_to - span.byte_start).unwrap_or(0);
+        text.push_str(span.text.get(skip..).unwrap_or(""));
+        written_to = written_to.max(span.byte_end);
+    }
+    text
+}
+
 fn sort_fused_sources(fused: &mut [(String, f32)]) {
     fused.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
@@ -436,6 +466,72 @@ impl MemoryStore {
             .collect::<Vec<_>>();
         let max_spans = per_source.iter().map(Vec::len).max().unwrap_or(0);
         self.mask_forgotten(scope, interleave_by_rank(per_source, max_spans), at_ms)
+    }
+
+    /// Sources ranked by reciprocal-rank fusion of the keyword and dense rankings, best first.
+    pub fn search_sources(
+        &self,
+        scope: &MemoryScope,
+        search: SourceSearch<'_>,
+    ) -> ZResult<Vec<(String, f32)>> {
+        let lexical_hits = search
+            .index
+            .search(search.query_text, search.scan_limit, 1.0)?;
+        let dense_hits = match search.query_embedding {
+            Some(embedding) => {
+                self.query_spans(scope, embedding, search.scan_limit, search.at_ms)?
+            }
+            None => Vec::new(),
+        };
+        let mut fused = BTreeMap::<String, f32>::new();
+        let mut seen_dense = BTreeSet::new();
+        let dense_sources = dense_hits
+            .iter()
+            .map(|hit| hit.span.source_id.as_str())
+            .filter(|source_id| seen_dense.insert(*source_id));
+        for (rank, source_id) in dense_sources.enumerate() {
+            *fused.entry(source_id.to_string()).or_insert(0.0) += rrf_share(1.0, rank);
+        }
+        for (rank, hit) in lexical_hits.iter().enumerate() {
+            *fused.entry(hit.source_id.clone()).or_insert(0.0) += rrf_share(1.0, rank);
+        }
+        let mut fused = fused.into_iter().collect::<Vec<_>>();
+        sort_fused_sources(&mut fused);
+        fused.truncate(search.k);
+        Ok(fused)
+    }
+
+    /// The full text of each indexed source, rebuilt from its spans in order, with forgotten
+    /// values masked. A source that the index does not hold has no entry.
+    pub fn source_texts(
+        &self,
+        scope: &MemoryScope,
+        index: &SourceLexicalIndex,
+        source_ids: &[String],
+        at_ms: Option<i64>,
+    ) -> ZResult<BTreeMap<String, String>> {
+        let selections = source_ids
+            .iter()
+            .filter(|source_id| index.span_ids_for_source(source_id).is_some())
+            .map(|source_id| SourceSpanSelection {
+                source_id: source_id.clone(),
+                max_spans: usize::MAX,
+            })
+            .collect::<Vec<_>>();
+        let mut spans_by_source = BTreeMap::<String, Vec<SpanRecord>>::new();
+        for hit in self.hydrate_selected_sources(scope, &selections, &[], index, at_ms)? {
+            spans_by_source
+                .entry(hit.span.source_id.clone())
+                .or_default()
+                .push(hit.span);
+        }
+        Ok(spans_by_source
+            .into_iter()
+            .map(|(source_id, mut spans)| {
+                spans.sort_by_key(|span| span.span_index);
+                (source_id, join_overlapping_spans(&spans))
+            })
+            .collect())
     }
 
     /// Hybrid company-knowledge retrieval: dense span candidates and
