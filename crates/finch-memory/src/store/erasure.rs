@@ -203,9 +203,12 @@ impl MemoryStore {
         )?;
         let mut values = BTreeSet::new();
         for correction in &forgets {
-            values.extend(forgotten_values(
-                &self.claims_by_ids(&correction.scope, &correction.target_ids)?,
-            ));
+            let targets = if correction.target_ids.is_empty() {
+                named_slot_targets(correction, self.forget_targets(correction)?)
+            } else {
+                self.claims_by_ids(&correction.scope, &correction.target_ids)?
+            };
+            values.extend(forgotten_values(&targets));
         }
         if values.is_empty() {
             return Ok(hits);
@@ -670,6 +673,33 @@ fn is_set_valued(claim: &ClaimRecord) -> bool {
         claim.claim_kind,
         ClaimKind::Relationship | ClaimKind::Event | ClaimKind::Preference
     )
+}
+
+/// The claims that a forget without claim ids hides in raw text: the targets its selector names,
+/// or every target when they hold one value. A slot with several values keeps the values that
+/// the forget does not name.
+fn named_slot_targets(
+    correction: &CorrectionRecord,
+    targets: Vec<ClaimRecord>,
+) -> Vec<ClaimRecord> {
+    let named = |claim: &ClaimRecord| {
+        correction
+            .target_selector
+            .as_deref()
+            .is_some_and(|selector| claim_matches_selector(claim, selector))
+    };
+    if targets.iter().any(named) {
+        return targets.into_iter().filter(named).collect();
+    }
+    let values = targets
+        .iter()
+        .filter_map(|claim| claim.object_value.as_deref().map(canonical_slot_part))
+        .collect::<BTreeSet<_>>();
+    if values.len() == 1 {
+        targets
+    } else {
+        Vec::new()
+    }
 }
 
 /// The lowercase values of the claims, skipping values shorter than 3 characters, which would

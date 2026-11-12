@@ -896,6 +896,107 @@ fn forget_masks_the_value_in_search_results_and_purge_redacts_the_span() {
 }
 
 #[test]
+fn forget_bound_to_a_slot_masks_the_slot_values_in_search_results() {
+    let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("forget_slot_masks_raw_text");
+    let store = crate::test_store(&path, 3).unwrap();
+    let scope = user_scope("user_s");
+    let said = ingest(
+        &store,
+        &scope,
+        "ep_said",
+        "I go to Zefiro's Kitchen on Fridays.",
+        10,
+    );
+    let mut claim = make_claim(
+        &scope,
+        "claim_restaurant",
+        "user",
+        "favorite restaurant",
+        Some("Zefiro's Kitchen"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    claim.source_span_ids = said.spans.iter().map(|span| span.id.clone()).collect();
+    claim.source_episode_ids = vec![said.episode.id.clone()];
+    store.append_claim(&claim, None).unwrap();
+    let slot_id = store
+        .claims_by_ids(&scope, &["claim_restaurant".to_string()])
+        .unwrap()[0]
+        .slot_id
+        .clone()
+        .unwrap();
+    // The selector names the topic, not the stored value, so the forget resolves no claim ids.
+    let mut correction = forget(&scope, "forget_restaurant", "where I eat on Fridays", 20);
+    correction.target_match = CorrectionTargetMatch::CanonicalSlot;
+    correction.target_slot_id = Some(slot_id);
+    store.add_correction(&correction).unwrap();
+
+    let hidden = store
+        .keyword_search_spans(&scope, "Fridays", 10, 1000, None)
+        .unwrap();
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+    drop(guard);
+
+    assert_eq!(hidden.len(), 1, "{hidden:?}");
+    assert_eq!(hidden[0].span.text, "I go to [forgotten] on Fridays.");
+}
+
+#[test]
+fn forget_bound_to_a_slot_with_several_values_masks_only_the_named_value() {
+    let guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let path = temp_dir("forget_slot_masks_named_value");
+    let store = crate::test_store(&path, 3).unwrap();
+    let scope = user_scope("user_n");
+    let said = ingest(
+        &store,
+        &scope,
+        "ep_said",
+        "I like Zefiro's Kitchen and Marrow House.",
+        10,
+    );
+    for (id, value) in [
+        ("claim_zefiro", "Zefiro's Kitchen"),
+        ("claim_marrow", "Marrow House"),
+    ] {
+        let mut claim = make_claim(
+            &scope,
+            id,
+            "user",
+            "liked restaurant",
+            Some(value),
+            10,
+            (ClaimKind::Preference, ClaimPolarity::Affirmative),
+        );
+        claim.source_span_ids = said.spans.iter().map(|span| span.id.clone()).collect();
+        claim.source_episode_ids = vec![said.episode.id.clone()];
+        store.append_claim(&claim, None).unwrap();
+    }
+    let slot_id = store
+        .claims_by_ids(&scope, &["claim_zefiro".to_string()])
+        .unwrap()[0]
+        .slot_id
+        .clone()
+        .unwrap();
+    let mut correction = forget(&scope, "forget_zefiro", "Zefiro's Kitchen", 20);
+    correction.target_match = CorrectionTargetMatch::CanonicalSlot;
+    correction.target_slot_id = Some(slot_id);
+    correction.target_ids = Vec::new();
+    store.add_correction(&correction).unwrap();
+
+    let hidden = store
+        .keyword_search_spans(&scope, "like", 10, 1000, None)
+        .unwrap();
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+    drop(guard);
+
+    assert_eq!(hidden.len(), 1, "{hidden:?}");
+    assert_eq!(hidden[0].span.text, "I like [forgotten] and Marrow House.");
+}
+
+#[test]
 fn masking_replaces_whole_words_in_any_case() {
     let values = BTreeSet::from(["keto".to_string(), "zefiro's kitchen".to_string()]);
     assert_eq!(
