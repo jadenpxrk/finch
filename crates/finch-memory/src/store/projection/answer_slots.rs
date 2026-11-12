@@ -19,13 +19,21 @@ impl AnswerReadyStateProjection {
             .iter()
             .filter(|claim| claim_slot_lifecycle_key(claim) == support.slot_id)
             .collect::<Vec<_>>();
+        let mut set_states = self
+            .set_states
+            .iter()
+            .filter(|state| state.slot_id.as_ref() == Some(&support.slot_id))
+            .collect::<Vec<_>>();
+        set_states.sort_by(|a, b| {
+            (a.valid_from_ms, a.observed_at_ms, &a.id).cmp(&(
+                b.valid_from_ms,
+                b.observed_at_ms,
+                &b.id,
+            ))
+        });
         let sources = SlotStateSources {
             current_claim: newest_claim(claims.iter().copied()),
-            set_state: self
-                .set_states
-                .iter()
-                .filter(|state| state.slot_id.as_ref() == Some(&support.slot_id))
-                .max_by_key(|state| (state.valid_from_ms, state.observed_at_ms, &state.id)),
+            set_states,
             history: self
                 .slot_histories
                 .iter()
@@ -100,22 +108,33 @@ impl AnswerReadyStateProjection {
 /// The projected records one answer slot resolves from, each optional.
 struct SlotStateSources<'a> {
     current_claim: Option<&'a ClaimRecord>,
-    set_state: Option<&'a SetStateRecord>,
+    /// Every set state of the slot, oldest first. A slot holds one per predicate and claim kind.
+    set_states: Vec<&'a SetStateRecord>,
     history: Option<&'a SlotHistoryRecord>,
 }
 
 impl SlotStateSources<'_> {
+    fn newest_set_state(&self) -> Option<&SetStateRecord> {
+        self.set_states.last().copied()
+    }
+
     fn subject(&self) -> Option<String> {
         self.current_claim
             .and_then(|claim| claim.subject.clone())
-            .or_else(|| self.set_state.and_then(|state| state.subject.clone()))
+            .or_else(|| {
+                self.newest_set_state()
+                    .and_then(|state| state.subject.clone())
+            })
             .or_else(|| self.history.and_then(|history| history.subject.clone()))
     }
 
     fn predicate(&self) -> Option<String> {
         self.current_claim
             .and_then(|claim| claim.predicate.clone())
-            .or_else(|| self.set_state.and_then(|state| state.predicate.clone()))
+            .or_else(|| {
+                self.newest_set_state()
+                    .and_then(|state| state.predicate.clone())
+            })
             .or_else(|| self.history.and_then(|history| history.predicate.clone()))
     }
 
@@ -123,7 +142,9 @@ impl SlotStateSources<'_> {
         match support_state {
             AnswerSupportState::Deleted => Some(StateRecordKind::Tombstone),
             AnswerSupportState::Unsupported => Some(StateRecordKind::Unsupported),
-            AnswerSupportState::Supported if self.set_state.is_some() => Some(StateRecordKind::Set),
+            AnswerSupportState::Supported if !self.set_states.is_empty() => {
+                Some(StateRecordKind::Set)
+            }
             AnswerSupportState::Supported => self.current_claim.map(claim_state_record_kind),
             AnswerSupportState::NoEvidence => None,
         }
@@ -155,10 +176,14 @@ impl SlotStateSources<'_> {
         if !matches!(support.state, AnswerSupportState::Supported) {
             return Vec::new();
         }
+        let mut seen = BTreeSet::new();
         let explicit = self
-            .set_state
-            .map(|state| state.members.clone())
-            .unwrap_or_default();
+            .set_states
+            .iter()
+            .flat_map(|state| state.members.iter())
+            .filter(|member| seen.insert(canonical_slot_part(member)))
+            .cloned()
+            .collect::<Vec<_>>();
         // A set read over a slot with no explicit set state is a question about every value the
         // slot has held: its versioned history is that set. Values whose only record is a
         // tombstone or unsupported state stay excluded.
@@ -175,7 +200,7 @@ impl SlotStateSources<'_> {
         self.current_claim
             .map(|claim| (claim.valid_from_ms, claim.valid_to_ms))
             .or_else(|| {
-                self.set_state
+                self.newest_set_state()
                     .map(|state| (state.valid_from_ms, state.valid_to_ms))
             })
             .unwrap_or((None, None))

@@ -2893,6 +2893,69 @@ fn preference_values_accumulate_as_set_members() {
 }
 
 #[test]
+fn set_states_of_different_claim_kinds_on_one_slot_merge_their_members() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("state_protocol_set_kinds_merge");
+    let store = EvidencedStore::create(&dir, 3).unwrap();
+    let scope = scope();
+    for (id, value, at, kind) in [
+        ("claim_ocio_ceramica", "cerámica", 10, ClaimKind::Preference),
+        (
+            "claim_ocio_club",
+            "club de lectura",
+            20,
+            ClaimKind::Relationship,
+        ),
+    ] {
+        store
+            .apply_state_mutation_batch(mutation(
+                &scope,
+                i64::from(at) * 10,
+                vec![make_claim(
+                    &scope,
+                    id,
+                    "usuario",
+                    "ocio",
+                    Some(value),
+                    i64::from(at),
+                    (kind, ClaimPolarity::Affirmative),
+                )],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ))
+            .unwrap();
+    }
+    let slot_id = store
+        .claims_by_ids(&scope, &["claim_ocio_ceramica".to_string()])
+        .unwrap()[0]
+        .slot_id
+        .clone()
+        .unwrap();
+
+    let projection = store
+        .project_answer_ready_state(
+            &scope,
+            &AnswerReadyStateRequest {
+                selections: &[StateReadSelection {
+                    slot_id: slot_id.clone(),
+                    view: StateReadView::Set,
+                    role: StateReadRole::AnswerTarget,
+                }],
+                ..answer_request("set_kinds_merge", "todo el ocio", &[], 10, 0, Some(30))
+            },
+        )
+        .unwrap();
+    let resolved = projection
+        .resolved_answer_slots()
+        .into_iter()
+        .find(|slot| slot.slot_id == slot_id)
+        .expect("target slot resolved");
+    assert_eq!(resolved.members, vec!["cerámica", "club de lectura"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn standing_dependency_governs_a_transition_stated_before_the_rule() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_retroactive_rule_window");
