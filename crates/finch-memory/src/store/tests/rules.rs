@@ -646,6 +646,66 @@ fn on_change_derive_does_not_copy_a_pre_rule_trigger_without_a_later_change() {
 }
 
 #[test]
+fn derive_rule_with_an_unevidenced_trigger_fires_on_its_sibling_rules_trigger() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("derive_adopts_sibling_trigger");
+    let store = EvidencedStore::create(&dir, 3).unwrap();
+    let scope = scope();
+    let claim = |id: &str, predicate: &str, value: &str, at_ms: i64| {
+        make_claim(
+            &scope,
+            id,
+            "project",
+            predicate,
+            Some(value),
+            at_ms,
+            (ClaimKind::Fact, ClaimPolarity::Affirmative),
+        )
+    };
+    let rule = |id: &str, trigger_predicate: &str| {
+        let mut input = make_derived_rule_inputs();
+        input.id = Some(id.to_string());
+        input.trigger_predicate_key = trigger_predicate.to_string();
+        input.trigger_predicate = Some(trigger_predicate.to_string());
+        input.target_predicate_key = "ci_config".to_string();
+        input.target_predicate = Some("ci_config".to_string());
+        input.activation = RuleActivation::OnChange;
+        input.value_template = None;
+        input.valid_from_ms = Some(20);
+        input
+    };
+    for before in [
+        claim("claim_platform_before", "deployment_platform", "Narvex", 10),
+        claim("claim_ci_before", "ci_config", "narvex.yml", 10),
+    ] {
+        store.append_claim(&before, None).unwrap();
+    }
+    let mut depends_on_platform = rule("rule_ci_depends_on_platform", "deployment_platform");
+    depends_on_platform.action = RuleAction::MarkUnsupported;
+    store.add_rule(depends_on_platform).unwrap();
+    // No claim carries the predicate this derivation names as its trigger.
+    let mut after_a_move = rule("rule_ci_after_a_move", "deploy_target");
+    after_a_move.value = Some("thandrel.yml".to_string());
+    store.add_rule(after_a_move).unwrap();
+
+    let moved = claim(
+        "claim_platform_after",
+        "deployment_platform",
+        "Thandrel",
+        30,
+    );
+    store.append_claim(&moved, None).unwrap();
+
+    let current = store
+        .scan_current_claims(&scope, usize::MAX, Some(30))
+        .unwrap();
+    assert!(current.iter().any(|claim| {
+        claim.predicate.as_deref() == Some("ci_config")
+            && claim.object_value.as_deref() == Some("thandrel.yml")
+    }));
+}
+
+#[test]
 fn on_change_rule_finds_prior_value_after_slot_id_rebinding() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("rule_transition_rebound_slot");

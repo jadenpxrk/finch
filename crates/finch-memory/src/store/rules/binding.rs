@@ -43,8 +43,47 @@ impl MemoryStore {
             .collect::<Vec<_>>();
         bind_trigger_endpoint(&mut rule, &claims);
         bind_target_endpoint(&mut rule, &claims);
+        self.adopt_evidenced_sibling_trigger(&mut rule, &claims, at_ms)?;
         self.adopt_bound_slot_identities(&mut rule)?;
         Ok(rule)
+    }
+
+    /// An on-change derivation whose trigger no claim carries can never see a change. When the
+    /// other rules on its target slot watch exactly one trigger slot that a claim does carry,
+    /// the derivation watches that slot: both rules state what the target depends on.
+    fn adopt_evidenced_sibling_trigger(
+        &self,
+        rule: &mut RuleRecord,
+        claims: &[ClaimRecord],
+        at_ms: Option<i64>,
+    ) -> ZResult<()> {
+        if !matches!(rule.action, RuleAction::DeriveValue)
+            || !matches!(rule.activation, RuleActivation::OnChange)
+            || !matches!(rule.target_match, RuleTargetMatch::ExactSlot)
+            || !matches!(rule.trigger_binding_status, RuleBindingStatus::Bound)
+            || rule.target_slot_id.is_none()
+            || trigger_has_evidence(rule, claims)
+        {
+            return Ok(());
+        }
+        let sibling_trigger_slot_ids = self
+            .scan_rules(&rule.scope, usize::MAX, at_ms)?
+            .into_iter()
+            .filter(|sibling| {
+                sibling.id != rule.id
+                    && sibling.scope == rule.scope
+                    && matches!(sibling.target_match, RuleTargetMatch::ExactSlot)
+                    && sibling.target_slot_id == rule.target_slot_id
+                    && sibling.trigger_slot_id != rule.target_slot_id
+                    && same_trigger_subject(sibling, rule)
+                    && trigger_has_evidence(sibling, claims)
+            })
+            .filter_map(|sibling| sibling.trigger_slot_id)
+            .collect::<BTreeSet<_>>();
+        if sibling_trigger_slot_ids.len() == 1 {
+            rule.trigger_slot_id = sibling_trigger_slot_ids.into_iter().next();
+        }
+        Ok(())
     }
 
     /// An endpoint bound to a slot other than its own surface's canonical slot takes that
@@ -272,6 +311,29 @@ fn slot_with_key<'a>(
 ) -> Option<&'a CanonicalSlotRecord> {
     let slot_id = slot_id?;
     slots.iter().find(|slot| slot.slot_key == *slot_id)
+}
+
+/// Whether any claim sits in the rule's trigger slot or carries its trigger surface.
+fn trigger_has_evidence(rule: &RuleRecord, claims: &[ClaimRecord]) -> bool {
+    claims
+        .iter()
+        .any(|claim| rule.trigger_slot_id.is_some() && claim.slot_id == rule.trigger_slot_id)
+        || endpoint_surface_has_evidence(
+            claims,
+            rule.trigger_subject_entity_id.as_deref(),
+            &rule.trigger_subject_key,
+            &rule.trigger_predicate_key,
+        )
+}
+
+fn same_trigger_subject(left: &RuleRecord, right: &RuleRecord) -> bool {
+    match (
+        left.trigger_subject_entity_id.as_deref(),
+        right.trigger_subject_entity_id.as_deref(),
+    ) {
+        (Some(left), Some(right)) => left == right,
+        _ => left.trigger_subject_key == right.trigger_subject_key,
+    }
 }
 
 fn endpoint_surface_has_evidence(
