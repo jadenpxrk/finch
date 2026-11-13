@@ -67,17 +67,18 @@ name, question id, label, or gold answer.
 
 MEME tests whether an agent's memory keeps up with facts that change. Each of its 100 episodes
 is a conversation with 32k tokens of filler text, followed by questions in five task types.
-Finch extracted and selected memories with `gpt-6-luna` and answered with `gpt-4.1-mini` under
-the official answer protocol. The official MEME evaluator judged the answers with `gpt-4o`.
+Finch extracted and selected memories with `gpt-6-luna`. Two models answered the questions with
+the official answer prompt: `gpt-4.1-mini` and `gpt-6-luna`. The official MEME evaluator judged
+the answers with `gpt-4o`.
 
-| Task | Correct | Share | What the task checks |
+| Task | `gpt-4.1-mini` answers | `gpt-6-luna` answers | What the task checks |
 |---|---:|---:|---|
-| All | 518 / 694 | 74.6% | |
-| Deletion | 93 / 100 | 93.0% | The agent drops a fact the user retracted. |
-| Absence | 101 / 130 | 77.7% | The agent says a fact was never stated. |
-| Tracking | 89 / 100 | 89.0% | The agent reports the current value after many updates. |
-| Cascade | 119 / 164 | 72.6% | A changed fact updates the facts that depend on it. |
-| Aggregation | 17 / 100 | 17.0% | The agent combines several remembered items into one answer. |
+| All | 543 / 694 (78.2%) | 570 / 694 (82.1%) | |
+| Deletion | 95 / 100 | 93 / 100 | The agent drops a fact the user retracted. |
+| Absence | 104 / 130 | 110 / 130 | The agent says a fact was never stated. |
+| Tracking | 87 / 100 | 85 / 100 | The agent reports the current value after many updates. |
+| Cascade | 137 / 164 | 137 / 164 | A changed fact updates the facts that depend on it. |
+| Aggregation | 21 / 100 | 48 / 100 | The agent combines several remembered items into one answer. |
 
 ### EnterpriseRAG-Bench
 
@@ -97,7 +98,7 @@ queries, reranked the results, and wrote the answers.
 
 ## Status
 
-The crates have 407 tests. The memory tests run against a Postgres server with pgvector. All
+The crates have 411 tests. The memory tests run against a Postgres server with pgvector. All
 tests use synthetic data. The repository contains no cached benchmark replays.
 
 The project has not had a public release.
