@@ -241,16 +241,39 @@ BM25 ranks the spans that hold the query words. Finch fuses the two rankings by 
 and keeps hits from many sources rather than one. It adds the spans next to each hit, so a
 cut sentence reads whole.
 
+Keyword search ranks the spans that hold a query word, up to its scan limit, in storage order.
+A scan limit below the number of such spans leaves the later spans out of the ranking. Set the
+scan limit above the number of spans in the scope when the store is large.
+
+`date_day_words` writes the date after each day word of a hit, as in `by Thursday [2025-07-17]`.
+The day words are the English weekday names, `today`, `tonight`, `tomorrow`, and `EOD`. The date
+counts from the day of the span's `valid_from_ms`, so each message needs its own time. A reader
+then finds a deadline without calendar arithmetic. The context requests of the JSON API take it
+as the `date_day_words` flag.
+
 The hits and the query name a set of slots. Finch loads the state records of those slots that
 were valid at the query time. It adds every slot a dependency rule links them to and loads
 the history of each slot. The result is a projection: claims, set states, tombstones, rule outcomes,
 corrections, and the spans that prove them.
 
-The packer fills the token budget in a fixed order. State comes first: the slots the query asks
+The packer writes the context in a fixed order. State comes first: the slots the query asks
 about, then entity cards, then other claims, sets, corrections, and rules. Then the spans that
 prove that state, then the other evidence spans, then slot histories, then profiles and
-artifacts. The output is the context text, the list of included items, and a support flag per
-slot. The flag says whether the packed context has evidence for that slot, has none, or holds a
+artifacts.
+
+A budget that is too small for all items admits them in a different order. The slots the query
+asks about and their proof spans come first. Then come the evidence spans that support packed
+state, then the other evidence spans in retrieval order. The other state, the histories, the
+profiles, and the artifacts come last. If the query names no slot, the state comes first, and
+the evidence spans keep at least half of the budget. The context shows the admitted items in the
+fixed order.
+
+A slot that is deleted, unsupported, or without evidence keeps its own source spans out of the
+context. If every slot the query asks about is deleted or without evidence, the packer writes
+only those slots. In all other cases the other evidence spans stay in the context.
+
+The output is the context text, the list of included items, and a support flag per slot. The
+flag says whether the packed context has evidence for that slot, has none, or holds a
 tombstone. With the same records and the same hits, the packer writes the same context.
 
 ## 8. Memory storage in Postgres

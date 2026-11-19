@@ -474,7 +474,7 @@ fn coverage_state_leaves_half_of_the_budget_to_retrieved_evidence() {
 }
 
 #[test]
-fn coverage_after_an_answer_target_keeps_half_of_the_remaining_budget_for_evidence() {
+fn retrieved_evidence_is_admitted_before_coverage_after_an_answer_target() {
     let mut target = claim(
         "claim_objetivo",
         "proyecto",
@@ -568,9 +568,53 @@ fn coverage_after_an_answer_target_keeps_half_of_the_remaining_budget_for_eviden
         .filter(|item| item.kind == "state_current")
         .map(|item| item.estimated_tokens)
         .sum::<usize>();
-    assert!(coverage_tokens > 0);
+    let span_count = compiled
+        .included
+        .iter()
+        .filter(|item| item.kind == "span")
+        .count();
     assert!(
-        span_tokens >= coverage_tokens,
-        "evidence {span_tokens} vs coverage {coverage_tokens} of {budget}"
+        span_count < hits.len(),
+        "the budget must be short of the hits"
     );
+    assert_eq!(
+        coverage_tokens, 0,
+        "coverage took room that evidence needed (evidence {span_tokens} of {budget})"
+    );
+}
+
+#[test]
+fn short_budget_admits_evidence_by_retrieval_rank_and_shows_it_in_time_order() {
+    let text = "uno dos tres cuatro cinco seis siete ocho nueve diez";
+    let hits = vec![
+        hit_at("span_mejor", 0.9, text, 40),
+        hit_at("span_segundo", 0.8, text, 30),
+        hit_at("span_tercero", 0.7, text, 20),
+        hit_at("span_cuarto", 0.6, text, 10),
+    ];
+    let pack = |token_budget| {
+        build_query_state_context(
+            &ContextInput {
+                hits: &hits,
+                ..Default::default()
+            },
+            ContextOptions {
+                token_budget,
+                include_provenance: false,
+            },
+        )
+    };
+    let all = pack(10_000);
+    assert_eq!(all.included.len(), 4);
+    let two_hits = all.included[0].estimated_tokens + all.included[1].estimated_tokens;
+
+    let compiled = pack(two_hits);
+
+    let ids = compiled
+        .included
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["span_segundo", "span_mejor"]);
+    assert!(compiled.truncated);
 }

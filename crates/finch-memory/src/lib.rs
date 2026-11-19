@@ -6,6 +6,7 @@
 #![deny(missing_docs)]
 
 mod context;
+mod day_words;
 mod eval;
 mod filter;
 mod ingest;
@@ -22,6 +23,7 @@ mod table;
 mod types;
 
 pub use context::*;
+pub use day_words::date_day_words;
 pub use eval::*;
 pub use ingest::*;
 pub use retrieval::*;

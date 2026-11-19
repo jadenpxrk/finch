@@ -13,6 +13,13 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 mod render;
 
+/// Admission order of the items that follow the answer targets and their proof: the hits that
+/// support the packed state, the other hits by retrieval rank, the coverage state, then the rest.
+const ADMIT_SUPPORTING: u32 = 1;
+const ADMIT_RANKED: u32 = 2;
+const ADMIT_COVERAGE: u32 = u32::MAX - 1;
+const ADMIT_TRAILING: u32 = u32::MAX;
+
 use render::*;
 
 /// Limits and options for a context packet.
@@ -260,7 +267,8 @@ fn build_query_state_context_for_targets(
     }
     // Without resolved targets the coverage items are the read's only state, so they pack as
     // state before `raw_start`. With targets they are secondary: they pack after `raw_start`,
-    // behind the targets' reserved proof spans and capped, so they cannot displace that proof.
+    // capped, and the budget admits them after the retrieved hits, so they cannot displace the
+    // targets' proof or the evidence.
     let has_resolved_targets = !resolved_answer_slots.is_empty();
     if !has_resolved_targets {
         items.append(&mut coverage_items);
@@ -308,7 +316,8 @@ struct AnswerTargets<'a> {
     slot_ids: HashSet<MemoryId>,
     claim_ids: HashSet<&'a str>,
     rule_ids: HashSet<&'a str>,
-    /// Every target is a current read that must refuse, so only the targets are packed.
+    /// Every target is a current read of a state that is deleted or has no evidence, so only the
+    /// targets are packed.
     fail_closed_current_read: bool,
     /// Proof spans of refusing current targets, kept out of the raw evidence.
     withheld_raw_span_ids: HashSet<&'a str>,
@@ -351,7 +360,7 @@ impl<'a> AnswerTargets<'a> {
                 .flat_map(|slot| slot.dependency_rule_ids.iter().map(String::as_str))
                 .collect(),
             fail_closed_current_read: !slots.is_empty()
-                && slots.iter().all(current_target_withholds_competing_raw),
+                && slots.iter().all(current_target_hides_other_evidence),
             withheld_raw_span_ids: slots
                 .iter()
                 .filter(|slot| current_target_withholds_competing_raw(slot))
@@ -696,13 +705,14 @@ fn order_state_items(
                 subject_key: item.subject_key,
                 slot_ids: item.slot_ids,
                 source_text: None,
+                admit: 0,
             }
         })
         .partition(|item| item.kind == "state_resolved")
 }
 
 /// Adds coverage items after the answer targets and their proof, taking at most half of the
-/// remaining budget so retrieved evidence keeps the other half of the packet.
+/// remaining budget. The budget admits them after the retrieved hits.
 fn push_capped_coverage(
     items: &mut Vec<RenderedContextItem>,
     coverage_items: Vec<RenderedContextItem>,
@@ -720,7 +730,10 @@ fn push_capped_coverage(
             continue;
         }
         coverage_used += tokens;
-        items.push(item);
+        items.push(RenderedContextItem {
+            admit: ADMIT_COVERAGE,
+            ..item
+        });
     }
 }
 
@@ -744,7 +757,8 @@ fn support_span_ids<'a>(
 }
 
 /// Retrieved hits after the proof: the ones supporting the packed state, then every hit, each
-/// group chronological. Withheld spans and already packed proof spans are skipped.
+/// group chronological. A short budget admits the supporting hits first, then the other hits in
+/// retrieval order. Withheld spans and already packed proof spans are skipped.
 fn evidence_span_items(
     hits: &[SpanSearchHit],
     targets: &AnswerTargets<'_>,
@@ -758,22 +772,32 @@ fn evidence_span_items(
         .collect::<HashSet<_>>();
     let mut raw_hits = hits
         .iter()
-        .filter(|hit| !targets.withheld_raw_span_ids.contains(hit.span.id.as_str()))
+        .enumerate()
+        .filter(|(_, hit)| !targets.withheld_raw_span_ids.contains(hit.span.id.as_str()))
+        .map(|(rank, hit)| {
+            let admit = ADMIT_RANKED
+                .saturating_add(u32::try_from(rank).unwrap_or(u32::MAX))
+                .min(ADMIT_COVERAGE - 1);
+            (admit, hit)
+        })
         .collect::<Vec<_>>();
     let mut supporting_hits = raw_hits
         .iter()
-        .copied()
-        .filter(|hit| {
+        .filter(|(_, hit)| {
             support_span_ids.contains(hit.span.id.as_str())
                 && !target_proof_span_ids.contains(hit.span.id.as_str())
         })
+        .map(|(_, hit)| (ADMIT_SUPPORTING, *hit))
         .collect::<Vec<_>>();
-    sort_hits_chronologically(&mut supporting_hits);
-    sort_hits_chronologically(&mut raw_hits);
+    supporting_hits.sort_by(|a, b| chronological(a.1, b.1));
+    raw_hits.sort_by(|a, b| chronological(a.1, b.1));
     supporting_hits
         .into_iter()
         .chain(raw_hits)
-        .map(|hit| span_item(hit, include_provenance))
+        .map(|(admit, hit)| RenderedContextItem {
+            admit,
+            ..span_item(hit, include_provenance)
+        })
         .collect()
 }
 
@@ -796,6 +820,7 @@ fn slot_history_items(
                 subject_key: subject_key_of(history.subject.as_deref()),
                 slot_ids: vec![history.slot_id.clone()],
                 source_text: None,
+                admit: ADMIT_TRAILING,
             }
         })
         .collect()
@@ -813,7 +838,13 @@ fn profile_and_artifact_items(
         let rendered = render_artifact(artifact, include_provenance);
         RenderedContextItem::from((artifact.id.clone(), "artifact", rendered))
     });
-    profiles.chain(artifacts).collect()
+    profiles
+        .chain(artifacts)
+        .map(|item| RenderedContextItem {
+            admit: ADMIT_TRAILING,
+            ..item
+        })
+        .collect()
 }
 
 fn span_item(hit: &SpanSearchHit, include_provenance: bool) -> RenderedContextItem {
@@ -824,12 +855,23 @@ fn span_item(hit: &SpanSearchHit, include_provenance: bool) -> RenderedContextIt
         subject_key: None,
         slot_ids: Vec::new(),
         source_text: Some(hit.span.text.clone()),
+        admit: 0,
     }
 }
 
 fn current_target_withholds_competing_raw(slot: &ResolvedAnswerSlot) -> bool {
     matches!(slot.read_view, crate::StateReadView::Current)
         && !matches!(slot.support_state, crate::AnswerSupportState::Supported)
+}
+
+/// An unsupported target names its own source spans, so withholding them is enough. A deleted
+/// target, and a target without evidence, has no such list that covers its old value.
+fn current_target_hides_other_evidence(slot: &ResolvedAnswerSlot) -> bool {
+    matches!(slot.read_view, crate::StateReadView::Current)
+        && matches!(
+            slot.support_state,
+            crate::AnswerSupportState::Deleted | crate::AnswerSupportState::NoEvidence
+        )
 }
 
 fn append_answer_target_role(rendered: &mut String) {
@@ -839,15 +881,13 @@ fn append_answer_target_role(rendered: &mut String) {
     rendered.push_str("read_role: answer_target\n");
 }
 
-fn sort_hits_chronologically(hits: &mut [&SpanSearchHit]) {
-    hits.sort_by(|a, b| {
-        a.span
-            .valid_from_ms
-            .cmp(&b.span.valid_from_ms)
-            .then_with(|| a.span.source_id.cmp(&b.span.source_id))
-            .then_with(|| a.span.span_index.cmp(&b.span.span_index))
-            .then_with(|| a.span.id.cmp(&b.span.id))
-    });
+fn chronological(a: &SpanSearchHit, b: &SpanSearchHit) -> std::cmp::Ordering {
+    a.span
+        .valid_from_ms
+        .cmp(&b.span.valid_from_ms)
+        .then_with(|| a.span.source_id.cmp(&b.span.source_id))
+        .then_with(|| a.span.span_index.cmp(&b.span.span_index))
+        .then_with(|| a.span.id.cmp(&b.span.id))
 }
 
 #[cfg(test)]

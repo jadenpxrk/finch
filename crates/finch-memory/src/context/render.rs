@@ -7,6 +7,8 @@ pub(super) struct RenderedContextItem {
     pub(super) subject_key: Option<String>,
     pub(super) slot_ids: Vec<MemoryId>,
     pub(super) source_text: Option<String>,
+    /// Order in which a short budget admits the item: lower first, ties in list order.
+    pub(super) admit: u32,
 }
 
 impl From<(MemoryId, &'static str, String)> for RenderedContextItem {
@@ -18,6 +20,7 @@ impl From<(MemoryId, &'static str, String)> for RenderedContextItem {
             subject_key: None,
             slot_ids: Vec::new(),
             source_text: None,
+            admit: 0,
         }
     }
 }
@@ -29,10 +32,16 @@ pub(super) fn build_rendered_context_with_raw_reserve(
     required_raw_items: usize,
 ) -> CompiledMemoryContext {
     let raw_reserve = raw_evidence_reserve(&items, token_budget, raw_start, required_raw_items);
+    // The budget admits items in `admit` order. The packet shows the admitted items in list order.
+    let mut admission_order = (0..items.len()).collect::<Vec<_>>();
+    admission_order.sort_by_key(|&idx| items[idx].admit);
     let mut seen = HashSet::new();
     let mut subjects_with_specific_state = HashSet::new();
-    let mut packet = Packet::default();
-    for (idx, item) in items.into_iter().enumerate() {
+    let mut admitted = vec![false; items.len()];
+    let mut used = 0usize;
+    let mut truncated = false;
+    for idx in admission_order {
+        let item = &items[idx];
         let card_superseded = item.kind == "state_entity_card"
             && item
                 .subject_key
@@ -47,14 +56,25 @@ pub(super) fn build_rendered_context_with_raw_reserve(
         } else {
             token_budget
         };
-        if packet.used + tokens > limit {
-            packet.truncated = true;
+        if used + tokens > limit {
+            truncated = true;
             continue;
         }
         if is_specific_state_kind(item.kind) {
             subjects_with_specific_state.extend(item.subject_key.clone());
         }
-        packet.include(item, tokens);
+        used += tokens;
+        admitted[idx] = true;
+    }
+    let mut packet = Packet {
+        truncated,
+        ..Packet::default()
+    };
+    for (item, admitted) in items.into_iter().zip(admitted) {
+        if admitted {
+            let tokens = estimate_tokens(&item.rendered);
+            packet.include(item, tokens);
+        }
     }
     packet.into_context(token_budget)
 }

@@ -154,6 +154,7 @@ class SearchRequest:
     at: object = None
     query_embedding: Sequence[float] = field(default_factory=list)
     include_neighbors: bool = False
+    scan_limit: int = 1000
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,8 @@ class PackContextRequest:
     at: object = None
     query_embedding: Sequence[float] = field(default_factory=list)
     include_provenance: bool = True
+    date_day_words: bool = False
+    scan_limit: int = 1000
     complete_evidence: bool = True
     preferred_slot_ids: Sequence[str] = field(default_factory=list)
     state_selections: Sequence[Union[StateReadSelection, Mapping[str, Any]]] = field(
@@ -524,15 +527,17 @@ class FinchMemory:
         mode = raw.get("mode", "hybrid")
         embedding = list(raw.get("query_embedding", []))
         query = raw["query"]
+        # Keyword search ranks at most this many spans that hold a query word. Raise it for a large store.
+        scan_limit = int(raw.get("scan_limit", 1000))
         if mode == "keyword":
-            hits = self._store.keyword_search_spans_json(scope, query, k, 1000, at_ms)
+            hits = self._store.keyword_search_spans_json(scope, query, k, scan_limit, at_ms)
         elif mode == "vector":
             hits = self._store.query_spans_json(scope, embedding, k, at_ms)
         else:
-            hits = self._store.hybrid_search_spans_json(scope, embedding, query, k, 1000, at_ms)
+            hits = self._store.hybrid_search_spans_json(scope, embedding, query, k, scan_limit, at_ms)
         items = _parse(hits)
         if raw.get("include_neighbors"):
-            items = _parse(self._store.complete_span_evidence_json(scope, _json(items), 1, 1, 1000, at_ms))
+            items = _parse(self._store.complete_span_evidence_json(scope, _json(items), 1, 1, scan_limit, at_ms))
         return {"hits": items}
 
     def pack_context(self, input: Union[PackContextRequest, Mapping[str, Any]]) -> Dict[str, Any]:
@@ -545,6 +550,7 @@ class FinchMemory:
             "at": raw.get("at"),
             "query_embedding": raw.get("query_embedding", []),
             "include_neighbors": raw.get("complete_evidence", True),
+            "scan_limit": raw.get("scan_limit", 1000),
         })
         preferred_slot_ids = list(raw.get("preferred_slot_ids", []))
         state_selections = _state_selections(raw.get("state_selections", []))
@@ -563,6 +569,7 @@ class FinchMemory:
             "at_ms": _ms(raw.get("at")),
             "token_budget": int(raw["max_tokens"]),
             "include_provenance": bool(raw.get("include_provenance", True)),
+            "date_day_words": bool(raw.get("date_day_words", False)),
         }))
         return _parse(packed)
 

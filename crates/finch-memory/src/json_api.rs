@@ -1,11 +1,11 @@
 use crate::{
     add_correction, build_answer_ready_state_context, build_context, build_query_state_context,
-    evaluate_retrieval_baseline, evaluate_span_hits_with_admission, lexical_terms, AnswerEmission,
-    AnswerReadyStateRequest, AnswerSupportContract, ArtifactRecord, BiTemporalQuery, ChunkOptions,
-    ContextInput, ContextOptions, CorrectionInput, EdgeInput, EntityInput, EpisodeInput,
-    ExtractionFailure, ExtractionLeaseRequest, HybridSpanSearch, ManualClaimInput, MemoryScope,
-    MemoryStore, ProfileInput, SlotAliasInput, SpanSearchHit, StateMutationBatch,
-    StateReadSelection,
+    date_day_words, evaluate_retrieval_baseline, evaluate_span_hits_with_admission, lexical_terms,
+    AnswerEmission, AnswerReadyStateRequest, AnswerSupportContract, ArtifactRecord,
+    BiTemporalQuery, ChunkOptions, ContextInput, ContextOptions, CorrectionInput, EdgeInput,
+    EntityInput, EpisodeInput, ExtractionFailure, ExtractionLeaseRequest, HybridSpanSearch,
+    ManualClaimInput, MemoryScope, MemoryStore, ProfileInput, SlotAliasInput, SpanSearchHit,
+    StateMutationBatch, StateReadSelection,
 };
 use finch_types::{Status, ZResult};
 use serde::Deserialize;
@@ -502,13 +502,18 @@ impl MemoryStore {
         let corrections =
             self.scan_context_corrections(scope, &claims, &request.hits, limits.at_ms)?;
         let artifacts = self.scan_artifacts(scope, limits.artifact_limit, limits.at_ms)?;
+        let hits = if limits.date_day_words {
+            date_day_words(&request.hits)
+        } else {
+            request.hits
+        };
         let context = build_query_state_context(
             &ContextInput {
                 profiles: &profiles,
                 claims: &claims,
                 corrections: &corrections,
                 artifacts: &artifacts,
-                hits: &request.hits,
+                hits: &hits,
                 ..Default::default()
             },
             limits.context_options(),
@@ -578,8 +583,11 @@ impl MemoryStore {
                 },
             },
         )?;
-        let context_hits =
+        let mut context_hits =
             self.hydrate_answer_ready_state_evidence(scope, &state_projection, &hits)?;
+        if limits.date_day_words {
+            context_hits = date_day_words(&context_hits);
+        }
         let profiles = self.scan_profiles(scope, limits.profile_limit, limits.at_ms)?;
         let terms = unique_terms(lexical_terms(query_text));
         let artifacts = filter_artifacts_by_query(
@@ -632,6 +640,9 @@ pub(crate) struct ContextLimitsJson {
     pub at_ms: Option<i64>,
     pub token_budget: usize,
     pub include_provenance: bool,
+    /// Whether the packed spans carry the date after each day word (`date_day_words`).
+    #[serde(default)]
+    pub date_day_words: bool,
 }
 
 impl ContextLimitsJson {
@@ -1150,6 +1161,28 @@ mod tests {
         assert!(packed.contains("exact ticket IDs"));
         assert!(packed.contains("bindings-runbook.md"));
         assert!(packed.contains("JSON-42"));
+        let mut day_word_hits = hit_values.clone();
+        day_word_hits[0]["span"]["text"] = serde_json::json!("Send JSON-42 by Friday.");
+        let pack_day_word_hits = |date_day_words: bool| {
+            store
+                .build_memory_context_json(
+                    &serde_json::json!({
+                        "scope": scope,
+                        "hits": day_word_hits,
+                        "profile_limit": 10,
+                        "claim_limit": 10,
+                        "artifact_limit": 10,
+                        "at_ms": 30,
+                        "token_budget": 256,
+                        "include_provenance": true,
+                        "date_day_words": date_day_words,
+                    })
+                    .to_string(),
+                )
+                .unwrap()
+        };
+        assert!(pack_day_word_hits(true).contains("by Friday [1970-01-02]."));
+        assert!(pack_day_word_hits(false).contains("by Friday."));
         let one_shot = store
             .build_answer_ready_context_json(
                 &serde_json::json!({

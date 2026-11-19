@@ -72,6 +72,8 @@ export interface SearchRequest {
   at?: string | number | Date
   queryEmbedding?: number[]
   includeNeighbors?: boolean
+  /** Most spans with a query word that keyword search ranks. The default is 1000. */
+  scanLimit?: number
 }
 
 export type StateReadView = 'current' | 'timeline' | 'set'
@@ -101,6 +103,10 @@ export interface PackContextRequest {
   at?: string | number | Date
   queryEmbedding?: number[]
   includeProvenance?: boolean
+  /** Writes the date after each day word of the packed spans, as in `by Thursday [2025-07-17]`. */
+  dateDayWords?: boolean
+  /** Most spans with a query word that keyword search ranks. The default is 1000. */
+  scanLimit?: number
   completeEvidence?: boolean
   preferredSlotIds?: string[]
   stateSelections?: StateReadSelection[]

@@ -306,17 +306,19 @@ class FinchMemory {
     const k = input.topK ?? 10;
     const at = toMs(input.at);
     const embedding = input.queryEmbedding ?? [];
+    // Keyword search ranks at most this many spans that hold a query word. Raise it for a large store.
+    const scanLimit = input.scanLimit ?? 1000;
     let raw;
     if (input.mode === 'keyword') {
-      raw = this.store.keywordSearchSpansJson(scopeJson, input.query, k, 1000, at);
+      raw = this.store.keywordSearchSpansJson(scopeJson, input.query, k, scanLimit, at);
     } else if (input.mode === 'vector') {
       raw = this.store.querySpansJson(scopeJson, embedding, k, at);
     } else {
-      raw = this.store.hybridSearchSpansJson(scopeJson, embedding, input.query, k, 1000, at);
+      raw = this.store.hybridSearchSpansJson(scopeJson, embedding, input.query, k, scanLimit, at);
     }
     let hits = parse(raw);
     if (input.includeNeighbors) {
-      hits = parse(this.store.completeSpanEvidenceJson(scopeJson, JSON.stringify(hits), 1, 1, 1000, at));
+      hits = parse(this.store.completeSpanEvidenceJson(scopeJson, JSON.stringify(hits), 1, 1, scanLimit, at));
     }
     return Promise.resolve({ hits });
   }
@@ -330,6 +332,7 @@ class FinchMemory {
       at: input.at,
       queryEmbedding: input.queryEmbedding ?? [],
       includeNeighbors: input.completeEvidence ?? true,
+      scanLimit: input.scanLimit,
     });
     let selections = normalizeStateSelections(input.stateSelections);
     if (selections.length && input.preferredSlotIds?.length) {
@@ -349,6 +352,7 @@ class FinchMemory {
       at_ms: toMs(input.at),
       token_budget: input.maxTokens,
       include_provenance: input.includeProvenance ?? true,
+      date_day_words: input.dateDayWords ?? false,
     })));
   }
 

@@ -846,7 +846,7 @@ fn answer_ready_context_emits_one_resolved_target_with_its_raw_proof() {
 }
 
 #[test]
-fn resolved_unsupported_current_target_fails_closed_without_raw_history() {
+fn resolved_unsupported_current_target_withholds_its_proof_and_keeps_other_evidence() {
     let mut unsupported = claim(
         "claim_contacto_sin_apoyo",
         "cuenta",
@@ -889,11 +889,12 @@ fn resolved_unsupported_current_target_fails_closed_without_raw_history() {
         "El proveedor cambió; el contacto anterior requiere confirmación.",
         30,
     );
+    let other = hit_at("span_horario", 0.8, "La oficina abre a las ocho.", 20);
     let compiled = build_answer_ready_state_context(
         &[],
         &projection,
         &[],
-        std::slice::from_ref(&evidence),
+        &[evidence.clone(), other],
         ContextOptions::default(),
     );
 
@@ -904,7 +905,8 @@ fn resolved_unsupported_current_target_fails_closed_without_raw_history() {
         .body
         .contains("### UnsupportedState claim_contacto_sin_apoyo"));
     assert!(!compiled.body.contains("### Memory span_cambio"));
-    assert_eq!(compiled.included.len(), 1);
+    assert!(compiled.body.contains("### Memory span_horario"));
+    assert_eq!(compiled.included.len(), 2);
     assert_eq!(compiled.included[0].kind, "state_resolved");
     assert_eq!(
         compiled.support.state,
@@ -922,6 +924,61 @@ fn resolved_unsupported_current_target_fails_closed_without_raw_history() {
     );
     assert!(timeline.body.contains("read_view: timeline"));
     assert!(timeline.body.contains("### Memory span_cambio"));
+}
+
+#[test]
+fn resolved_deleted_current_target_packs_only_the_target() {
+    let mut deleted = claim(
+        "claim_codigo_borrado",
+        "cuenta",
+        "codigo",
+        Some("4417"),
+        "El código de la cuenta era 4417.",
+        10,
+    );
+    deleted.slot_id = Some("slot_cuenta_codigo".to_string());
+    deleted.status = MemoryStatus::Tombstoned;
+    deleted.source_span_ids = vec!["span_codigo".to_string()];
+    let projection = AnswerReadyStateProjection {
+        claims: vec![deleted.clone()],
+        set_states: Vec::new(),
+        slot_histories: Vec::new(),
+        rules: Vec::new(),
+        rule_outcomes: Vec::new(),
+        corrections: Vec::new(),
+        entities: Vec::new(),
+        proof_span_ids: vec!["span_codigo".to_string()],
+        support: crate::AnswerSupportContract {
+            state: crate::AnswerSupportState::Deleted,
+            source_claim_ids: vec![deleted.id.clone()],
+            source_span_ids: vec!["span_codigo".to_string()],
+            slots: vec![crate::AnswerSlotSupport {
+                slot_id: "slot_cuenta_codigo".to_string(),
+                subject: Some("cuenta".to_string()),
+                predicate: Some("codigo".to_string()),
+                view: crate::StateReadView::Current,
+                state: crate::AnswerSupportState::Deleted,
+                source_claim_ids: vec![deleted.id],
+                source_span_ids: vec!["span_codigo".to_string()],
+            }],
+        },
+    };
+
+    let compiled = build_answer_ready_state_context(
+        &[],
+        &projection,
+        &[],
+        &[
+            hit_at("span_codigo", 1.0, "El código de la cuenta es 4417.", 10),
+            hit_at("span_eco", 0.8, "Anotado: el código es 4417.", 11),
+        ],
+        ContextOptions::default(),
+    );
+
+    assert!(compiled.body.contains("support_state: deleted"));
+    assert!(!compiled.body.contains("4417"));
+    assert_eq!(compiled.included.len(), 1);
+    assert_eq!(compiled.included[0].kind, "state_resolved");
 }
 
 #[test]
