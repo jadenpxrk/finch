@@ -51,6 +51,12 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
+      # The Python binding needs a Python version that PyO3 supports.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
