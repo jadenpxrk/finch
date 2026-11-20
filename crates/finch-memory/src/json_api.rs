@@ -503,7 +503,7 @@ impl MemoryStore {
             self.scan_context_corrections(scope, &claims, &request.hits, limits.at_ms)?;
         let artifacts = self.scan_artifacts(scope, limits.artifact_limit, limits.at_ms)?;
         let hits = if limits.date_day_words {
-            date_day_words(&request.hits)
+            date_day_words(&request.hits, limits.day_words_utc_offset_minutes)
         } else {
             request.hits
         };
@@ -586,7 +586,7 @@ impl MemoryStore {
         let mut context_hits =
             self.hydrate_answer_ready_state_evidence(scope, &state_projection, &hits)?;
         if limits.date_day_words {
-            context_hits = date_day_words(&context_hits);
+            context_hits = date_day_words(&context_hits, limits.day_words_utc_offset_minutes);
         }
         let profiles = self.scan_profiles(scope, limits.profile_limit, limits.at_ms)?;
         let terms = unique_terms(lexical_terms(query_text));
@@ -643,6 +643,9 @@ pub(crate) struct ContextLimitsJson {
     /// Whether the packed spans carry the date after each day word (`date_day_words`).
     #[serde(default)]
     pub date_day_words: bool,
+    /// Minutes from UTC of the speakers' time zone, for the day of a message.
+    #[serde(default)]
+    pub day_words_utc_offset_minutes: i32,
 }
 
 impl ContextLimitsJson {

@@ -372,7 +372,7 @@ fn answer_claim_rejection<'a>(
         let Some(text) = source_text(&evidence.span_id) else {
             return Some(AnswerClaimRejectionReason::EvidenceUnavailable);
         };
-        (evidence.quote.trim().is_empty() || !text.contains(&evidence.quote))
+        (!crate::day_words::quote_matches(text, &evidence.quote))
             .then_some(AnswerClaimRejectionReason::QuoteMismatch)
     })
 }
@@ -440,7 +440,7 @@ fn validate_evidence_quotes<'a>(
                 "answer evidence span is not available in the validated context",
             ));
         };
-        if evidence.quote.trim().is_empty() || !text.contains(&evidence.quote) {
+        if !crate::day_words::quote_matches(text, &evidence.quote) {
             return Err(Status::invalid_argument(
                 "answer evidence quote is not present in the cited span",
             ));

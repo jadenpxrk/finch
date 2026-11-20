@@ -173,6 +173,7 @@ class PackContextRequest:
     query_embedding: Sequence[float] = field(default_factory=list)
     include_provenance: bool = True
     date_day_words: bool = False
+    day_words_utc_offset_minutes: int = 0
     scan_limit: int = 1000
     complete_evidence: bool = True
     preferred_slot_ids: Sequence[str] = field(default_factory=list)
@@ -570,6 +571,7 @@ class FinchMemory:
             "token_budget": int(raw["max_tokens"]),
             "include_provenance": bool(raw.get("include_provenance", True)),
             "date_day_words": bool(raw.get("date_day_words", False)),
+            "day_words_utc_offset_minutes": int(raw.get("day_words_utc_offset_minutes", 0)),
         }))
         return _parse(packed)
 

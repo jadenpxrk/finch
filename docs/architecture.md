@@ -247,9 +247,11 @@ scan limit above the number of spans in the scope when the store is large.
 
 `date_day_words` writes the date after each day word of a hit, as in `by Thursday [2025-07-17]`.
 The day words are the English weekday names, `today`, `tonight`, `tomorrow`, and `EOD`. The date
-counts from the day of the span's `valid_from_ms`, so each message needs its own time. A reader
+counts from the day of the span's `valid_from_ms`, so each message needs its own time. That day
+is in UTC unless `day_words_utc_offset_minutes` gives the time zone of the speakers. A reader
 then finds a deadline without calendar arithmetic. The context requests of the JSON API take it
-as the `date_day_words` flag.
+as the `date_day_words` flag. Answer validation ignores the added dates when it compares a quote
+with its span.
 
 The hits and the query name a set of slots. Finch loads the state records of those slots that
 were valid at the query time. It adds every slot a dependency rule links them to and loads

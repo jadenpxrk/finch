@@ -105,6 +105,8 @@ export interface PackContextRequest {
   includeProvenance?: boolean
   /** Writes the date after each day word of the packed spans, as in `by Thursday [2025-07-17]`. */
   dateDayWords?: boolean
+  /** Minutes from UTC of the speakers' time zone, for the day of a message. The default is 0. */
+  dayWordsUtcOffsetMinutes?: number
   /** Most spans with a query word that keyword search ranks. The default is 1000. */
   scanLimit?: number
   completeEvidence?: boolean

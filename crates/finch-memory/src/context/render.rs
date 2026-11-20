@@ -37,7 +37,7 @@ pub(super) fn build_rendered_context_with_raw_reserve(
     admission_order.sort_by_key(|&idx| items[idx].admit);
     let mut seen = HashSet::new();
     let mut subjects_with_specific_state = HashSet::new();
-    let mut admitted = vec![false; items.len()];
+    let mut admitted_tokens = vec![None; items.len()];
     let mut used = 0usize;
     let mut truncated = false;
     for idx in admission_order {
@@ -64,15 +64,14 @@ pub(super) fn build_rendered_context_with_raw_reserve(
             subjects_with_specific_state.extend(item.subject_key.clone());
         }
         used += tokens;
-        admitted[idx] = true;
+        admitted_tokens[idx] = Some(tokens);
     }
     let mut packet = Packet {
         truncated,
         ..Packet::default()
     };
-    for (item, admitted) in items.into_iter().zip(admitted) {
-        if admitted {
-            let tokens = estimate_tokens(&item.rendered);
+    for (item, tokens) in items.into_iter().zip(admitted_tokens) {
+        if let Some(tokens) = tokens {
             packet.include(item, tokens);
         }
     }
@@ -442,19 +441,8 @@ pub(super) fn display_time(value: Option<i64>) -> String {
 }
 
 pub(super) fn civil_date_utc(ms: i64) -> String {
-    // Howard Hinnant's civil-from-days algorithm; avoids a chrono dependency.
-    let days = ms.div_euclid(86_400_000);
+    let (y, m, d) = crate::day_words::civil_date(ms.div_euclid(86_400_000));
     let secs = ms.rem_euclid(86_400_000) / 1000;
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}Z",
         y,

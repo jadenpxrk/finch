@@ -442,6 +442,40 @@ fn answer_emission_requires_verbatim_in_scope_evidence() {
 }
 
 #[test]
+fn answer_emission_accepts_a_quote_with_the_packed_day_word_dates() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("day_word_quote");
+    let store = crate::test_store(&dir, 3).unwrap();
+    let scope = scope();
+    let mut span = span_record("span_day_word", MemoryStatus::Active, Some(10));
+    span.scope = scope.clone();
+    span.text = "Send the report by Friday.".to_string();
+    span.lexical_text = span.text.clone();
+    store.append_span(&span, None).unwrap();
+    let support = AnswerSupportContract {
+        state: AnswerSupportState::Supported,
+        source_claim_ids: Vec::new(),
+        source_span_ids: vec![span.id.clone()],
+        slots: Vec::new(),
+    };
+    let emission = AnswerEmission {
+        disposition: AnswerDisposition::Answer,
+        claims: vec![GroundedAnswerClaim {
+            text: "Friday".to_string(),
+            slot_id: None,
+            evidence: vec![AnswerEvidence {
+                span_id: span.id.clone(),
+                quote: "by Friday [1970-01-02].".to_string(),
+            }],
+        }],
+    };
+    assert!(store
+        .validate_answer_emission(&scope, &support, emission)
+        .is_ok());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn answer_emission_validates_support_per_canonical_slot() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("validated_answer_slot_support");

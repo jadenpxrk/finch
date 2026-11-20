@@ -353,6 +353,7 @@ class FinchMemory {
       token_budget: input.maxTokens,
       include_provenance: input.includeProvenance ?? true,
       date_day_words: input.dateDayWords ?? false,
+      day_words_utc_offset_minutes: input.dayWordsUtcOffsetMinutes ?? 0,
     })));
   }
 

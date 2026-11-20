@@ -1,5 +1,7 @@
 //! Dates for the day words of retrieved text, so a reader does not do calendar arithmetic.
 
+use std::borrow::Cow;
+
 use crate::retrieval::SpanSearchHit;
 
 const MS_PER_DAY: i64 = 86_400_000;
@@ -18,17 +20,21 @@ const WEEKDAYS: [&str; 7] = [
 /// `by Thursday [2025-07-17]`.
 ///
 /// A day word is an English weekday name, `today`, `tonight`, `tomorrow`, or `EOD`. The date
-/// counts from the UTC day of the span's `valid_from_ms`. A weekday name means the first such day
+/// counts from the day of the span's `valid_from_ms` at `utc_offset_minutes` from UTC, the
+/// speaker's time zone. A weekday name means the first such day
 /// on or after that day. A weekday name after `last`, `next`, `previous`, or `past` gets no date,
 /// and neither does `today`, `tonight`, or `EOD` before another day word. A span without
 /// `valid_from_ms` stays as it is.
-pub fn date_day_words(hits: &[SpanSearchHit]) -> Vec<SpanSearchHit> {
+pub fn date_day_words(hits: &[SpanSearchHit], utc_offset_minutes: i32) -> Vec<SpanSearchHit> {
+    let offset_ms = i64::from(utc_offset_minutes) * 60_000;
     hits.iter()
         .map(|hit| {
             let mut hit = hit.clone();
             if let Some(valid_from_ms) = hit.span.valid_from_ms {
-                hit.span.text =
-                    text_with_dates(&hit.span.text, valid_from_ms.div_euclid(MS_PER_DAY));
+                let said_on = valid_from_ms
+                    .saturating_add(offset_ms)
+                    .div_euclid(MS_PER_DAY);
+                hit.span.text = text_with_dates(&hit.span.text, said_on);
             }
             hit
         })
@@ -104,8 +110,50 @@ fn ascii_words(text: &str) -> Vec<(usize, usize)> {
     words
 }
 
+/// Whether `quote` is in `text` when the dates that `date_day_words` adds are left out of both.
+/// A quote copied from a packed context then matches the stored span, and the reverse.
+pub(crate) fn quote_matches(text: &str, quote: &str) -> bool {
+    let quote = without_day_word_dates(quote);
+    !quote.trim().is_empty() && without_day_word_dates(text).contains(quote.as_ref())
+}
+
+/// `text` without each ` [YYYY-MM-DD]` tag.
+fn without_day_word_dates(text: &str) -> Cow<'_, str> {
+    const TAG_LEN: usize = " [YYYY-MM-DD]".len();
+    let is_tag = |tag: &[u8]| {
+        tag.len() == TAG_LEN
+            && tag.starts_with(b" [")
+            && tag[TAG_LEN - 1] == b']'
+            && tag[2..TAG_LEN - 1].iter().enumerate().all(|(i, byte)| {
+                if i == 4 || i == 7 {
+                    *byte == b'-'
+                } else {
+                    byte.is_ascii_digit()
+                }
+            })
+    };
+    let bytes = text.as_bytes();
+    let mut out = String::new();
+    let mut copied = 0usize;
+    let mut index = 0usize;
+    while index + TAG_LEN <= bytes.len() {
+        if is_tag(&bytes[index..index + TAG_LEN]) {
+            out.push_str(&text[copied..index]);
+            index += TAG_LEN;
+            copied = index;
+        } else {
+            index += 1;
+        }
+    }
+    if copied == 0 {
+        return Cow::Borrowed(text);
+    }
+    out.push_str(&text[copied..]);
+    Cow::Owned(out)
+}
+
 /// The year, month, and day of a count of days since 1970-01-01, in the Gregorian calendar.
-fn civil_date(days: i64) -> (i64, i64, i64) {
+pub(crate) fn civil_date(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);
     let day_of_era = shifted - era * 146_097;
@@ -211,8 +259,33 @@ mod tests {
                 provenance: Vec::new(),
             },
         };
-        let dated = date_day_words(&[hit(Some(TUESDAY * MS_PER_DAY + 3_600_000)), hit(None)]);
+        let dated = date_day_words(&[hit(Some(TUESDAY * MS_PER_DAY + 3_600_000)), hit(None)], 0);
         assert_eq!(dated[0].span.text, "Reply by Friday [2025-07-18].");
         assert_eq!(dated[1].span.text, "Reply by Friday.");
+        // 01:00 UTC on Tuesday is Monday evening at UTC-7, so Friday is the same date.
+        let pacific = date_day_words(&[hit(Some(TUESDAY * MS_PER_DAY + 3_600_000))], -420);
+        assert_eq!(pacific[0].span.text, "Reply by Friday [2025-07-18].");
+        let tomorrow = |offset| {
+            let mut hit = hit(Some(TUESDAY * MS_PER_DAY + 3_600_000));
+            hit.span.text = "Ship tomorrow.".to_string();
+            date_day_words(&[hit], offset).remove(0).span.text
+        };
+        assert_eq!(tomorrow(0), "Ship tomorrow [2025-07-16].");
+        assert_eq!(tomorrow(-420), "Ship tomorrow [2025-07-15].");
+    }
+
+    #[test]
+    fn quote_matches_with_or_without_the_added_dates() {
+        let stored = "Reply by Friday.";
+        let packed = "Reply by Friday [2025-07-18].";
+        assert!(quote_matches(stored, "by Friday [2025-07-18]."));
+        assert!(quote_matches(packed, "by Friday."));
+        assert!(quote_matches(packed, "by Friday [2025-07-18]."));
+        assert!(!quote_matches(stored, "by Monday."));
+        assert!(!quote_matches(stored, " [2025-07-18]"));
+        assert_eq!(
+            without_day_word_dates("Due [2025-7-18]."),
+            "Due [2025-7-18]."
+        );
     }
 }
