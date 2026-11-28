@@ -247,26 +247,19 @@ impl MemoryStore {
     }
 
     /// Returns the top `k` fused hits of vector and keyword search, as JSON.
-    pub fn hybrid_search_spans_json(
-        &self,
-        scope_json: &str,
-        query_embedding: Vec<f32>,
-        query_text: &str,
-        k: usize,
-        scan_limit: usize,
-        at_ms: Option<i64>,
-    ) -> ZResult<String> {
-        let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
+    pub fn hybrid_search_spans_json(&self, request_json: &str) -> ZResult<String> {
+        let request =
+            serde_json::from_str::<HybridSearchJsonRequest>(request_json).map_err(json_status)?;
         let hits = self
             .hybrid_search_spans(
-                &scope,
+                &request.scope,
                 HybridSpanSearch {
-                    query_embedding,
-                    query_text,
-                    k,
-                    scan_limit,
-                    at_ms,
-                    sub_queries: &[],
+                    query_embedding: request.query_embedding,
+                    query_text: &request.query_text,
+                    k: request.k,
+                    scan_limit: request.scan_limit,
+                    at_ms: request.at_ms,
+                    sub_queries: &request.sub_queries,
                 },
             )?
             .fused_hits;
@@ -692,6 +685,21 @@ pub struct MemoryContextJsonRequest {
     pub hits: Vec<SpanSearchHit>,
     #[serde(flatten)]
     pub limits: ContextLimitsJson,
+}
+
+/// A hybrid span search request.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HybridSearchJsonRequest {
+    pub scope: MemoryScope,
+    pub query_embedding: Vec<f32>,
+    pub query_text: String,
+    pub k: usize,
+    pub scan_limit: usize,
+    #[serde(default)]
+    pub at_ms: Option<i64>,
+    #[serde(default)]
+    pub sub_queries: Vec<SpanSubQuery>,
 }
 
 /// Evidence retrieval for an answer context: hybrid span search plus answer-target slots.

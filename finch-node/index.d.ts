@@ -74,6 +74,13 @@ export interface SearchRequest {
   includeNeighbors?: boolean
   /** Most spans with a query word that keyword search ranks. The default is 1000. */
   scanLimit?: number
+  /** One query per event of a question about two or more events. Needs hybrid mode. */
+  subQueries?: SubQuery[]
+}
+
+export interface SubQuery {
+  query: string
+  queryEmbedding: number[]
 }
 
 export type StateReadView = 'current' | 'timeline' | 'set'
@@ -112,6 +119,8 @@ export interface PackContextRequest {
   completeEvidence?: boolean
   preferredSlotIds?: string[]
   stateSelections?: StateReadSelection[]
+  /** One query per event of a question about two or more events. Needs hybrid mode. */
+  subQueries?: SubQuery[]
 }
 
 export type AnswerSupportState = 'supported' | 'unsupported' | 'deleted' | 'no_evidence'
@@ -364,14 +373,8 @@ export declare class MemoryStore {
     scanLimit: number,
     atMs?: number
   ): string
-  hybridSearchSpansJson(
-    scopeJson: string,
-    queryEmbedding: number[],
-    queryText: string,
-    k: number,
-    scanLimit: number,
-    atMs?: number
-  ): string
+  /** Takes a JSON object with scope, query_embedding, query_text, k, scan_limit, at_ms and sub_queries. */
+  hybridSearchSpansJson(requestJson: string): string
   hybridSearchSpansDebugJson(
     scopeJson: string,
     queryEmbedding: number[],

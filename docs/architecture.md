@@ -260,7 +260,9 @@ cut sentence reads whole.
 A search can also take `sub_queries`, each with its own embedding and text. Use one sub-query
 for each event of a question about two or more events. Finch searches each query the same way.
 The fused hits of all queries then take the `k` places in turn, so each event gets evidence. The
-`search` object of an answer context request takes the same `sub_queries` list.
+`search` object of an answer context request takes the same `sub_queries` list. The Python
+`search` and `pack_context` calls take `sub_queries` as a list of `query` and `query_embedding`
+pairs. The Node calls take `subQueries` with `query` and `queryEmbedding`.
 
 Keyword search ranks the spans that hold a query word, up to its scan limit, in storage order.
 A scan limit below the number of such spans leaves the later spans out of the ranking. Set the

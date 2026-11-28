@@ -317,13 +317,25 @@ class FinchMemory {
     const embedding = input.queryEmbedding ?? [];
     // Keyword search ranks at most this many spans that hold a query word. Raise it for a large store.
     const scanLimit = input.scanLimit ?? 1000;
+    const subQueries = (input.subQueries ?? []).map((sub) => ({ text: sub.query, embedding: sub.queryEmbedding }));
+    if (subQueries.length && (input.mode ?? 'hybrid') !== 'hybrid') {
+      throw new TypeError('subQueries need hybrid mode');
+    }
     let raw;
     if (input.mode === 'keyword') {
       raw = this.store.keywordSearchSpansJson(scopeJson, input.query, k, scanLimit, at);
     } else if (input.mode === 'vector') {
       raw = this.store.querySpansJson(scopeJson, embedding, k, at);
     } else {
-      raw = this.store.hybridSearchSpansJson(scopeJson, embedding, input.query, k, scanLimit, at);
+      raw = this.store.hybridSearchSpansJson(JSON.stringify({
+        scope: scope(input.scope),
+        query_embedding: embedding,
+        query_text: input.query,
+        k,
+        scan_limit: scanLimit,
+        at_ms: at ?? null,
+        sub_queries: subQueries,
+      }));
     }
     let hits = parse(raw);
     if (input.includeNeighbors) {
@@ -342,6 +354,7 @@ class FinchMemory {
       queryEmbedding: input.queryEmbedding ?? [],
       includeNeighbors: input.completeEvidence ?? true,
       scanLimit: input.scanLimit,
+      subQueries: input.subQueries,
     });
     let selections = normalizeStateSelections(input.stateSelections);
     if (selections.length && input.preferredSlotIds?.length) {
@@ -415,7 +428,14 @@ class FinchMemory {
     const embedding = input.queryEmbedding ?? [];
     const vector = this.store.querySpansJson(scopeJson, embedding, k, at);
     const keyword = this.store.keywordSearchSpansJson(scopeJson, input.query, k, 1000, at);
-    const hybrid = this.store.hybridSearchSpansJson(scopeJson, embedding, input.query, k, 1000, at);
+    const hybrid = this.store.hybridSearchSpansJson(JSON.stringify({
+      scope: scope(input.scope),
+      query_embedding: embedding,
+      query_text: input.query,
+      k,
+      scan_limit: 1000,
+      at_ms: at ?? null,
+    }));
     return parse(this.store.evaluateRetrievalBaselineJson(JSON.stringify({
       vector_hits: parse(vector),
       keyword_hits: parse(keyword),

@@ -325,28 +325,9 @@ impl MemoryStore {
     }
 
     #[napi]
-    pub fn hybrid_search_spans_json(
-        &self,
-        env: Env,
-        scope_json: String,
-        query_embedding: Vec<f64>,
-        query_text: String,
-        k: u32,
-        scan_limit: u32,
-        at_ms: Option<i64>,
-    ) -> Result<String> {
+    pub fn hybrid_search_spans_json(&self, env: Env, request_json: String) -> Result<String> {
         self.inner()?
-            .hybrid_search_spans_json(
-                &scope_json,
-                query_embedding
-                    .into_iter()
-                    .map(|value| value as f32)
-                    .collect(),
-                &query_text,
-                k as usize,
-                scan_limit as usize,
-                at_ms,
-            )
+            .hybrid_search_spans_json(&request_json)
             .map_err(|e| finch_err(&env, e))
     }
 

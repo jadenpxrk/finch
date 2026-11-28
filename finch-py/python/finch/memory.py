@@ -159,6 +159,8 @@ class SearchRequest:
     query_embedding: Sequence[float] = field(default_factory=list)
     include_neighbors: bool = False
     scan_limit: int = 1000
+    # One {"query", "query_embedding"} mapping per event of a question about two or more events.
+    sub_queries: Sequence[Mapping[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -184,6 +186,7 @@ class PackContextRequest:
     state_selections: Sequence[Union[StateReadSelection, Mapping[str, Any]]] = field(
         default_factory=list
     )
+    sub_queries: Sequence[Mapping[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -546,12 +549,26 @@ class FinchMemory:
         query = raw["query"]
         # Keyword search ranks at most this many spans that hold a query word. Raise it for a large store.
         scan_limit = int(raw.get("scan_limit", 1000))
+        sub_queries = [
+            {"text": str(sub["query"]), "embedding": list(sub["query_embedding"])}
+            for sub in raw.get("sub_queries", [])
+        ]
+        if sub_queries and mode != "hybrid":
+            raise ValueError("sub_queries need hybrid mode")
         if mode == "keyword":
             hits = self._store.keyword_search_spans_json(scope, query, k, scan_limit, at_ms)
         elif mode == "vector":
             hits = self._store.query_spans_json(scope, embedding, k, at_ms)
         else:
-            hits = self._store.hybrid_search_spans_json(scope, embedding, query, k, scan_limit, at_ms)
+            hits = self._store.hybrid_search_spans_json(_json({
+                "scope": _scope(raw["scope"]),
+                "query_embedding": embedding,
+                "query_text": query,
+                "k": k,
+                "scan_limit": scan_limit,
+                "at_ms": at_ms,
+                "sub_queries": sub_queries,
+            }))
         items = _parse(hits)
         if raw.get("include_neighbors"):
             items = _parse(self._store.complete_span_evidence_json(scope, _json(items), 1, 1, scan_limit, at_ms))
@@ -568,6 +585,7 @@ class FinchMemory:
             "query_embedding": raw.get("query_embedding", []),
             "include_neighbors": raw.get("complete_evidence", True),
             "scan_limit": raw.get("scan_limit", 1000),
+            "sub_queries": raw.get("sub_queries", []),
         })
         preferred_slot_ids = list(raw.get("preferred_slot_ids", []))
         state_selections = _state_selections(raw.get("state_selections", []))
@@ -633,7 +651,14 @@ class FinchMemory:
         embedding = list(input.get("query_embedding", []))
         vector = self._store.query_spans_json(scope, embedding, k, at_ms)
         keyword = self._store.keyword_search_spans_json(scope, query, k, 1000, at_ms)
-        hybrid = self._store.hybrid_search_spans_json(scope, embedding, query, k, 1000, at_ms)
+        hybrid = self._store.hybrid_search_spans_json(_json({
+            "scope": _scope(input["scope"]),
+            "query_embedding": embedding,
+            "query_text": query,
+            "k": k,
+            "scan_limit": 1000,
+            "at_ms": at_ms,
+        }))
         report = self._store.evaluate_retrieval_baseline_json(_json({
             "vector_hits": _parse(vector),
             "keyword_hits": _parse(keyword),

@@ -1090,6 +1090,7 @@ pub struct HybridSpanSearch<'a> {
 
 /// One more query of a hybrid span search.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpanSubQuery {
     /// Embedding of the query.
     pub embedding: Vec<f32>,

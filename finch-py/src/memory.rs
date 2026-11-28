@@ -265,27 +265,8 @@ impl PyMemoryStore {
         })
     }
 
-    #[pyo3(signature = (scope_json, query_embedding, query_text, k=10, scan_limit=1000, at_ms=None))]
-    fn hybrid_search_spans_json(
-        &self,
-        py: Python<'_>,
-        scope_json: &str,
-        query_embedding: Vec<f32>,
-        query_text: &str,
-        k: usize,
-        scan_limit: usize,
-        at_ms: Option<i64>,
-    ) -> PyResult<String> {
-        self.without_gil(py, |m| {
-            m.hybrid_search_spans_json(
-                scope_json,
-                query_embedding,
-                query_text,
-                k,
-                scan_limit,
-                at_ms,
-            )
-        })
+    fn hybrid_search_spans_json(&self, py: Python<'_>, request_json: &str) -> PyResult<String> {
+        self.without_gil(py, |m| m.hybrid_search_spans_json(request_json))
     }
 
     #[pyo3(signature = (scope_json, query_embedding, query_text, k=10, scan_limit=1000, at_ms=None))]

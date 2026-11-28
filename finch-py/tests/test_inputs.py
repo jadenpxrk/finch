@@ -89,5 +89,26 @@ class ExtractionQueueTest(unittest.TestCase):
         self.assertIsNone(memory.get_claim("claim_missing", {"space": "s"}, limit=1))
 
 
+@unittest.skipUnless(POSTGRES_URL, "set FINCH_MEMORY_TEST_POSTGRES_URL")
+class SubQueryTest(unittest.TestCase):
+    def test_a_sub_query_brings_in_the_hits_of_its_event(self):
+        from finch.memory import FinchMemory
+
+        memory = FinchMemory.create(POSTGRES_URL, f"py_subq_{os.getpid()}_{int(time.time())}", 4)
+        scope = {"space": "s"}
+        for text in ("The invoice was paid.", "The invoice draft went out.", "The dentist visit is set."):
+            memory.ingest_episode({"scope": scope, "text": text})
+        search = {"scope": scope, "query": "invoice", "top_k": 2, "query_embedding": [1.0, 0.0, 0.0, 0.0]}
+
+        def texts(request):
+            return [hit["span"]["text"] for hit in memory.search(request)["hits"]]
+
+        self.assertNotIn("The dentist visit is set.", texts(search))
+        dentist = {"query": "dentist", "query_embedding": [0.0, 1.0, 0.0, 0.0]}
+        self.assertIn("The dentist visit is set.", texts({**search, "sub_queries": [dentist]}))
+        with self.assertRaisesRegex(ValueError, "hybrid"):
+            memory.search({**search, "mode": "keyword", "sub_queries": [dentist]})
+
+
 if __name__ == "__main__":
     unittest.main()
