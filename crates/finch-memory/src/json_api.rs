@@ -5,7 +5,7 @@ use crate::{
     BiTemporalQuery, ChunkOptions, ContextInput, ContextOptions, CorrectionInput, EdgeInput,
     EntityInput, EpisodeInput, ExtractionFailure, ExtractionLeaseRequest, HybridSpanSearch,
     ManualClaimInput, MemoryScope, MemoryStore, ProfileInput, SlotAliasInput, SpanSearchHit,
-    StateMutationBatch, StateReadSelection,
+    SpanSubQuery, StateMutationBatch, StateReadSelection,
 };
 use finch_types::{Status, ZResult};
 use serde::Deserialize;
@@ -266,6 +266,7 @@ impl MemoryStore {
                     k,
                     scan_limit,
                     at_ms,
+                    sub_queries: &[],
                 },
             )?
             .fused_hits;
@@ -291,6 +292,7 @@ impl MemoryStore {
                 k,
                 scan_limit,
                 at_ms,
+                sub_queries: &[],
             },
         )?;
         serde_json::to_string(&debug).map_err(json_status)
@@ -567,6 +569,7 @@ impl MemoryStore {
             k: search.k,
             scan_limit: search.scan_limit,
             at_ms,
+            sub_queries: &search.sub_queries,
         };
         let hits = self.hybrid_search_spans(scope, span_search)?.fused_hits;
         let hits = self.complete_span_evidence(scope, &hits, 1, 1, search.scan_limit, at_ms)?;
@@ -697,6 +700,8 @@ pub(crate) struct AnswerContextSearchJson {
     pub query_embedding: Vec<f32>,
     pub k: usize,
     pub scan_limit: usize,
+    #[serde(default)]
+    pub sub_queries: Vec<SpanSubQuery>,
 }
 
 #[derive(Debug, Deserialize)]

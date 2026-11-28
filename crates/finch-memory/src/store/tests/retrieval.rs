@@ -1,5 +1,5 @@
 use super::*;
-use crate::IndexedSource;
+use crate::{IndexedSource, SpanSubQuery};
 
 #[test]
 fn memory_store_persists_active_records() {
@@ -1095,6 +1095,7 @@ fn memory_store_queries_persisted_spans_and_applies_corrections() {
                 k: 10,
                 scan_limit: 100,
                 at_ms: Some(10),
+                sub_queries: &[],
             },
         )
         .unwrap()
@@ -1542,4 +1543,44 @@ fn memory_store_rebuilds_source_text_and_ranks_whole_sources() {
     fused.sort();
     assert_eq!(fused, vec!["policy", "runbook"]);
     let _ = std::fs::remove_dir_all(&index_dir);
+}
+
+#[test]
+fn hybrid_search_sub_queries_take_places_in_turn() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("hybrid_sub_queries");
+    let store = crate::test_store(&dir, 3).unwrap();
+    for (id, embedding) in [
+        ("invoice", [1.0, 0.0, 0.0]),
+        ("invoice_draft", [0.9, 0.1, 0.0]),
+        ("dentist", [0.0, 1.0, 0.0]),
+    ] {
+        let span = span_record(id, MemoryStatus::Active, Some(1));
+        store.append_span(&span, Some(&embedding)).unwrap();
+    }
+    let search = |sub_queries: &[SpanSubQuery]| {
+        store
+            .hybrid_search_spans(
+                &scope(),
+                HybridSpanSearch {
+                    query_embedding: vec![1.0, 0.0, 0.0],
+                    query_text: "invoice",
+                    k: 2,
+                    scan_limit: 100,
+                    at_ms: None,
+                    sub_queries,
+                },
+            )
+            .unwrap()
+            .fused_hits
+            .into_iter()
+            .map(|hit| hit.span.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(search(&[]), ["invoice", "invoice_draft"]);
+    let dentist = SpanSubQuery {
+        embedding: vec![0.0, 1.0, 0.0],
+        text: "dentist".to_string(),
+    };
+    assert_eq!(search(&[dentist]), ["invoice", "dentist"]);
 }

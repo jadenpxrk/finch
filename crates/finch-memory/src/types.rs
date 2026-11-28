@@ -1083,6 +1083,18 @@ pub struct HybridSpanSearch<'a> {
     pub scan_limit: usize,
     /// Valid time to read at, in Unix ms. `None` means no time filter.
     pub at_ms: Option<i64>,
+    /// More queries that the search runs the same way, for example one per event in a question
+    /// about two events. The fused hits of all queries take the `k` places in turn.
+    pub sub_queries: &'a [SpanSubQuery],
+}
+
+/// One more query of a hybrid span search.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SpanSubQuery {
+    /// Embedding of the query.
+    pub embedding: Vec<f32>,
+    /// Query text for keyword matching.
+    pub text: String,
 }
 
 /// Kind of projected state.

@@ -295,6 +295,7 @@ fn retrieval_metrics_measure_hybrid_baseline() {
                 k: 10,
                 scan_limit: 100,
                 at_ms: Some(200),
+                sub_queries: &[],
             },
         )
         .unwrap()

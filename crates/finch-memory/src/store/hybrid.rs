@@ -206,6 +206,7 @@ impl MemoryStore {
             k,
             scan_limit,
             at_ms,
+            sub_queries,
         } = search;
         if k == 0 {
             return Ok(HybridSearchDebug {
@@ -216,7 +217,14 @@ impl MemoryStore {
         }
         let vector_hits = self.query_spans(scope, query_embedding, k, at_ms)?;
         let keyword_hits = self.keyword_search_spans(scope, query_text, k, scan_limit, at_ms)?;
-        let fused_hits = hybrid_fuse_rrf(&vector_hits, &keyword_hits, k);
+        let mut rankings = vec![hybrid_fuse_rrf(&vector_hits, &keyword_hits, k)];
+        for sub_query in sub_queries {
+            let vector = self.query_spans(scope, sub_query.embedding.clone(), k, at_ms)?;
+            let keyword =
+                self.keyword_search_spans(scope, &sub_query.text, k, scan_limit, at_ms)?;
+            rankings.push(hybrid_fuse_rrf(&vector, &keyword, k));
+        }
+        let fused_hits = take_places_in_turn(rankings, k);
         Ok(HybridSearchDebug {
             vector_hits,
             keyword_hits,
@@ -289,4 +297,24 @@ fn live_posting_prefix(
             true
         })
         .collect()
+}
+
+/// The first `k` distinct hits when the rankings give one hit each in turn.
+fn take_places_in_turn(rankings: Vec<Vec<SpanSearchHit>>, k: usize) -> Vec<SpanSearchHit> {
+    if rankings.len() == 1 {
+        return rankings.into_iter().next().unwrap_or_default();
+    }
+    let mut seen = BTreeSet::new();
+    let mut shared = Vec::new();
+    let longest = rankings.iter().map(Vec::len).max().unwrap_or(0);
+    for rank in 0..longest {
+        for ranking in &rankings {
+            if let Some(hit) = ranking.get(rank) {
+                if shared.len() < k && seen.insert(hit.span.id.clone()) {
+                    shared.push(hit.clone());
+                }
+            }
+        }
+    }
+    shared
 }

@@ -99,7 +99,7 @@ queries, reranked the results, and wrote the answers.
 
 ## Status
 
-The crates have 460 tests. The memory tests run against a Postgres server with pgvector. All
+The crates have 461 tests. The memory tests run against a Postgres server with pgvector. All
 tests use synthetic data. The repository contains no cached benchmark replays.
 
 The project has not had a public release.
