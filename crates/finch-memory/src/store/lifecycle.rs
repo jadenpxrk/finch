@@ -597,10 +597,7 @@ pub(super) fn resolve_current_claims(claims: Vec<ClaimRecord>, limit: usize) -> 
 }
 
 pub(super) fn claim_projection_key(claim: &ClaimRecord) -> String {
-    if matches!(
-        claim.claim_kind,
-        ClaimKind::Relationship | ClaimKind::Event | ClaimKind::Preference
-    ) {
+    if claim.claim_kind.is_set_valued() {
         return format!(
             "{:?}\u{0}{}\u{0}{}",
             claim.claim_kind,

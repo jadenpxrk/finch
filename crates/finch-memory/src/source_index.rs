@@ -168,13 +168,15 @@ impl SourceLexicalIndexBuilder {
         self.sources.len()
     }
 
-    /// Write the index directory. Any existing directory content is replaced.
+    /// Writes the index directory. An index that the directory holds is replaced. A directory
+    /// that holds other files is an error.
     pub fn write(self, dir: &Path) -> ZResult<()> {
         if self.sources.is_empty() {
             return Err(Status::invalid_argument(
                 "source lexical index requires at least one source",
             ));
         }
+        SourceLexicalIndex::check_replaceable(dir)?;
         let staging = staging_dir(dir)?;
         let _ = fs::remove_dir_all(&staging);
         fs::create_dir_all(&staging).map_err(Status::from)?;
@@ -264,6 +266,28 @@ pub struct SourceLexicalIndex {
 }
 
 impl SourceLexicalIndex {
+    /// Fails when `dir` holds files that are not a source lexical index, because a write of the
+    /// index deletes the content of `dir`.
+    pub fn check_replaceable(dir: &Path) -> ZResult<()> {
+        let Ok(mut entries) = fs::read_dir(dir) else {
+            return Ok(());
+        };
+        let holds_index = File::open(dir.join(MANIFEST_FILE))
+            .ok()
+            .and_then(|file| {
+                serde_json::from_reader::<_, serde_json::Value>(BufReader::new(file)).ok()
+            })
+            .and_then(|manifest| manifest["format"].as_str().map(str::to_string))
+            .is_some_and(|format| format.starts_with("finch-source-lexical-index-"));
+        if holds_index || entries.next().is_none() {
+            return Ok(());
+        }
+        Err(Status::invalid_argument(format!(
+            "{} holds files that are not a keyword index; name an empty or a new directory",
+            dir.display()
+        )))
+    }
+
     /// Opens the index in `dir`. Fails when the format does not match.
     pub fn open(dir: &Path) -> ZResult<Self> {
         let manifest: SourceLexicalManifest = serde_json::from_reader(BufReader::new(
@@ -497,6 +521,41 @@ mod tests {
             .unwrap();
         builder.write(dir).unwrap();
         SourceLexicalIndex::open(dir).unwrap()
+    }
+
+    #[test]
+    fn write_replaces_an_index_and_refuses_a_directory_of_other_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "finch-source-index-replaceable-{}",
+            std::process::id()
+        ));
+        let other = dir.join("notes");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("important.txt"), "keep me").unwrap();
+        let build = |target: &Path| {
+            let mut builder = SourceLexicalIndexBuilder::new();
+            builder
+                .add_source(IndexedSource {
+                    source_id: "doc",
+                    title: "",
+                    directory: "",
+                    body: "kestrel",
+                    date_ms: None,
+                    span_ids: Vec::new(),
+                })
+                .unwrap();
+            builder.write(target)
+        };
+        let refused = build(&other);
+        let index = dir.join("index");
+        let first = build(&index);
+        let second = build(&index);
+        let kept = fs::read_to_string(other.join("important.txt"));
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert!(refused.is_err_and(|status| status.message().contains("not a keyword index")));
+        assert_eq!(kept.unwrap(), "keep me");
+        assert!(first.is_ok() && second.is_ok());
     }
 
     #[test]

@@ -68,23 +68,41 @@ fn state_scan(limit: usize, at_ms: Option<i64>) -> StateRecordScan {
 
 #[test]
 fn sql_escape_round_trips_backslashes_and_quotes_through_the_filter_parser() {
-    for value in [
-        r"C:\notes\",
-        r"a\b",
-        r"a\\b",
-        r"it's",
-        r"a\'b",
-        r"a\\'b",
-        r"\",
-        r"\\",
-    ] {
+    // Every string of up to 5 characters over a backslash, both quotes, and a letter.
+    let alphabet = ['\\', '\'', '"', 'a'];
+    let mut values = vec![String::new()];
+    let mut start = 0;
+    for _ in 0..5 {
+        let end = values.len();
+        for i in start..end {
+            for c in alphabet {
+                let mut longer = values[i].clone();
+                longer.push(c);
+                values.push(longer);
+            }
+        }
+        start = end;
+    }
+    values.push(r"C:\notes\".to_string());
+    for value in &values {
         let sql = format!("project_id = '{}'", sql_escape(value));
         let expr = crate::filter::parse_filter(&sql).unwrap();
         assert!(
             matches!(&expr, crate::filter::FilterExpr::Compare { value: Value::String(s), .. } if s == value),
-            "{sql} parsed as {expr:?}"
+            "{value:?} escaped as {sql} parsed as {expr:?}"
         );
     }
+}
+
+#[test]
+fn scope_json_with_an_unknown_key_is_an_error() {
+    let scope = serde_json::from_str::<MemoryScope>(r#"{"space_id":"s","userId":"u1"}"#);
+    assert!(
+        scope.is_err(),
+        "a misspelled key widened the scope: {scope:?}"
+    );
+    let scope = serde_json::from_str::<MemoryScope>(r#"{"space_id":"s","user_id":"u1"}"#).unwrap();
+    assert_eq!(scope.user_id.as_deref(), Some("u1"));
 }
 
 #[test]

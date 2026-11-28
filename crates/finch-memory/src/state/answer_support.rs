@@ -1,4 +1,13 @@
 use super::*;
+use crate::day_words::{quote_matches, QuotedSpan};
+
+/// The stored text of `span` with the time that dates its day words.
+fn stored_span(span: &crate::types::SpanRecord) -> QuotedSpan<'_> {
+    QuotedSpan {
+        text: &span.text,
+        valid_from_ms: span.valid_from_ms,
+    }
+}
 
 impl MemoryStore {
     pub(crate) fn validate_answer_context(
@@ -38,12 +47,12 @@ impl MemoryStore {
             &requested_span_ids.into_iter().collect::<Vec<_>>(),
             None,
         )?;
-        let span_text_by_id = spans
+        let spans_by_id = spans
             .into_iter()
-            .map(|span| (span.id, span.text))
+            .map(|span| (span.id.clone(), span))
             .collect::<BTreeMap<_, _>>();
         Ok(finalize_answer_support(&support, emission, |span_id| {
-            span_text_by_id.get(span_id).map(String::as_str)
+            spans_by_id.get(span_id).map(stored_span)
         }))
     }
 
@@ -72,7 +81,7 @@ impl MemoryStore {
             .map(|span| (span.id.clone(), span))
             .collect::<BTreeMap<_, _>>();
         validate_evidence_quotes(emission, |span_id| {
-            spans_by_id.get(span_id).map(|span| span.text.as_str())
+            spans_by_id.get(span_id).map(stored_span)
         })
     }
 }
@@ -104,7 +113,13 @@ pub(crate) fn validate_packed_answer_emission(
         .support
         .restrict_to_context(&included_slot_ids, &included_span_ids);
     let validated = validate_answer_support(&support, emission)?;
-    validate_evidence_quotes(&validated, |span_id| evidence_by_id.get(span_id).copied())?;
+    validate_evidence_quotes(&validated, |span_id| {
+        // The packed text shows its own day word dates, so it has no span time.
+        evidence_by_id.get(span_id).map(|text| QuotedSpan {
+            text,
+            valid_from_ms: None,
+        })
+    })?;
     Ok(validated)
 }
 
@@ -214,7 +229,7 @@ fn validate_claim_grounding(
 fn finalize_answer_support<'a>(
     support: &AnswerSupportContract,
     emission: AnswerEmission,
-    mut source_text: impl FnMut(&str) -> Option<&'a str>,
+    mut source_text: impl FnMut(&str) -> Option<QuotedSpan<'a>>,
 ) -> GroundedAnswerResult {
     if matches!(emission.disposition, AnswerDisposition::Refuse) {
         return refused_answer(support, &emission.claims);
@@ -254,7 +269,7 @@ fn finalize_answer_support<'a>(
 fn check_answer_claims<'a>(
     support: &AnswerSupportContract,
     claims: Vec<GroundedAnswerClaim>,
-    source_text: &mut impl FnMut(&str) -> Option<&'a str>,
+    source_text: &mut impl FnMut(&str) -> Option<QuotedSpan<'a>>,
 ) -> (Vec<GroundedAnswerClaim>, Vec<AnswerClaimValidation>) {
     let slots_by_id = support
         .slots
@@ -346,7 +361,7 @@ fn answer_claim_rejection<'a>(
     support: &AnswerSupportContract,
     slot: Option<&AnswerSlotSupport>,
     claim: &GroundedAnswerClaim,
-    source_text: &mut impl FnMut(&str) -> Option<&'a str>,
+    source_text: &mut impl FnMut(&str) -> Option<QuotedSpan<'a>>,
 ) -> Option<AnswerClaimRejectionReason> {
     let support_state = slot.map_or(support.state, |slot| slot.state);
     if let Some(reason) = answer_claim_rejection_for_support_state(support_state) {
@@ -369,11 +384,10 @@ fn answer_claim_rejection<'a>(
         return Some(AnswerClaimRejectionReason::EvidenceOutsideSupport);
     }
     claim.evidence.iter().find_map(|evidence| {
-        let Some(text) = source_text(&evidence.span_id) else {
+        let Some(span) = source_text(&evidence.span_id) else {
             return Some(AnswerClaimRejectionReason::EvidenceUnavailable);
         };
-        (!crate::day_words::quote_matches(text, &evidence.quote))
-            .then_some(AnswerClaimRejectionReason::QuoteMismatch)
+        (!quote_matches(span, &evidence.quote)).then_some(AnswerClaimRejectionReason::QuoteMismatch)
     })
 }
 
@@ -428,19 +442,19 @@ fn answer_refusal_reason_for_support(
 
 fn validate_evidence_quotes<'a>(
     emission: &ValidatedAnswerEmission,
-    mut source_text: impl FnMut(&str) -> Option<&'a str>,
+    mut source_text: impl FnMut(&str) -> Option<QuotedSpan<'a>>,
 ) -> ZResult<()> {
     for evidence in emission
         .claims
         .iter()
         .flat_map(|claim| claim.evidence.iter())
     {
-        let Some(text) = source_text(&evidence.span_id) else {
+        let Some(span) = source_text(&evidence.span_id) else {
             return Err(Status::invalid_argument(
                 "answer evidence span is not available in the validated context",
             ));
         };
-        if !crate::day_words::quote_matches(text, &evidence.quote) {
+        if !quote_matches(span, &evidence.quote) {
             return Err(Status::invalid_argument(
                 "answer evidence quote is not present in the cited span",
             ));

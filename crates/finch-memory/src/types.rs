@@ -8,6 +8,7 @@ pub type MemoryId = String;
 
 /// Ids that set which memory a read or a write uses.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryScope {
     /// Id of the memory space. Every record has one.
     pub space_id: String,
@@ -813,6 +814,14 @@ pub enum ClaimKind {
     TaskState,
     /// Any other claim.
     Other,
+}
+
+impl ClaimKind {
+    /// Whether the claims of a slot are members of a set, one lifecycle per value. A correction
+    /// of one member then leaves the other members as they are.
+    pub(crate) fn is_set_valued(self) -> bool {
+        matches!(self, Self::Relationship | Self::Event | Self::Preference)
+    }
 }
 
 /// Whether a claim asserts, denies, or is not certain.

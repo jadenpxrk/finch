@@ -99,3 +99,53 @@ fn entities_by_ids_returns_only_the_callers_active_scope_in_id_order() {
     assert_eq!(ids(&a), ["entity_1", "entity_3"]);
     assert_eq!(ids(&b), ["entity_2", "entity_4"]);
 }
+
+#[test]
+fn fetch_spans_by_ids_returns_each_span_once_in_id_order() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let store = open_store("fetch_spans_order");
+    let scope = scope();
+    let ids = (0..40).map(|n| format!("span_{n:02}")).collect::<Vec<_>>();
+    store.seed_evidence(&scope, &ids, &["ep_spans".to_string()]);
+    let mut ask = ids.iter().rev().cloned().collect::<Vec<_>>();
+    ask.push(ids[0].clone());
+
+    let fetched = store
+        .fetch_spans_by_ids(&scope, &ask, None)
+        .unwrap()
+        .into_iter()
+        .map(|span| span.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(fetched, ids);
+}
+
+#[test]
+fn get_claim_finds_a_claim_after_any_number_of_earlier_claims() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let store = open_store("get_claim_by_id");
+    let (a, b) = (tenant("a"), tenant("b"));
+    for (scope, id) in [(&a, "claim_first"), (&a, "claim_last"), (&b, "claim_other")] {
+        let claim = make_claim(
+            scope,
+            id,
+            "project",
+            id,
+            Some("value"),
+            10,
+            (ClaimKind::Fact, ClaimPolarity::Affirmative),
+        );
+        store.append_claim(&claim, None).unwrap();
+    }
+    let found = |scope: &MemoryScope, id: &str, at_ms| {
+        store
+            .get_claim(scope, id, at_ms)
+            .unwrap()
+            .map(|claim| claim.id)
+    };
+
+    assert_eq!(found(&a, "claim_last", None).as_deref(), Some("claim_last"));
+    assert_eq!(found(&a, "claim_other", None), None);
+    assert_eq!(found(&a, "claim_last", Some(5)), None);
+    assert_eq!(found(&a, "missing", None), None);
+}

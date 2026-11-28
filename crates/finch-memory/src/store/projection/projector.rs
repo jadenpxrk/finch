@@ -24,7 +24,7 @@ impl MemoryStore {
         let slot_ids = self.rebuild_frontier_slot_ids(scope, &claims, valid_at_ms)?;
         // The read filter also returns narrower scopes' records, which this rebuild must not retire.
         let active_states = self
-            .scan_state_records(
+            .scan_state_records_as_given(
                 scope,
                 StateRecordScan {
                     limit: usize::MAX,

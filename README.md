@@ -14,6 +14,7 @@ Finch is a memory layer for language-model agents, written in Rust. It does thes
 | `crates/finch-types` | Value and error types |
 | `crates/finch-memory` | The memory layer, stored in Postgres with pgvector |
 | `finch-py`, `finch-node` | Python and Node.js bindings |
+| `crates/finch-cli` | The `finch` command that agents use to search documents |
 
 ## Postgres
 
@@ -98,7 +99,7 @@ queries, reranked the results, and wrote the answers.
 
 ## Status
 
-The crates have 411 tests. The memory tests run against a Postgres server with pgvector. All
+The crates have 460 tests. The memory tests run against a Postgres server with pgvector. All
 tests use synthetic data. The repository contains no cached benchmark replays.
 
 The project has not had a public release.

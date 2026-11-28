@@ -44,6 +44,7 @@ fn lease(worker: &str, limit: usize, now_ms: i64) -> ExtractionLeaseRequest {
         lease_ms: 100,
         now_ms: Some(now_ms),
         max_attempts: 3,
+        tenant_id: None,
     }
 }
 
@@ -57,6 +58,7 @@ fn failure(job_id: &str, worker: &str, max_attempts: u32) -> ExtractionFailure {
         worker_id: worker.to_string(),
         error: "extractor timed out".to_string(),
         max_attempts,
+        tenant_id: None,
     }
 }
 
@@ -104,7 +106,7 @@ fn episode_writes_create_pending_jobs_that_lease_in_sequence_order() {
         assert!(jobs.len() <= 1, "one scope leases one job at a time");
         for job in jobs {
             assert_eq!(job.status, ExtractionJobStatus::Leased);
-            store.complete_extraction_job(&job.id, "w").unwrap();
+            store.complete_extraction_job(&job.id, "w", None).unwrap();
             order.push(job.episode_id);
         }
     }
@@ -211,12 +213,12 @@ fn a_leased_or_failed_job_blocks_later_jobs_of_its_scope_only() {
         .unwrap();
     assert_eq!(failed.status, ExtractionJobStatus::Failed);
     assert_eq!(failed.attempt_count, 1);
-    store.complete_extraction_job(&b1_job, "w").unwrap();
+    store.complete_extraction_job(&b1_job, "w", None).unwrap();
     let jobs = store.lease_extraction_jobs(&lease("w", 10, 0)).unwrap();
     assert_eq!(episode_ids(&jobs), vec![b2]);
     assert_eq!(store.extraction_backlog(&a).unwrap().failed_jobs, 1);
 
-    store.retry_extraction_job(&a1_job).unwrap();
+    store.retry_extraction_job(&a1_job, None).unwrap();
     let jobs = store.lease_extraction_jobs(&lease("w", 10, 0)).unwrap();
     assert_eq!(episode_ids(&jobs), vec![a1]);
     let retried = store
@@ -234,7 +236,7 @@ fn a_leased_or_failed_job_blocks_later_jobs_of_its_scope_only() {
                 .unwrap();
         });
 
-    store.skip_extraction_job(&a1_job).unwrap();
+    store.skip_extraction_job(&a1_job, None).unwrap();
     let jobs = store.lease_extraction_jobs(&lease("w", 10, 0)).unwrap();
     assert_eq!(episode_ids(&jobs), vec![a2]);
 }
@@ -255,16 +257,16 @@ fn an_expired_lease_leases_again_and_only_the_owner_finishes_a_job() {
     assert_eq!(again[0].id, job.id);
     assert_eq!(again[0].lease_owner.as_deref(), Some("w2"));
 
-    assert!(store.complete_extraction_job(&job.id, "w1").is_err());
+    assert!(store.complete_extraction_job(&job.id, "w1", None).is_err());
     assert!(store
         .fail_extraction_job(&failure(&job.id, "w1", 1))
         .is_err());
     assert!(store
-        .complete_extraction_job("xjob_missing", "w2")
+        .complete_extraction_job("xjob_missing", "w2", None)
         .is_err_and(|status| status.is_not_found()));
-    let done = store.complete_extraction_job(&job.id, "w2").unwrap();
+    let done = store.complete_extraction_job(&job.id, "w2", None).unwrap();
     assert_eq!(done.status, ExtractionJobStatus::Done);
-    assert!(store.complete_extraction_job(&job.id, "w2").is_err());
+    assert!(store.complete_extraction_job(&job.id, "w2", None).is_err());
 }
 
 fn extraction_batch(
@@ -343,9 +345,13 @@ fn backlog_counts_drop_after_completion() {
 
     let jobs = store.lease_extraction_jobs(&lease("w", 10, 0)).unwrap();
     assert_eq!(store.extraction_backlog(&scope()).unwrap().jobs, 2);
-    store.complete_extraction_job(&jobs[0].id, "w").unwrap();
+    store
+        .complete_extraction_job(&jobs[0].id, "w", None)
+        .unwrap();
     assert_eq!(store.extraction_backlog(&scope()).unwrap().jobs, 1);
-    store.complete_extraction_job(&jobs[1].id, "w").unwrap();
+    store
+        .complete_extraction_job(&jobs[1].id, "w", None)
+        .unwrap();
     let backlog = store.extraction_backlog(&scope()).unwrap();
     assert_eq!(backlog.jobs, 0);
     assert_eq!(backlog.oldest_created_at_ms, None);
@@ -374,7 +380,7 @@ fn expired_leases_count_as_attempts_until_the_job_fails() {
     let backlog = store.extraction_backlog(&scope()).unwrap();
     assert_eq!((backlog.jobs, backlog.failed_jobs), (2, 1));
     let job_id = format!("xjob_{first}");
-    let skipped = store.skip_extraction_job(&job_id).unwrap();
+    let skipped = store.skip_extraction_job(&job_id, None).unwrap();
     assert_eq!(skipped.attempt_count, 3);
     assert_eq!(
         skipped.last_error.as_deref(),
@@ -396,7 +402,7 @@ fn completion_deletes_the_job() {
     ingest(&store, &scope(), 1);
     let job = store.lease_extraction_jobs(&lease("w", 1, 0)).unwrap()[0].clone();
 
-    let done = store.complete_extraction_job(&job.id, "w").unwrap();
+    let done = store.complete_extraction_job(&job.id, "w", None).unwrap();
     assert_eq!(done.status, ExtractionJobStatus::Done);
     assert_eq!(done.episode_id, job.episode_id);
     let rows = store
@@ -406,7 +412,7 @@ fn completion_deletes_the_job() {
         .get::<_, i64>(0);
     assert_eq!(rows, 0);
     assert!(store
-        .complete_extraction_job(&job.id, "w")
+        .complete_extraction_job(&job.id, "w", None)
         .is_err_and(|status| status.is_not_found()));
 }
 
@@ -436,4 +442,33 @@ fn the_lease_scope_check_reads_the_open_jobs_index() {
         .join("\n");
     assert!(plan.contains("memory_extraction_jobs_open"), "{plan}");
     assert!(plan.contains("Index Cond"), "{plan}");
+}
+
+#[test]
+fn a_queue_call_with_a_tenant_reaches_only_the_jobs_of_that_tenant() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let store = crate::test_store(&temp_dir("extraction_jobs_tenant_filter"), 3).unwrap();
+    let tenant = |id: &str| {
+        let mut scope = scope();
+        scope.tenant_id = Some(id.to_string());
+        scope
+    };
+    let (ep_a, ep_b) = (
+        ingest(&store, &tenant("a"), 1),
+        ingest(&store, &tenant("b"), 2),
+    );
+    let mut request = lease("w", 10, 0);
+    request.tenant_id = Some("a".to_string());
+    let leased = store.lease_extraction_jobs(&request).unwrap();
+    let mut other_tenant = failure(&leased[0].id, "w", 1);
+    other_tenant.tenant_id = Some("b".to_string());
+    let refused = store.fail_extraction_job(&other_tenant);
+    let rest = store.lease_extraction_jobs(&lease("w", 10, 1)).unwrap();
+
+    assert_eq!(episode_ids(&leased), [ep_a]);
+    assert_eq!(
+        refused.unwrap_err().code(),
+        finch_types::StatusCode::NotFound
+    );
+    assert_eq!(episode_ids(&rest), [ep_b]);
 }

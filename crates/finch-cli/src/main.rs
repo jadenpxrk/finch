@@ -35,6 +35,7 @@ finch: search and read a store of documents.
       Finds exact text in the documents that best match the words of REGEX.
   finch check ID \"TEXT\"
       Prints the lines of ID that contain TEXT, or the closest lines.
+  Put -- before text that starts with --, as in finch grep -- \"--force\".
 
 Settings:
   FINCH_POSTGRES_URL   Postgres server with pgvector. This setting is necessary.
@@ -64,6 +65,19 @@ const TITLE_CHARS: usize = 120;
 
 static DATE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:^|\D)((?:19|20)\d{2}-\d{2}-\d{2})(?:\D|$)").unwrap()); // a fixed valid pattern
+
+// The header names that `Document` reads for its id, title, and date.
+const ID_FIELDS: &[&str] = &["id", "document_id"];
+const TITLE_FIELDS: &[&str] = &["title", "subject"];
+const DATE_FIELDS: &[&str] = &[
+    "date",
+    "created",
+    "created_at",
+    "timestamp",
+    "sent",
+    "updated",
+];
+
 static HEADER_LINE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([A-Za-z][A-Za-z_-]{0,30}):\s?(.*)$").unwrap()); // a fixed valid pattern
 
@@ -108,6 +122,11 @@ impl Options {
         let mut flags = BTreeMap::new();
         let mut args = args.iter();
         while let Some(arg) = args.next() {
+            // After a bare `--`, a word that starts with `--` is text, not a flag.
+            if arg == "--" {
+                words.extend(args.cloned());
+                break;
+            }
             let Some(name) = arg.strip_prefix("--") else {
                 words.push(arg.clone());
                 continue;
@@ -385,6 +404,7 @@ fn add(settings: &Settings, options: &Options) -> ZResult<String> {
     if !root.is_dir() {
         return Err(Status::invalid_argument("finch add needs a directory"));
     }
+    SourceLexicalIndex::check_replaceable(&settings.index_dir)?;
     let index_only = options.flag("index-only").is_some();
     let mut store = if index_only {
         Some(MemoryStore::open(&settings.store)?)
@@ -394,39 +414,16 @@ fn add(settings: &Settings, options: &Options) -> ZResult<String> {
     let mut builder = SourceLexicalIndexBuilder::new();
     let mut pending = Vec::new();
     let mut skipped = 0usize;
+    let mut ids = BTreeSet::new();
     for path in text_files(&root)? {
         let Ok(text) = std::fs::read_to_string(&path) else {
             skipped += 1;
             continue;
         };
         let relative = path.strip_prefix(&root).unwrap_or(&path);
-        let document = Document::read(relative, text);
-        let sequence_no = builder.source_count() as i64;
-        let spans = ingest_episode(
-            EpisodeInput {
-                id: Some(document.id.clone()),
-                scope: settings.scope.clone(),
-                visibility: Visibility::Shared,
-                policy_tags: Vec::new(),
-                source_kind: SourceKind::Import,
-                actor: ActorKind::External,
-                sequence_no,
-                event_time_ms: document.date_ms,
-                valid_from_ms: None,
-                valid_to_ms: None,
-                raw_text: document.text.clone(),
-                blob_ref: Some(relative.display().to_string()),
-                mime_type: Some("text/plain".to_string()),
-                causal_parent_ids: Vec::new(),
-                metadata_json: Some(
-                    serde_json::json!({"path": relative.display().to_string(), "title": document.title})
-                        .to_string(),
-                ),
-            },
-            sequence_no,
-            &ChunkOptions::default(),
-        )
-        .spans;
+        let mut document = Document::read(relative, text);
+        keep_id_unique(&mut ids, &mut document, relative)?;
+        let spans = document_spans(settings, &document, relative, builder.source_count() as i64);
         builder.add_source(IndexedSource {
             source_id: &document.id,
             title: &document.title,
@@ -458,7 +455,58 @@ fn add(settings: &Settings, options: &Options) -> ZResult<String> {
     ))
 }
 
-/// Embeds `spans` and writes them. Opens the store first, or creates it at the embedding size.
+/// Adds the id of `document` to `ids`. An id from the file name that another document has
+/// becomes the path with its extension, so `report.md` and `report.txt` are two documents. An id
+/// from a header that another document has is an error.
+fn keep_id_unique(
+    ids: &mut BTreeSet<String>,
+    document: &mut Document,
+    relative: &Path,
+) -> ZResult<()> {
+    if !document.id_from_header && ids.contains(&document.id) {
+        document.id = relative.display().to_string();
+    }
+    if !ids.insert(document.id.clone()) {
+        return Err(Status::invalid_argument(format!(
+            "two documents have the id {}; the second is {}",
+            document.id,
+            relative.display()
+        )));
+    }
+    Ok(())
+}
+
+/// The spans of `document` as one imported episode at position `sequence_no`.
+fn document_spans(
+    settings: &Settings,
+    document: &Document,
+    relative: &Path,
+    sequence_no: i64,
+) -> Vec<finch_memory::SpanRecord> {
+    let path = relative.display().to_string();
+    let metadata = serde_json::json!({"path": path, "title": document.title});
+    let input = EpisodeInput {
+        id: Some(document.id.clone()),
+        scope: settings.scope.clone(),
+        visibility: Visibility::Shared,
+        policy_tags: Vec::new(),
+        source_kind: SourceKind::Import,
+        actor: ActorKind::External,
+        sequence_no,
+        event_time_ms: document.date_ms,
+        valid_from_ms: None,
+        valid_to_ms: None,
+        raw_text: document.text.clone(),
+        blob_ref: Some(path),
+        mime_type: Some("text/plain".to_string()),
+        causal_parent_ids: Vec::new(),
+        metadata_json: Some(metadata.to_string()),
+    };
+    ingest_episode(input, sequence_no, &ChunkOptions::default()).spans
+}
+
+/// Embeds `spans` and writes them in place of the spans that the store holds for their
+/// documents. Opens the store first, or creates it at the embedding size.
 fn store_spans(
     settings: &Settings,
     store: &mut Option<MemoryStore>,
@@ -484,10 +532,16 @@ fn store_spans(
             Err(error) => return Err(error),
         });
     }
-    store
+    let store = store
         .as_ref()
-        .ok_or_else(|| Status::internal("store is not open"))?
-        .append_vector_spans(&records)
+        .ok_or_else(|| Status::internal("store is not open"))?;
+    let documents = spans
+        .iter()
+        .map(|span| span.source_id.clone())
+        .collect::<BTreeSet<_>>();
+    // A document that changed since the last `finch add` keeps none of its old spans.
+    store.erase_episodes(&settings.scope, &documents.into_iter().collect::<Vec<_>>())?;
+    store.append_vector_spans(&records)
 }
 
 /// Text files under `root`, in path order, without hidden files and directories.
@@ -519,6 +573,8 @@ fn text_files(root: &Path) -> ZResult<Vec<PathBuf>> {
 /// `title: ...` at the top of the file, else from the file name and the text.
 struct Document {
     id: String,
+    /// Whether a header line gives the id. Without one, the id is the path without extension.
+    id_from_header: bool,
     title: String,
     directory: String,
     date_ms: Option<i64>,
@@ -544,9 +600,10 @@ impl Document {
             .file_stem()
             .map(|stem| stem.to_string_lossy().to_string())
             .unwrap_or_default();
-        let id = field(&["id", "document_id"])
-            .unwrap_or_else(|| relative.with_extension("").display().to_string());
-        let title = field(&["title", "subject"]).unwrap_or_else(|| {
+        let header_id = field(ID_FIELDS);
+        let id_from_header = header_id.is_some();
+        let id = header_id.unwrap_or_else(|| relative.with_extension("").display().to_string());
+        let title = field(TITLE_FIELDS).unwrap_or_else(|| {
             let first = text
                 .lines()
                 .map(str::trim)
@@ -563,19 +620,13 @@ impl Document {
                 first.to_string()
             }
         });
-        let date_ms = field(&[
-            "date",
-            "created",
-            "created_at",
-            "timestamp",
-            "sent",
-            "updated",
-        ])
-        .and_then(|value| first_date(&value))
-        .or_else(|| first_date(&stem))
-        .or_else(|| first_date(&text.lines().take(20).collect::<Vec<_>>().join("\n")));
+        let date_ms = field(DATE_FIELDS)
+            .and_then(|value| first_date(&value))
+            .or_else(|| first_date(&stem))
+            .or_else(|| first_date(&text.lines().take(20).collect::<Vec<_>>().join("\n")));
         Self {
             id,
+            id_from_header,
             title: clip(&title, TITLE_CHARS).to_string(),
             directory,
             date_ms,
@@ -585,15 +636,24 @@ impl Document {
 }
 
 /// The `name: value` lines at the top of a text, with lowercase names, and the body after the
-/// blank line that ends them. Without that blank line, the lines are body text, so `Ada: hi` at
-/// the top of a chat stays in the chat.
+/// blank line that ends them. Without that blank line, or without a name that `Document` reads,
+/// the lines are body text, so `Ada: hi` at the top of a chat stays in the chat.
 fn split_header(text: &str) -> (Vec<(String, String)>, &str) {
-    let mut fields = Vec::new();
+    let mut fields = Vec::<(String, String)>::new();
     let mut offset = 0;
     for row in text.split_inclusive('\n') {
         offset += row.len();
         if row.trim().is_empty() {
-            return (fields, &text[offset..]);
+            let known = fields.iter().any(|(name, _)| {
+                [ID_FIELDS, TITLE_FIELDS, DATE_FIELDS]
+                    .iter()
+                    .any(|names| names.contains(&name.as_str()))
+            });
+            return if known {
+                (fields, &text[offset..])
+            } else {
+                (Vec::new(), text)
+            };
         }
         let Some(captures) = HEADER_LINE.captures(row.trim_end()) else {
             break;
@@ -1049,8 +1109,39 @@ mod tests {
         );
         let (fields, body) = split_header("id: x\npath: a/b\n\nfirst line\n");
         assert_eq!((fields.len(), body), (2, "first line\n"));
+        // Speaker lines before a blank line name no document field, so they stay in the text.
+        let chat = "Ada: we ship Friday\nBo: ok\n\nAda: done\n";
+        assert_eq!(split_header(chat), (Vec::new(), chat));
         assert_eq!(doc.title, "eng — 2026 02 03 standup");
         assert_eq!(doc.date_ms, parse_date("2026-02-03"));
+    }
+
+    #[test]
+    fn files_with_one_name_get_separate_ids_and_a_repeated_id_header_is_an_error() {
+        let mut ids = BTreeSet::new();
+        let mut read = |path: &str, text: &str| {
+            let mut document = Document::read(Path::new(path), text.to_string());
+            keep_id_unique(&mut ids, &mut document, Path::new(path)).map(|()| document.id)
+        };
+        assert_eq!(read("a/report.md", "notes").unwrap(), "a/report");
+        assert_eq!(read("a/report.txt", "notes").unwrap(), "a/report.txt");
+        assert_eq!(read("jira/one.txt", "id: T-1\n\nbody").unwrap(), "T-1");
+        let repeated = read("jira/two.txt", "id: T-1\n\nbody").unwrap_err();
+        assert!(
+            repeated.message().contains("T-1") && repeated.message().contains("jira/two.txt"),
+            "{}",
+            repeated.message()
+        );
+        // A file name never takes the id that a header of another file declares.
+        assert_eq!(read("T-1.txt", "notes").unwrap(), "T-1.txt");
+    }
+
+    #[test]
+    fn a_bare_double_dash_ends_the_flags() {
+        let args = ["--limit", "5", "--", "--force", "push"].map(String::from);
+        let options = Options::parse(&args).unwrap();
+        assert_eq!(options.flag("limit"), Some("5"));
+        assert_eq!(options.text(), "--force push");
     }
 
     #[test]

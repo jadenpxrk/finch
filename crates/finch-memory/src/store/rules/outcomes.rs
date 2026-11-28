@@ -385,9 +385,11 @@ impl<'r> ChainCompletion<'r> {
                 continue;
             };
             let outcome_key = (rule.id.clone(), Some(target_slot_id.clone()));
-            if self.outcomes.get(&outcome_key).is_some_and(|outcome| {
-                matches!(outcome.status, RuleResolutionStatus::MissingTrigger)
-            }) {
+            if matches!(rule.action, RuleAction::DeriveValue)
+                && self.outcomes.get(&outcome_key).is_some_and(|outcome| {
+                    matches!(outcome.status, RuleResolutionStatus::MissingTrigger)
+                })
+            {
                 grouped
                     .entry(target_slot_id.clone())
                     .or_default()
@@ -680,7 +682,7 @@ fn independently_supports_slot_after(
     boundary_ms: i64,
     boundary_sequence_no: Option<i64>,
 ) -> bool {
-    !matches!(claim.claim_kind, ClaimKind::Relationship | ClaimKind::Event)
+    !claim.claim_kind.is_set_valued()
         && matches!(claim.status, MemoryStatus::Active)
         && matches!(claim.polarity, ClaimPolarity::Affirmative)
         && claim.object_value.is_some()
@@ -930,4 +932,45 @@ pub(super) fn rule_governs_target_slot(
         && matches!(rule.status, MemoryStatus::Active)
         && rule_bound_and_in_force(rule, at_ms)
         && (rule_target_slot(rule) == *slot || subject_wide_match)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ingest::{create_manual_claim, ManualClaimInput};
+
+    #[test]
+    fn a_set_member_alone_does_not_support_its_slot_after_a_rule_boundary() {
+        let supports = |claim_kind: ClaimKind| {
+            let claim = create_manual_claim(ManualClaimInput {
+                id: Some("claim_after".to_string()),
+                scope: MemoryScope::new("default"),
+                visibility: Visibility::Private,
+                policy_tags: Vec::new(),
+                claim_text: "user diet is vegan".to_string(),
+                subject: Some("user".to_string()),
+                predicate: Some("diet".to_string()),
+                object_value: Some("vegan".to_string()),
+                claim_kind,
+                polarity: ClaimPolarity::Affirmative,
+                source_span_ids: vec!["span_after".to_string()],
+                source_episode_ids: vec!["ep_after".to_string()],
+                asserted_by: "user".to_string(),
+                confidence: Some(1.0),
+                observed_at_ms: 20,
+                valid_from_ms: Some(20),
+                valid_to_ms: None,
+            });
+            independently_supports_slot_after(&claim, 10, None)
+        };
+
+        assert!(supports(ClaimKind::Fact));
+        for set_kind in [
+            ClaimKind::Relationship,
+            ClaimKind::Event,
+            ClaimKind::Preference,
+        ] {
+            assert!(!supports(set_kind), "{set_kind:?}");
+        }
+    }
 }

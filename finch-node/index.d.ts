@@ -223,6 +223,8 @@ export interface ExtractionLeaseRequest {
   leaseMs?: number
   maxAttempts?: number
   now?: string | number | Date
+  /** Tenant whose jobs to lease. Without it, the jobs of every tenant. A store with tenant isolation needs it. */
+  tenantId?: string
 }
 
 export interface ExtractionFailure {
@@ -230,6 +232,8 @@ export interface ExtractionFailure {
   workerId: string
   error: string
   maxAttempts?: number
+  /** Tenant of the job. A store with tenant isolation needs it. */
+  tenantId?: string
 }
 
 export interface ExtractionJob {
@@ -292,6 +296,7 @@ export declare class FinchMemory {
   ingestArtifact(input: ArtifactInput): Promise<Record<string, unknown>>
   addClaim(input: ClaimInput): Promise<Record<string, unknown>>
   listClaims(input: { scope: MemoryScope; limit?: number; at?: string | number | Date }): Promise<ClaimListResult>
+  /** `limit` has no effect. */
   getClaim(id: string, input: { scope: MemoryScope; limit?: number; at?: string | number | Date }): Promise<Record<string, unknown> | null>
   addCorrection(input: CorrectionInput): Promise<Record<string, unknown>>
   tombstone(input: Omit<CorrectionInput, 'operation'>): Promise<Record<string, unknown>>
@@ -301,10 +306,13 @@ export declare class FinchMemory {
   purgeForgotten(input: { scope: MemoryScope; before: Date | number }): Promise<PurgeReport>
   addSlotAlias(input: SlotAliasInput): Promise<Record<string, unknown>>
   leaseExtractionJobs(input: ExtractionLeaseRequest): Promise<{ jobs: ExtractionJob[] }>
-  completeExtractionJob(jobId: string, workerId: string): Promise<ExtractionJob>
+  /** `tenantId` is the tenant of the job. A store with tenant isolation needs it. */
+  completeExtractionJob(jobId: string, workerId: string, tenantId?: string): Promise<ExtractionJob>
   failExtractionJob(input: ExtractionFailure): Promise<ExtractionJob>
-  retryExtractionJob(jobId: string): Promise<ExtractionJob>
-  skipExtractionJob(jobId: string): Promise<ExtractionJob>
+  /** `tenantId` is the tenant of the job. A store with tenant isolation needs it. */
+  retryExtractionJob(jobId: string, tenantId?: string): Promise<ExtractionJob>
+  /** `tenantId` is the tenant of the job. A store with tenant isolation needs it. */
+  skipExtractionJob(jobId: string, tenantId?: string): Promise<ExtractionJob>
   extractionBacklog(scope: MemoryScope): Promise<ExtractionBacklog>
   search(input: SearchRequest): Promise<SearchResponse>
   projectAnswerReadyState(input: ProjectAnswerReadyStateRequest): Promise<Record<string, unknown>>
@@ -336,11 +344,11 @@ export declare class MemoryStore {
   addSlotAliasJson(inputJson: string, recordedAtMs: number): Promise<string>
   /** JSON of `ExtractionLeaseRequest`. */
   leaseExtractionJobsJson(requestJson: string): Promise<string>
-  completeExtractionJobJson(jobId: string, workerId: string): Promise<string>
+  completeExtractionJobJson(jobId: string, workerId: string, tenantId?: string | null): Promise<string>
   /** JSON of `ExtractionFailure`. */
   failExtractionJobJson(failureJson: string): Promise<string>
-  retryExtractionJobJson(jobId: string): Promise<string>
-  skipExtractionJobJson(jobId: string): Promise<string>
+  retryExtractionJobJson(jobId: string, tenantId?: string | null): Promise<string>
+  skipExtractionJobJson(jobId: string, tenantId?: string | null): Promise<string>
   extractionBacklogJson(scopeJson: string): string
   scanSlotAliasesJson(scopeJson: string, limit: number, atMs?: number): string
   querySpansJson(
@@ -391,6 +399,7 @@ export declare class MemoryStore {
   evaluateRetrievalBaselineJson(requestJson: string): string
   scanCorrectionsJson(scopeJson: string, limit: number): string
   scanClaimsJson(scopeJson: string, limit: number, atMs?: number): string
+  getClaimJson(scopeJson: string, id: string, atMs?: number): string
   scanCurrentClaimsJson(scopeJson: string, limit: number, atMs?: number): string
   scanArtifactsJson(scopeJson: string, limit: number, atMs?: number): string
   scanProfilesJson(scopeJson: string, limit: number, atMs?: number): string

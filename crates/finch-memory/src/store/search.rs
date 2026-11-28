@@ -273,11 +273,34 @@ fn join_overlapping_spans(spans: &[SpanRecord]) -> String {
     let mut text = String::new();
     let mut written_to = 0i64;
     for span in spans {
-        let skip = usize::try_from(written_to - span.byte_start).unwrap_or(0);
-        text.push_str(span.text.get(skip..).unwrap_or(""));
+        let overlap = usize::try_from(written_to - span.byte_start).unwrap_or(0);
+        text.push_str(&span.text[written_prefix_len(&text, span, overlap)..]);
         written_to = written_to.max(span.byte_end);
     }
     text
+}
+
+/// Number of bytes at the start of the span's text that `written` already ends with. `overlap`
+/// is that number in the source text. A purge changes the length of a span's text and keeps its
+/// offsets, so for such a span the number comes from the text that the two sides share.
+fn written_prefix_len(written: &str, span: &SpanRecord, overlap: usize) -> usize {
+    let text = span.text.as_str();
+    let source_len = usize::try_from(span.byte_end - span.byte_start).unwrap_or(0);
+    let on_char = |len: usize| {
+        let len = len.min(text.len());
+        (0..=len).rev().find(|&at| text.is_char_boundary(at))
+    };
+    if overlap == 0 || text.len() == source_len {
+        return on_char(overlap).unwrap_or(0);
+    }
+    // The start of the span changed by at most as many bytes as the whole span did.
+    let shortest = overlap.saturating_sub(source_len.saturating_sub(text.len()));
+    let longest = (overlap + text.len().saturating_sub(source_len)).min(text.len());
+    (shortest..=longest)
+        .rev()
+        .find(|&len| text.is_char_boundary(len) && written.ends_with(&text[..len]))
+        .or_else(|| on_char(overlap))
+        .unwrap_or(0)
 }
 
 fn sort_fused_sources(fused: &mut [(String, f32)]) {
@@ -447,6 +470,19 @@ impl MemoryStore {
         at_ms: Option<i64>,
     ) -> ZResult<Vec<SpanSearchHit>> {
         let _state_guard = self.lock_state_read(scope)?;
+        let hits = self.selected_source_hits(scope, selections, prior_hits, index, at_ms)?;
+        self.mask_forgotten(scope, hits, at_ms)
+    }
+
+    /// The hits of `hydrate_selected_sources` with their stored text.
+    fn selected_source_hits(
+        &self,
+        scope: &MemoryScope,
+        selections: &[SourceSpanSelection],
+        prior_hits: &[SpanSearchHit],
+        index: &SourceLexicalIndex,
+        at_ms: Option<i64>,
+    ) -> ZResult<Vec<SpanSearchHit>> {
         let plans = selections
             .iter()
             .map(|selection| selected_source_plan(selection, prior_hits, index))
@@ -465,7 +501,7 @@ impl MemoryStore {
             .map(|plan| plan.into_hits(|span_id| hydrated_by_id.get(span_id).cloned()))
             .collect::<Vec<_>>();
         let max_spans = per_source.iter().map(Vec::len).max().unwrap_or(0);
-        self.mask_forgotten(scope, interleave_by_rank(per_source, max_spans), at_ms)
+        Ok(interleave_by_rank(per_source, max_spans))
     }
 
     /// Sources ranked by reciprocal-rank fusion of the keyword and dense rankings, best first.
@@ -518,18 +554,24 @@ impl MemoryStore {
                 max_spans: usize::MAX,
             })
             .collect::<Vec<_>>();
+        let _state_guard = self.lock_state_read(scope)?;
         let mut spans_by_source = BTreeMap::<String, Vec<SpanRecord>>::new();
-        for hit in self.hydrate_selected_sources(scope, &selections, &[], index, at_ms)? {
+        for hit in self.selected_source_hits(scope, &selections, &[], index, at_ms)? {
             spans_by_source
                 .entry(hit.span.source_id.clone())
                 .or_default()
                 .push(hit.span);
         }
+        // The join reads byte offsets of the stored text, so the mask comes after it.
+        let forgotten = self.forgotten_text_values(scope, at_ms)?;
         Ok(spans_by_source
             .into_iter()
             .map(|(source_id, mut spans)| {
                 spans.sort_by_key(|span| span.span_index);
-                (source_id, join_overlapping_spans(&spans))
+                let mut ids = vec![source_id.as_str()];
+                ids.extend(spans.iter().map(|span| span.id.as_str()));
+                let text = forgotten.mask(&ids, &join_overlapping_spans(&spans));
+                (source_id, text)
             })
             .collect())
     }
@@ -1314,6 +1356,23 @@ impl MemoryStore {
             apply_corrections_to_claims(claims, &corrections, at_ms),
             limit,
         ))
+    }
+
+    /// Returns the claim `id` when it is active in the scope and valid at `at_ms`.
+    pub fn get_claim(
+        &self,
+        scope: &MemoryScope,
+        id: &str,
+        at_ms: Option<i64>,
+    ) -> ZResult<Option<ClaimRecord>> {
+        let _state_guard = self.lock_state_read(scope)?;
+        Ok(self
+            .claims_by_ids(scope, &[id.to_string()])?
+            .into_iter()
+            .find(|claim| {
+                matches!(claim.status, MemoryStatus::Active)
+                    && interval_holds_at(claim.valid_from_ms, claim.valid_to_ms, at_ms)
+            }))
     }
 
     pub(crate) fn claims_by_ids(

@@ -84,7 +84,8 @@ impl MemoryStore {
 
     /// Deletes the episodes of `scope` or a scope inside it, their spans, the claims, rules, and
     /// corrections that cite them, and every record derived from those. Then projects the state
-    /// of each affected scope again.
+    /// of each affected scope again. The spans of an episode go also when the store holds only
+    /// its spans.
     pub fn erase_episodes(
         &self,
         scope: &MemoryScope,
@@ -102,26 +103,29 @@ impl MemoryStore {
                 erased.insert(EPISODES_COLLECTION, doc.pk.clone());
                 scopes.insert(doc_scope(doc));
             }
-            let found = erased.of(EPISODES_COLLECTION).clone();
-            let found = found.iter().map(String::as_str).collect::<Vec<_>>();
-            let spans = scan_in_chunks(&self.spans, &found, usize::MAX, &["id"], |chunk| {
+            // A document written as spans alone has no episode row, so the ids find its spans.
+            let spans = scan_in_chunks(&self.spans, &ids, usize::MAX, SCOPE_FIELDS, |chunk| {
                 format!(
                     "{} AND source_type = 'episode'",
                     scoped_field_in(scope, "source_id", chunk)
                 )
             })?;
-            for doc in spans {
+            for doc in &spans {
                 erased.insert(SPANS_COLLECTION, doc.pk.clone());
+                scopes.insert(doc_scope(doc));
             }
             let jobs = scan_in_chunks(
                 &self.extraction_jobs,
-                &found,
+                &ids,
                 usize::MAX,
                 &["episode_id"],
                 |chunk| scoped_field_in(scope, "episode_id", chunk),
             )?;
             for doc in jobs {
                 erased.insert(EXTRACTION_JOBS_COLLECTION, doc.pk.clone());
+            }
+            if erased.is_empty() {
+                return Ok(ErasureReport::default());
             }
             let erased = self.erase_with_dependents(scope, erased)?;
             for scope in &scopes {
@@ -133,7 +137,8 @@ impl MemoryStore {
 
     /// Physically deletes what the forget corrections of `scope` hide, for each that took effect
     /// before `before_ms`: the forgotten claims, every record derived from them, and the
-    /// forgotten values in the spans that cite them. A second purge finds nothing more to delete.
+    /// forgotten values in the text of every span and episode of the scope of the forget. A
+    /// second purge finds nothing more to delete.
     pub fn purge_forgotten(&self, scope: &MemoryScope, before_ms: i64) -> ZResult<PurgeReport> {
         self.with_state_mutation(scope, true, || {
             let forgets = self.scan_corrections_with_filter(
@@ -145,25 +150,22 @@ impl MemoryStore {
                 )),
             )?;
             let mut report = PurgeReport::default();
-            let mut redacted = BTreeSet::new();
+            let mut values = BTreeMap::<MemoryScope, ForgottenValues>::new();
             for correction in forgets {
                 let targets = self.forget_targets(&correction)?;
-                let mut plan = ForgetPlan::default();
-                let stripped = self.plan_forget(correction.clone(), &mut plan)?;
-                if plan.claim_ids.is_empty() {
+                // The marker that an earlier purge wrote holds no value, so it is not purged again.
+                if targets
+                    .iter()
+                    .all(|claim| is_forget_marker(&correction, claim))
+                {
                     continue;
                 }
-                let span_ids = targets
-                    .iter()
-                    .flat_map(|claim| claim.source_span_ids.iter().cloned())
-                    .collect::<BTreeSet<_>>();
-                let episode_ids = targets
-                    .iter()
-                    .flat_map(|claim| claim.source_episode_ids.iter().cloned())
-                    .collect::<BTreeSet<_>>();
-                let values = forgotten_values(&targets);
-                redacted.extend(self.redact_spans(&correction.scope, &span_ids, &values)?);
-                self.redact_episodes(&correction.scope, &episode_ids, &values)?;
+                values
+                    .entry(correction.scope.clone())
+                    .or_default()
+                    .add(&targets);
+                let mut plan = ForgetPlan::default();
+                let stripped = plan_forget(correction.clone(), targets, &mut plan);
                 if stripped.id != correction.id {
                     self.corrections
                         .delete(&format!("id = '{}'", sql_escape(&correction.id)))?;
@@ -176,6 +178,12 @@ impl MemoryStore {
                 for (table, count) in erased.report().deleted_rows {
                     *report.deleted_rows.entry(table).or_default() += count;
                 }
+            }
+            // A forget of one user must not change the text of another user of `scope`.
+            let mut redacted = BTreeSet::new();
+            for (forget_scope, values) in &values {
+                redacted.extend(self.redact_spans(forget_scope, values)?);
+                self.redact_episodes(forget_scope, values)?;
             }
             report.redacted_span_ids = redacted.into_iter().collect();
             Ok(report)
@@ -193,60 +201,117 @@ impl MemoryStore {
         if hits.is_empty() {
             return Ok(hits);
         }
-        let forgets = self.scan_corrections_with_filter(
-            scope,
-            usize::MAX,
-            Some(format!(
-                "{} AND operation = 'forget' AND target_type = 'claim'",
-                active_correction_filter(at_ms)
-            )),
-        )?;
-        let mut values = BTreeSet::new();
-        for correction in &forgets {
-            let targets = if correction.target_ids.is_empty() {
-                named_slot_targets(correction, self.forget_targets(correction)?)
-            } else {
-                self.claims_by_ids(&correction.scope, &correction.target_ids)?
-            };
-            values.extend(forgotten_values(&targets));
-        }
+        let values = self.forgotten_text_values(scope, at_ms)?;
         if values.is_empty() {
             return Ok(hits);
         }
         Ok(hits
             .into_iter()
             .map(|mut hit| {
-                hit.span.text = mask_values(&hit.span.text, &values);
-                hit.span.lexical_text = mask_values(&hit.span.lexical_text, &values);
+                let sources = [hit.span.id.as_str(), hit.span.source_id.as_str()];
+                hit.span.text = values.mask(&sources, &hit.span.text);
+                hit.span.lexical_text = values.mask(&sources, &hit.span.lexical_text);
                 hit
             })
             .collect())
     }
 
-    /// Masks `values` in the text of the spans of `scope`, clears their vectors, and returns the
-    /// spans it changed.
+    /// The values that the active forget corrections of `scope` hide in raw text at `at_ms`.
+    pub(crate) fn forgotten_text_values(
+        &self,
+        scope: &MemoryScope,
+        at_ms: Option<i64>,
+    ) -> ZResult<ForgottenValues> {
+        let mut values = ForgottenValues::default();
+        for correction in &self.active_forgets(scope, at_ms)? {
+            values.add(&self.hidden_claims(correction)?);
+        }
+        Ok(values)
+    }
+
+    /// The claims whose values a forget hides from a reader: the claims it names by id. Without
+    /// ids, the claims that its selector names, or every claim it targets when it names none.
+    fn hidden_claims(&self, correction: &CorrectionRecord) -> ZResult<Vec<ClaimRecord>> {
+        if correction.target_ids.is_empty() {
+            let targets = self.forget_targets(correction)?;
+            return Ok(named_slot_targets(correction, targets));
+        }
+        self.claims_by_ids(&correction.scope, &correction.target_ids)
+    }
+
+    /// `records` without the values that an active forget correction hides at `at_ms`: a version
+    /// that holds the value of a hidden claim goes, and a set loses the members that its hidden
+    /// claims state.
+    pub(crate) fn without_forgotten_states(
+        &self,
+        scope: &MemoryScope,
+        mut records: Vec<StateRecord>,
+        at_ms: Option<i64>,
+    ) -> ZResult<Vec<StateRecord>> {
+        if records.is_empty() {
+            return Ok(records);
+        }
+        // The value of each forgotten claim by claim id, so a forget reaches only the versions
+        // that hold its own claims.
+        let mut forgotten = BTreeMap::<MemoryId, String>::new();
+        for correction in &self.active_forgets(scope, at_ms)? {
+            for claim in self.hidden_claims(correction)? {
+                let value = claim.object_value.as_deref().unwrap_or_default();
+                forgotten.insert(claim.id, canonical_slot_part(value));
+            }
+        }
+        records.retain_mut(|record| {
+            let hidden = record
+                .claim_ids
+                .iter()
+                .filter_map(|id| forgotten.get(id))
+                .collect::<BTreeSet<_>>();
+            if hidden.is_empty() {
+                return true;
+            }
+            if record.members.is_empty() {
+                return record.object_value.is_none();
+            }
+            record
+                .members
+                .retain(|member| !hidden.contains(&canonical_slot_part(member)));
+            !record.members.is_empty()
+        });
+        Ok(records)
+    }
+
+    /// The forget corrections of `scope` that hide claims at `at_ms`.
+    fn active_forgets(
+        &self,
+        scope: &MemoryScope,
+        at_ms: Option<i64>,
+    ) -> ZResult<Vec<CorrectionRecord>> {
+        self.scan_corrections_with_filter(
+            scope,
+            usize::MAX,
+            Some(format!(
+                "{} AND operation = 'forget' AND target_type = 'claim'",
+                active_correction_filter(at_ms)
+            )),
+        )
+    }
+
+    /// Masks `values` in the text of every span of `scope`, clears the vectors of the spans it
+    /// changed, and returns their ids in order.
     fn redact_spans(
         &self,
         scope: &MemoryScope,
-        span_ids: &BTreeSet<MemoryId>,
-        values: &BTreeSet<String>,
+        values: &ForgottenValues,
     ) -> ZResult<Vec<MemoryId>> {
-        if span_ids.is_empty() || values.is_empty() {
+        if values.is_empty() {
             return Ok(Vec::new());
         }
-        let mut changed = Vec::new();
-        let mut docs = Vec::new();
-        for doc in self
-            .spans
-            .fetch(span_ids.iter().cloned().collect())?
-            .values()
-        {
+        let mut docs = BTreeMap::new();
+        for doc in self.scope_rows(&self.spans, scope)?.iter() {
             let mut span = span_from_doc(doc)?;
-            if !span.scope.matches_filter(scope) {
-                continue;
-            }
-            let text = mask_values(&span.text, values);
-            let lexical_text = mask_values(&span.lexical_text, values);
+            let sources = [span.id.as_str(), span.source_id.as_str()];
+            let text = values.mask(&sources, &span.text);
+            let lexical_text = values.mask(&sources, &span.lexical_text);
             if text == span.text && lexical_text == span.lexical_text {
                 continue;
             }
@@ -256,92 +321,30 @@ impl MemoryStore {
             );
             span.text = text;
             span.lexical_text = lexical_text;
-            docs.push(span_doc(&span, None, keyword_indexed).map_err(json_error)?);
-            changed.push(span.id);
+            let doc = span_doc(&span, None, keyword_indexed).map_err(json_error)?;
+            docs.insert(span.id, doc);
         }
-        upsert_many(&self.spans, docs)?;
+        let changed = docs.keys().cloned().collect();
+        upsert_many(&self.spans, docs.into_values().collect())?;
         Ok(changed)
     }
 
-    /// Masks `values` in the raw text of the episodes of `scope`. Every other column stays.
-    fn redact_episodes(
-        &self,
-        scope: &MemoryScope,
-        episode_ids: &BTreeSet<MemoryId>,
-        values: &BTreeSet<String>,
-    ) -> ZResult<()> {
-        if episode_ids.is_empty() || values.is_empty() {
+    /// Masks `values` in the raw text of every episode of `scope`. Every other column stays.
+    fn redact_episodes(&self, scope: &MemoryScope, values: &ForgottenValues) -> ZResult<()> {
+        if values.is_empty() {
             return Ok(());
         }
-        let mut docs = Vec::new();
-        for doc in self
-            .episodes
-            .fetch(episode_ids.iter().cloned().collect())?
-            .values()
-        {
+        let mut docs = BTreeMap::new();
+        for doc in self.scope_rows(&self.episodes, scope)?.iter() {
             let Some(text) = doc.fields.get("raw_text").and_then(Value::as_str) else {
                 continue;
             };
-            let masked = mask_values(text, values);
-            if masked != text && doc_scope(doc).matches_filter(scope) {
-                docs.push((**doc).clone().set("raw_text", masked));
+            let masked = values.mask(&[doc.pk.as_str()], text);
+            if masked != text {
+                docs.insert(doc.pk.clone(), (**doc).clone().set("raw_text", masked));
             }
         }
-        upsert_many(&self.episodes, docs)
-    }
-
-    /// The correction without any text of the claims it forgets, and the plan that deletes
-    /// them. The record drops its selector and new value, and any reason or metadata that names
-    /// a forgotten value. An id that names one becomes a hash of the scope, slot, and times. The
-    /// target ids then name only forget markers, so the record reaches no other claim. Any other
-    /// correction returns unchanged.
-    pub(crate) fn plan_forget(
-        &self,
-        mut correction: CorrectionRecord,
-        plan: &mut ForgetPlan,
-    ) -> ZResult<CorrectionRecord> {
-        if !forgets_claims(&correction) {
-            return Ok(correction);
-        }
-        let targets = self.forget_targets(&correction)?;
-        if targets.is_empty() {
-            return Ok(correction);
-        }
-        let values = targets
-            .iter()
-            .filter_map(|claim| claim.object_value.as_deref())
-            .map(str::to_lowercase)
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>();
-        let names_value = |text: &str| {
-            let text = text.to_lowercase();
-            values.iter().any(|value| text.contains(value.as_str()))
-        };
-        if correction.reason.as_deref().is_some_and(names_value) {
-            correction.reason = None;
-        }
-        if correction.metadata_json.as_deref().is_some_and(names_value) {
-            correction.metadata_json = None;
-        }
-        if names_value(&correction.id) {
-            correction.id = format!(
-                "forget_{}",
-                crate::ingest::stable_hash_hex(&[
-                    &format!("{:?}", correction.scope),
-                    correction.target_slot_id.as_deref().unwrap_or_default(),
-                    &correction.effective_at_ms.to_string(),
-                    &correction.created_at_ms.to_string(),
-                ])
-            );
-        }
-        let (marker_ids, markers) = forget_markers(&correction, &targets);
-        correction.target_ids = marker_ids;
-        correction.target_selector = None;
-        correction.new_value = None;
-        plan.claim_ids
-            .extend(targets.into_iter().map(|claim| claim.id));
-        plan.markers.extend(markers);
-        Ok(correction)
+        upsert_many(&self.episodes, docs.into_values().collect())
     }
 
     /// Deletes the planned claims with every record derived from them, writes the forget markers
@@ -621,6 +624,59 @@ impl MemoryStore {
     }
 }
 
+/// The forget correction without any text of the `targets` it forgets, and the plan that deletes
+/// them. The record drops its selector and new value, and any reason or metadata that names a
+/// forgotten value. An id that names one becomes a hash of the scope, slot, and times. The
+/// target ids then name only forget markers, so the record reaches no other claim.
+fn plan_forget(
+    mut correction: CorrectionRecord,
+    targets: Vec<ClaimRecord>,
+    plan: &mut ForgetPlan,
+) -> CorrectionRecord {
+    let values = targets
+        .iter()
+        .filter_map(|claim| claim.object_value.as_deref())
+        .map(str::to_lowercase)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let names_value = |text: &str| {
+        let text = text.to_lowercase();
+        values.iter().any(|value| text.contains(value.as_str()))
+    };
+    if correction.reason.as_deref().is_some_and(names_value) {
+        correction.reason = None;
+    }
+    if correction.metadata_json.as_deref().is_some_and(names_value) {
+        correction.metadata_json = None;
+    }
+    if names_value(&correction.id) {
+        correction.id = format!(
+            "forget_{}",
+            crate::ingest::stable_hash_hex(&[
+                &format!("{:?}", correction.scope),
+                correction.target_slot_id.as_deref().unwrap_or_default(),
+                &correction.effective_at_ms.to_string(),
+                &correction.created_at_ms.to_string(),
+            ])
+        );
+    }
+    let (marker_ids, markers) = forget_markers(&correction, &targets);
+    correction.target_ids = marker_ids;
+    correction.target_selector = None;
+    correction.new_value = None;
+    plan.claim_ids
+        .extend(targets.into_iter().map(|claim| claim.id));
+    plan.markers.extend(markers);
+    correction
+}
+
+/// A claim that a purge of `correction` wrote in place of the claims it deleted.
+fn is_forget_marker(correction: &CorrectionRecord, claim: &ClaimRecord) -> bool {
+    correction.target_ids.contains(&claim.id)
+        && claim.claim_text.is_empty()
+        && claim.object_value.is_none()
+}
+
 /// One forget id per slot of the forgotten claims, and a marker claim with that id for each
 /// single-valued slot. A marker has no value and holds from the forget, and the forget targets
 /// it, so the slot projects a tombstone and an older claim does not become current. A set
@@ -634,7 +690,9 @@ fn forget_markers(
         // A claim with no slot gets its own id, hashed so the id names no value.
         let key = claim.slot_id.clone().unwrap_or_else(|| claim.id.clone());
         let entry = newest.entry(key).or_default();
-        if !is_set_valued(claim) && entry.is_none_or(|current| claim_is_newer(claim, current)) {
+        if !claim.claim_kind.is_set_valued()
+            && entry.is_none_or(|current| claim_is_newer(claim, current))
+        {
             *entry = Some(claim);
         }
     }
@@ -667,17 +725,8 @@ fn forget_markers(
     (ids, markers)
 }
 
-/// Claims of these kinds are members of a set, one lifecycle per value.
-fn is_set_valued(claim: &ClaimRecord) -> bool {
-    matches!(
-        claim.claim_kind,
-        ClaimKind::Relationship | ClaimKind::Event | ClaimKind::Preference
-    )
-}
-
-/// The claims that a forget without claim ids hides in raw text: the targets its selector names,
-/// or every target when they hold one value. A slot with several values keeps the values that
-/// the forget does not name.
+/// The claims that a forget without claim ids hides: the targets its selector names, or every
+/// target when it names none of them.
 fn named_slot_targets(
     correction: &CorrectionRecord,
     targets: Vec<ClaimRecord>,
@@ -691,26 +740,63 @@ fn named_slot_targets(
     if targets.iter().any(named) {
         return targets.into_iter().filter(named).collect();
     }
-    let values = targets
-        .iter()
-        .filter_map(|claim| claim.object_value.as_deref().map(canonical_slot_part))
-        .collect::<BTreeSet<_>>();
-    if values.len() == 1 {
-        targets
-    } else {
-        Vec::new()
-    }
+    targets
 }
 
-/// The lowercase values of the claims, skipping values shorter than 3 characters, which would
-/// mask common words.
-fn forgotten_values(claims: &[ClaimRecord]) -> BTreeSet<String> {
-    claims
-        .iter()
-        .filter_map(|claim| claim.object_value.as_deref())
-        .map(|value| value.trim().to_lowercase())
-        .filter(|value| value.chars().count() >= 3)
-        .collect()
+/// A value this short can also be a common word, so it is hidden only in the text that states it.
+const MIN_CHARS_HIDDEN_ANYWHERE: usize = 3;
+
+/// The lowercase values that forget corrections hide in raw text.
+#[derive(Debug, Default)]
+pub(crate) struct ForgottenValues {
+    /// Values hidden wherever they occur.
+    anywhere: BTreeSet<String>,
+    /// Short values by the id of each span and episode that a forgotten claim cites.
+    in_source: BTreeMap<MemoryId, BTreeSet<String>>,
+}
+
+impl ForgottenValues {
+    fn add(&mut self, claims: &[ClaimRecord]) {
+        for claim in claims {
+            let Some(value) = claim.object_value.as_deref().map(str::trim) else {
+                continue;
+            };
+            let value = value.to_lowercase();
+            if value.chars().count() >= MIN_CHARS_HIDDEN_ANYWHERE {
+                self.anywhere.insert(value);
+            } else if !value.is_empty() {
+                for id in claim
+                    .source_span_ids
+                    .iter()
+                    .chain(&claim.source_episode_ids)
+                {
+                    self.in_source
+                        .entry(id.clone())
+                        .or_default()
+                        .insert(value.clone());
+                }
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.anywhere.is_empty() && self.in_source.is_empty()
+    }
+
+    /// `text` of the record with ids `sources`, with every hidden value masked.
+    pub(crate) fn mask(&self, sources: &[&str], text: &str) -> String {
+        let mut short = sources
+            .iter()
+            .filter_map(|id| self.in_source.get(*id))
+            .flatten()
+            .peekable();
+        if short.peek().is_none() {
+            return mask_values(text, &self.anywhere);
+        }
+        let mut values = self.anywhere.clone();
+        values.extend(short.cloned());
+        mask_values(text, &values)
+    }
 }
 
 /// `text` with each whole-word, case-insensitive occurrence of a value replaced by
@@ -754,10 +840,6 @@ pub(crate) fn mask_values(text: &str, values: &BTreeSet<String>) -> String {
         }
     }
     out
-}
-
-fn forgets_claims(correction: &CorrectionRecord) -> bool {
-    correction.operation == CorrectionOperation::Forget && correction.target_type == "claim"
 }
 
 fn doc_scope(doc: &Doc) -> MemoryScope {

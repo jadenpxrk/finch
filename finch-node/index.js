@@ -24,9 +24,17 @@ function toMs(value) {
   throw new TypeError('timestamp must be Date, RFC3339 string, epoch ms, or undefined');
 }
 
+const SCOPE_KEYS = new Set([
+  'space', 'spaceId', 'space_id', 'tenantId', 'tenant_id', 'userId', 'user_id',
+  'agentId', 'agent_id', 'projectId', 'project_id', 'threadId', 'thread_id',
+]);
+
 function scope(input) {
   const space = input.space ?? input.spaceId ?? input.space_id;
   if (!space) throw new Error('scope.space is required');
+  // A misspelled key would leave its id out and widen the scope.
+  const unknown = Object.keys(input).filter((key) => !SCOPE_KEYS.has(key));
+  if (unknown.length > 0) throw new Error(`scope has unknown keys: ${unknown.join(', ')}`);
   return {
     space_id: space,
     tenant_id: input.tenantId ?? input.tenant_id ?? null,
@@ -112,7 +120,7 @@ class FinchMemory {
     );
   }
 
-  ingestEpisode(input) {
+  async ingestEpisode(input) {
     const at = toMs(input.eventTime) ?? nowMs();
     const payload = {
       id: input.id ?? null,
@@ -134,7 +142,7 @@ class FinchMemory {
     return this.store.ingestEpisodeJson(JSON.stringify(payload), at).then(parse);
   }
 
-  ingestArtifact(input) {
+  async ingestArtifact(input) {
     const text = input.text ?? '';
     const at = toMs(input.eventTime) ?? nowMs();
     const title = input.title ?? input.uri ?? 'artifact';
@@ -162,7 +170,7 @@ class FinchMemory {
     return this.store.ingestArtifactTextJson(JSON.stringify(payload), text).then(parse);
   }
 
-  addClaim(input) {
+  async addClaim(input) {
     const now = nowMs();
     const payload = {
       id: input.id ?? null,
@@ -192,11 +200,10 @@ class FinchMemory {
   }
 
   async getClaim(id, input) {
-    const claims = parse(this.store.scanClaimsJson(JSON.stringify(scope(input.scope)), input.limit ?? 1000, toMs(input.at)));
-    return claims.find((claim) => claim.id === id) ?? null;
+    return parse(this.store.getClaimJson(JSON.stringify(scope(input.scope)), id, toMs(input.at)));
   }
 
-  addCorrection(input) {
+  async addCorrection(input) {
     const target = input.target ?? {};
     const selector = input.selector == null || typeof input.selector === 'string'
       ? input.selector
@@ -223,11 +230,11 @@ class FinchMemory {
     return this.store.addCorrectionJson(JSON.stringify(payload), nowMs()).then(parse);
   }
 
-  tombstone(input) {
+  async tombstone(input) {
     return this.addCorrection({ ...input, operation: 'tombstone' });
   }
 
-  restore(input) {
+  async restore(input) {
     return this.addCorrection({ ...input, operation: 'restore' });
   }
 
@@ -238,53 +245,55 @@ class FinchMemory {
       lease_ms: input.leaseMs ?? 60000,
       max_attempts: input.maxAttempts ?? 3,
       now_ms: toMs(input.now) ?? null,
+      tenant_id: input.tenantId ?? null,
     };
     return { jobs: parse(await this.store.leaseExtractionJobsJson(JSON.stringify(payload))) };
   }
 
-  completeExtractionJob(jobId, workerId) {
-    return this.store.completeExtractionJobJson(jobId, workerId).then(parse);
+  async completeExtractionJob(jobId, workerId, tenantId) {
+    return this.store.completeExtractionJobJson(jobId, workerId, tenantId ?? null).then(parse);
   }
 
-  failExtractionJob(input) {
+  async failExtractionJob(input) {
     const payload = {
       job_id: input.jobId,
       worker_id: input.workerId,
       error: String(input.error),
       max_attempts: input.maxAttempts ?? 3,
+      tenant_id: input.tenantId ?? null,
     };
     return this.store.failExtractionJobJson(JSON.stringify(payload)).then(parse);
   }
 
-  retryExtractionJob(jobId) {
-    return this.store.retryExtractionJobJson(jobId).then(parse);
+  async retryExtractionJob(jobId, tenantId) {
+    return this.store.retryExtractionJobJson(jobId, tenantId ?? null).then(parse);
   }
 
-  skipExtractionJob(jobId) {
-    return this.store.skipExtractionJobJson(jobId).then(parse);
+  async skipExtractionJob(jobId, tenantId) {
+    return this.store.skipExtractionJobJson(jobId, tenantId ?? null).then(parse);
   }
 
-  extractionBacklog(input) {
-    return Promise.resolve(parse(this.store.extractionBacklogJson(JSON.stringify(scope(input)))));
+  async extractionBacklog(input) {
+    return parse(this.store.extractionBacklogJson(JSON.stringify(scope(input))));
   }
 
-  eraseScope(input) {
+  async eraseScope(input) {
     return this.store.eraseScopeJson(JSON.stringify(scope(input.scope))).then(parse);
   }
 
-  eraseEpisodes(input) {
+  async eraseEpisodes(input) {
     return this.store
       .eraseEpisodesJson(JSON.stringify(scope(input.scope)), input.episodeIds)
       .then(parse);
   }
 
-  purgeForgotten(input) {
+  async purgeForgotten(input) {
     return this.store
       .purgeForgottenJson(JSON.stringify(scope(input.scope)), toMs(input.before))
       .then(parse);
   }
 
-  addSlotAlias(input) {
+  async addSlotAlias(input) {
     const payload = {
       id: input.id ?? null,
       scope: scope(input.scope),
@@ -301,7 +310,7 @@ class FinchMemory {
     return this.store.addSlotAliasJson(JSON.stringify(payload), nowMs()).then(parse);
   }
 
-  search(input) {
+  async search(input) {
     const scopeJson = JSON.stringify(scope(input.scope));
     const k = input.topK ?? 10;
     const at = toMs(input.at);
@@ -320,7 +329,7 @@ class FinchMemory {
     if (input.includeNeighbors) {
       hits = parse(this.store.completeSpanEvidenceJson(scopeJson, JSON.stringify(hits), 1, 1, scanLimit, at));
     }
-    return Promise.resolve({ hits });
+    return { hits };
   }
 
   async packContext(input) {
@@ -399,7 +408,7 @@ class FinchMemory {
     ));
   }
 
-  compareSearchModes(input) {
+  async compareSearchModes(input) {
     const scopeJson = JSON.stringify(scope(input.scope));
     const k = input.topK ?? 10;
     const at = toMs(input.at);
@@ -407,7 +416,7 @@ class FinchMemory {
     const vector = this.store.querySpansJson(scopeJson, embedding, k, at);
     const keyword = this.store.keywordSearchSpansJson(scopeJson, input.query, k, 1000, at);
     const hybrid = this.store.hybridSearchSpansJson(scopeJson, embedding, input.query, k, 1000, at);
-    return Promise.resolve(parse(this.store.evaluateRetrievalBaselineJson(JSON.stringify({
+    return parse(this.store.evaluateRetrievalBaselineJson(JSON.stringify({
       vector_hits: parse(vector),
       keyword_hits: parse(keyword),
       hybrid_hits: parse(hybrid),
@@ -415,7 +424,7 @@ class FinchMemory {
       required_exact_tokens: input.requiredExactTokens ?? [],
       stale_or_inadmissible_span_ids: input.staleOrInadmissibleSpanIds ?? [],
       k,
-    }))));
+    })));
   }
 }
 

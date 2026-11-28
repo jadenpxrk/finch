@@ -715,6 +715,76 @@ fn answer_ready_projection_fails_closed_for_an_unresolved_dependency_until_direc
 }
 
 #[test]
+fn mark_unsupported_rule_keeps_its_target_while_its_trigger_was_never_stated() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("mark_unsupported_missing_trigger");
+    let store = EvidencedStore::create(&dir, 3).unwrap();
+    let scope = scope();
+    let target = make_claim(
+        &scope,
+        "claim_badge_color",
+        "badge",
+        "color",
+        Some("green"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    let mut rule = exact_dependency_rule(
+        "rule_office_badge",
+        "office",
+        "city",
+        "badge",
+        "color",
+        RuleAction::MarkUnsupported,
+        None,
+    );
+    rule.valid_from_ms = Some(15);
+    store
+        .apply_state_mutation_batch(StateMutationBatch {
+            extraction_job: None,
+            scope: scope.clone(),
+            transaction_time_ms: 20,
+            propagation_seed: "mark-unsupported-missing-trigger".to_string(),
+            max_rule_hops: 8,
+            claims: vec![target],
+            entities: Vec::new(),
+            rules: vec![rule],
+            slot_aliases: Vec::new(),
+            corrections: Vec::new(),
+        })
+        .unwrap();
+    let target_slot_id = store
+        .scan_slots(&scope, usize::MAX, Some(20))
+        .unwrap()
+        .into_iter()
+        .find(|slot| slot.subject.as_deref() == Some("badge"))
+        .unwrap()
+        .slot_key;
+    let projection = store
+        .project_answer_ready_state(
+            &scope,
+            &AnswerReadyStateRequest {
+                selections: &StateReadSelection::answer_targets(&[target_slot_id]),
+                ..answer_request(
+                    "mark-unsupported-missing-trigger",
+                    "What color is the badge?",
+                    &[],
+                    20,
+                    0,
+                    Some(20),
+                )
+            },
+        )
+        .unwrap();
+
+    assert_eq!(projection.support.state, AnswerSupportState::Supported);
+    assert!(projection
+        .claims
+        .iter()
+        .any(|claim| claim.object_value.as_deref() == Some("green")));
+}
+
+#[test]
 fn unresolved_dependency_propagates_unsupported_state_through_multiple_hops() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("unresolved_dependency_multihop");

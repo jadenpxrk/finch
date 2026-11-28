@@ -36,7 +36,7 @@ jobs:
 
       # The bindings build in their own jobs.
       - name: Test Rust crates
-        run: cargo test -p finch-types -p finch-memory --all-targets
+        run: cargo test -p finch-types -p finch-memory -p finch-cli --all-targets
 
   clippy:
     runs-on: ubuntu-latest
@@ -46,7 +46,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.93.1
         with:
-          components: clippy
+          components: clippy, rustfmt
+
+      - name: Format
+        run: cargo fmt --all -- --check
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -63,6 +66,23 @@ jobs:
 
   python-binding:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: finch
+          POSTGRES_PASSWORD: finch
+          POSTGRES_DB: finch
+        ports:
+          - 5432:5432
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U finch"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FINCH_MEMORY_TEST_POSTGRES_URL: postgres://finch:finch@localhost:5432/finch
     steps:
       - uses: actions/checkout@v4
 
@@ -89,3 +109,47 @@ jobs:
 
       - name: Import finch
         run: .venv/bin/python -c "import finch; assert hasattr(finch, 'FinchMemory')"
+
+      - name: Python tests
+        run: .venv/bin/python -m unittest discover -s finch-py/tests -v
+
+  node-binding:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: finch
+          POSTGRES_PASSWORD: finch
+          POSTGRES_DB: finch
+        ports:
+          - 5432:5432
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U finch"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FINCH_MEMORY_TEST_POSTGRES_URL: postgres://finch:finch@localhost:5432/finch
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.93.1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the Node addon
+        working-directory: finch-node
+        run: npm install && npm run build
+
+      - name: Node tests
+        working-directory: finch-node
+        run: npm test

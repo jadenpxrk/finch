@@ -556,6 +556,8 @@ pub(super) fn transaction_visible_at(
     }
 }
 
+/// Without a time, a record is valid when it has no end time. The projector uses that form, so
+/// its writes do not depend on the clock. A read gives the time it reads at.
 pub(super) fn state_record_valid_at(record: &StateRecord, valid_at_ms: Option<i64>) -> bool {
     match valid_at_ms {
         Some(at) => {
@@ -667,11 +669,7 @@ pub(super) fn state_record_visible_at(
     temporal: BiTemporalQuery,
 ) -> bool {
     state_record_recorded_at(record, scope, temporal)
-        && temporal.valid_at_ms.is_none_or(|at| {
-            record.valid_from_ms.is_none_or(|from| from <= at)
-                && record.valid_to_ms.is_none_or(|to| at < to)
-        })
-        && (temporal.valid_at_ms.is_some() || record.valid_to_ms.is_none())
+        && state_record_valid_at(record, temporal.valid_at_ms)
 }
 
 /// The query-side signals state records are scored against.
@@ -1191,17 +1189,13 @@ fn slot_support_from_claims(
 
 fn support_state_for_state_records(records: &[&StateRecord]) -> AnswerSupportState {
     if records.iter().any(|record| {
-        !matches!(
-            record.claim_kind,
-            ClaimKind::Relationship | ClaimKind::Event
-        ) && matches!(record.state_kind, StateRecordKind::Tombstone)
+        !record.claim_kind.is_set_valued()
+            && matches!(record.state_kind, StateRecordKind::Tombstone)
     }) {
         AnswerSupportState::Deleted
     } else if records.iter().any(|record| {
-        !matches!(
-            record.claim_kind,
-            ClaimKind::Relationship | ClaimKind::Event
-        ) && matches!(record.state_kind, StateRecordKind::Unsupported)
+        !record.claim_kind.is_set_valued()
+            && matches!(record.state_kind, StateRecordKind::Unsupported)
     }) {
         AnswerSupportState::Unsupported
     } else if records.iter().any(|record| {
@@ -1347,13 +1341,13 @@ pub(super) fn project_set_states(
 
 /// Set-member removals the claims record: whole-slot invalidations and per-member deletions,
 /// each with the time it took effect.
-struct SetMemberRemovals {
+pub(super) struct SetMemberRemovals {
     invalidated_slots: BTreeMap<MemoryId, i64>,
     removed_members: BTreeMap<(String, String, u8), i64>,
 }
 
 impl SetMemberRemovals {
-    fn from_claims(claims: &[ClaimRecord]) -> Self {
+    pub(super) fn from_claims(claims: &[ClaimRecord]) -> Self {
         let mut removals = Self {
             invalidated_slots: BTreeMap::new(),
             removed_members: BTreeMap::new(),
@@ -1368,15 +1362,19 @@ impl SetMemberRemovals {
                     .or_insert(invalidated_at);
             }
             if let Some(member_key) = removed_set_member_key(claim) {
-                let removed_at = claim.valid_from_ms.unwrap_or(claim.observed_at_ms);
-                removals.removed_members.insert(member_key, removed_at);
+                let removed_at = claim_lifecycle_time(claim);
+                removals
+                    .removed_members
+                    .entry(member_key)
+                    .and_modify(|at| *at = (*at).max(removed_at))
+                    .or_insert(removed_at);
             }
         }
         removals
     }
 
     /// Whether a removal at or after the member claim takes it out of the set.
-    fn removes(&self, slot_key: &str, claim: &ClaimRecord) -> bool {
+    pub(super) fn removes(&self, slot_key: &str, claim: &ClaimRecord) -> bool {
         if self
             .invalidated_slots
             .get(slot_key)
@@ -1397,13 +1395,13 @@ impl SetMemberRemovals {
     }
 }
 
-/// The (slot, member value, kind) a retracted, tombstoned, or redacted relationship or event
-/// claim removes from its set.
+/// The (slot, member value, kind) a retracted, tombstoned, or redacted set member claim removes
+/// from its set.
 fn removed_set_member_key(claim: &ClaimRecord) -> Option<(String, String, u8)> {
     let removed = matches!(
         claim.status,
         MemoryStatus::Retracted | MemoryStatus::Tombstoned | MemoryStatus::Redacted
-    ) && matches!(claim.claim_kind, ClaimKind::Relationship | ClaimKind::Event);
+    ) && claim.claim_kind.is_set_valued();
     if !removed {
         return None;
     }
@@ -1500,7 +1498,7 @@ pub(super) fn reconcile_set_states_with_slot_lifecycle(
 }
 
 fn claim_invalidates_entire_set_slot(claim: &ClaimRecord) -> bool {
-    !matches!(claim.claim_kind, ClaimKind::Relationship | ClaimKind::Event)
+    !claim.claim_kind.is_set_valued()
         && matches!(
             claim_state_record_kind(claim),
             StateRecordKind::Tombstone | StateRecordKind::Unsupported
@@ -1522,10 +1520,7 @@ pub(super) fn is_projectable_set_member(claim: &ClaimRecord) -> bool {
     matches!(claim.status, MemoryStatus::Active)
         && matches!(claim.polarity, ClaimPolarity::Affirmative)
         && crate::is_direct_state_claim(claim)
-        && matches!(
-            claim.claim_kind,
-            ClaimKind::Relationship | ClaimKind::Event | ClaimKind::Preference
-        )
+        && claim.claim_kind.is_set_valued()
         && claim.object_value.is_some()
 }
 

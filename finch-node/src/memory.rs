@@ -149,8 +149,11 @@ impl MemoryStore {
         &self,
         job_id: String,
         worker_id: String,
+        tenant_id: Option<String>,
     ) -> Result<AsyncTask<BlockingTask<String>>> {
-        self.spawn(move |m| m.complete_extraction_job_json(&job_id, &worker_id))
+        self.spawn(move |m| {
+            m.complete_extraction_job_json(&job_id, &worker_id, tenant_id.as_deref())
+        })
     }
 
     #[napi]
@@ -165,16 +168,18 @@ impl MemoryStore {
     pub fn retry_extraction_job_json(
         &self,
         job_id: String,
+        tenant_id: Option<String>,
     ) -> Result<AsyncTask<BlockingTask<String>>> {
-        self.spawn(move |m| m.retry_extraction_job_json(&job_id))
+        self.spawn(move |m| m.retry_extraction_job_json(&job_id, tenant_id.as_deref()))
     }
 
     #[napi]
     pub fn skip_extraction_job_json(
         &self,
         job_id: String,
+        tenant_id: Option<String>,
     ) -> Result<AsyncTask<BlockingTask<String>>> {
-        self.spawn(move |m| m.skip_extraction_job_json(&job_id))
+        self.spawn(move |m| m.skip_extraction_job_json(&job_id, tenant_id.as_deref()))
     }
 
     #[napi]
@@ -448,6 +453,19 @@ impl MemoryStore {
     ) -> Result<String> {
         self.inner()?
             .scan_claims_json(&scope_json, limit as usize, at_ms)
+            .map_err(|e| finch_err(&env, e))
+    }
+
+    #[napi]
+    pub fn get_claim_json(
+        &self,
+        env: Env,
+        scope_json: String,
+        id: String,
+        at_ms: Option<i64>,
+    ) -> Result<String> {
+        self.inner()?
+            .get_claim_json(&scope_json, &id, at_ms)
             .map_err(|e| finch_err(&env, e))
     }
 

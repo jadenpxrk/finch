@@ -315,8 +315,8 @@ fn schema_lock_salt(schema: &str) -> i64 {
 pub(crate) struct PgSession {
     url: String,
     schema: String,
-    idle: Mutex<Vec<Client>>,
-    open: Mutex<usize>,
+    pool: Mutex<Pool>,
+    /// Signals a change of `pool` that lets a waiting thread take a connection.
     released: Condvar,
     bound: Mutex<HashMap<ThreadId, Client>>,
     tls: MakeRustlsConnect,
@@ -324,6 +324,14 @@ pub(crate) struct PgSession {
     pub(crate) tenant_isolation: bool,
     /// Mixed into every advisory lock key: Postgres shares advisory locks across a database.
     lock_salt: i64,
+}
+
+/// The pooled connections. One lock holds both fields, so a thread that finds no connection and
+/// no free slot starts to wait before another thread can change either.
+struct Pool {
+    idle: Vec<Client>,
+    /// Number of connections that are open or that a thread opens now.
+    open: usize,
 }
 
 impl PgSession {
@@ -350,8 +358,10 @@ impl PgSession {
             url: url.to_string(),
             schema: schema.to_string(),
             tls,
-            idle: Mutex::new(vec![first]),
-            open: Mutex::new(1),
+            pool: Mutex::new(Pool {
+                idle: vec![first],
+                open: 1,
+            }),
             released: Condvar::new(),
             bound: Mutex::new(HashMap::new()),
             max_connections: store.max_connections,
@@ -392,32 +402,59 @@ impl PgSession {
     /// An idle connection, a new one while fewer than `max_connections` are open, or the next
     /// one another thread releases.
     fn checkout(&self) -> ZResult<Client> {
-        let mut idle = self.idle.lock();
+        let mut pool = self.pool.lock();
         loop {
-            if let Some(client) = idle.pop() {
+            if let Some(client) = pool.idle.pop() {
                 return Ok(client);
             }
-            let mut open = self.open.lock();
-            if *open < self.max_connections {
-                *open += 1;
-                drop(open);
-                drop(idle);
-                return open_connection(&self.url, &self.schema, &self.tls).inspect_err(|_| {
-                    *self.open.lock() -= 1;
-                });
+            if pool.open < self.max_connections {
+                pool.open += 1;
+                drop(pool);
+                return open_connection(&self.url, &self.schema, &self.tls)
+                    .inspect_err(|_| self.free_slot());
             }
-            drop(open);
-            self.released.wait(&mut idle);
+            self.released.wait(&mut pool);
         }
     }
 
     fn checkin(&self, client: Client) {
         if client.is_closed() {
-            *self.open.lock() -= 1;
-        } else {
-            self.idle.lock().push(client);
+            return self.discard(client);
         }
+        self.pool.lock().idle.push(client);
         self.released.notify_one();
+    }
+
+    /// Gives the pool slot of a connection that is gone to the next waiting thread.
+    fn free_slot(&self) {
+        self.pool.lock().open -= 1;
+        self.released.notify_one();
+    }
+
+    /// A checked-out connection that is open. A closed one opens again first.
+    fn checkout_open(&self) -> ZResult<Client> {
+        let client = self.checkout()?;
+        if client.is_closed() {
+            return self.reopen(client);
+        }
+        Ok(client)
+    }
+
+    /// A new connection in the pool slot of `lost`. A failure frees the slot for another thread.
+    fn reopen(&self, lost: Client) -> ZResult<Client> {
+        match open_connection(&self.url, &self.schema, &self.tls) {
+            Ok(client) => Ok(client),
+            Err(status) => {
+                self.discard(lost);
+                Err(status)
+            }
+        }
+    }
+
+    /// Closes a checked-out connection and frees its pool slot for another thread.
+    fn discard(&self, client: Client) {
+        drop(client);
+        self.free_slot();
     }
 
     pub(crate) fn with_client<T>(
@@ -433,20 +470,12 @@ impl PgSession {
             self.bound.lock().insert(thread, client);
             return result.map_err(pg_error);
         }
-        let mut client = self.checkout()?;
-        if client.is_closed() {
-            client = open_connection(&self.url, &self.schema, &self.tls)?;
-        }
+        let mut client = self.checkout_open()?;
         let result = match run(&mut client) {
             // A closed or terminated connection never ran the statement, so it runs once more.
             Err(error) if connection_lost(&error) => {
-                match open_connection(&self.url, &self.schema, &self.tls) {
-                    Ok(fresh) => {
-                        client = fresh;
-                        run(&mut client).map_err(pg_error)
-                    }
-                    Err(status) => Err(status),
-                }
+                client = self.reopen(client)?;
+                run(&mut client).map_err(pg_error)
             }
             result => result.map_err(pg_error),
         };
@@ -489,10 +518,7 @@ impl PgSession {
         if self.in_transaction() {
             return Err(Status::internal("a postgres transaction is already open"));
         }
-        let mut client = self.checkout()?;
-        if client.is_closed() {
-            client = open_connection(&self.url, &self.schema, &self.tls)?;
-        }
+        let mut client = self.checkout_open()?;
         let start = |client: &mut Client| {
             client.batch_execute(statement)?;
             for (shared, exclusive) in locks {
@@ -513,19 +539,15 @@ impl PgSession {
         let mut started = start(&mut client);
         // A lost connection started no transaction, so it starts once more on a new one.
         if started.as_ref().is_err_and(connection_lost) {
-            match open_connection(&self.url, &self.schema, &self.tls) {
-                Ok(fresh) => {
-                    client = fresh;
-                    started = start(&mut client);
-                }
-                Err(status) => {
-                    self.checkin(client);
-                    return Err(status);
-                }
-            }
+            client = self.reopen(client)?;
+            started = start(&mut client);
         }
         if let Err(error) = started {
-            self.checkin(client);
+            // A statement after BEGIN failed, so the connection leaves that transaction first.
+            match client.batch_execute("ROLLBACK") {
+                Ok(()) => self.checkin(client),
+                Err(_) => self.discard(client),
+            }
             return Err(pg_error(error));
         }
         self.bound.lock().insert(thread::current().id(), client);
@@ -586,7 +608,7 @@ impl PgSession {
 
     #[cfg(test)]
     pub(crate) fn open_connections(&self) -> usize {
-        *self.open.lock()
+        self.pool.lock().open
     }
 }
 
@@ -1856,6 +1878,185 @@ mod tests {
         assert!(write.is_err_and(|status| status.message().contains("tenant_id")));
         assert!(store.scan_spans(&no_tenant, 10, None).is_err());
         assert!(store.spans.fetch(b_spans).is_err());
+    }
+
+    #[test]
+    fn tenant_isolation_gives_a_queue_call_the_jobs_of_its_tenant() {
+        let url = crate::test_postgres_url();
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        drop_store(&PostgresStore::new(&url, "t_tenant_jobs")).unwrap();
+        let mut location = PostgresStore::new(tenant_role_url(&url), "t_tenant_jobs");
+        location.tenant_isolation = true;
+        let store = MemoryStore::create(&location, 3, false).unwrap();
+        let (a, b) = (tenant_scope("a"), tenant_scope("b"));
+        for (scope, id) in [(&a, "ep_a"), (&b, "ep_b")] {
+            store
+                .ingest_episode(episode(scope, id, "alpha beta"), 11, &chunks())
+                .unwrap();
+        }
+        let mut request = crate::ExtractionLeaseRequest {
+            worker_id: "worker".to_string(),
+            limit: 10,
+            lease_ms: 100,
+            now_ms: Some(20),
+            max_attempts: 3,
+            tenant_id: None,
+        };
+        let without_tenant = store.lease_extraction_jobs(&request);
+        request.tenant_id = Some("a".to_string());
+        let leased = store.lease_extraction_jobs(&request).unwrap();
+        let failed = store.fail_extraction_job(&crate::ExtractionFailure {
+            job_id: leased[0].id.clone(),
+            worker_id: "worker".to_string(),
+            error: "extractor timed out".to_string(),
+            max_attempts: 1,
+            tenant_id: Some("a".to_string()),
+        });
+        let job_id = leased[0].id.as_str();
+        let no_tenant = store.retry_extraction_job(job_id, None);
+        let other_tenant = store.retry_extraction_job(job_id, Some("b"));
+        let failed_backlog = store.extraction_backlog(&a).unwrap();
+        let retried = store.retry_extraction_job(job_id, Some("a"));
+        request.now_ms = Some(30);
+        let leased_again = store.lease_extraction_jobs(&request).unwrap();
+        let completed = store.complete_extraction_job(job_id, "worker", Some("a"));
+
+        assert!(without_tenant.is_err_and(|status| status.message().contains("tenant_id")));
+        let episodes = leased
+            .iter()
+            .map(|job| job.episode_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(episodes, ["ep_a"]);
+        assert_eq!(failed.unwrap().status, crate::ExtractionJobStatus::Failed);
+        assert!(no_tenant.is_err_and(|status| status.message().contains("tenant_id")));
+        assert_eq!(
+            other_tenant.unwrap_err().code(),
+            finch_types::StatusCode::NotFound
+        );
+        assert_eq!((failed_backlog.jobs, failed_backlog.failed_jobs), (1, 1));
+        assert_eq!(retried.unwrap().status, crate::ExtractionJobStatus::Pending);
+        assert_eq!(leased_again.len(), 1);
+        assert_eq!(completed.unwrap().status, crate::ExtractionJobStatus::Done);
+        assert_eq!(store.extraction_backlog(&a).unwrap().jobs, 0);
+        assert_eq!(store.extraction_backlog(&b).unwrap().jobs, 1);
+    }
+
+    #[test]
+    fn tenant_isolation_lets_a_tenant_skip_its_failed_job() {
+        let url = crate::test_postgres_url();
+        let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+        drop_store(&PostgresStore::new(&url, "t_tenant_skip")).unwrap();
+        let mut location = PostgresStore::new(tenant_role_url(&url), "t_tenant_skip");
+        location.tenant_isolation = true;
+        let store = MemoryStore::create(&location, 3, false).unwrap();
+        let a = tenant_scope("a");
+        for (id, sequence_no) in [("ep_first", 11), ("ep_second", 12)] {
+            let mut input = episode(&a, id, "alpha beta");
+            input.sequence_no = sequence_no;
+            store.ingest_episode(input, sequence_no, &chunks()).unwrap();
+        }
+        let mut request = crate::ExtractionLeaseRequest {
+            worker_id: "worker".to_string(),
+            limit: 10,
+            lease_ms: 100,
+            now_ms: Some(20),
+            max_attempts: 3,
+            tenant_id: Some("a".to_string()),
+        };
+        let first = store.lease_extraction_jobs(&request).unwrap().remove(0);
+        store
+            .fail_extraction_job(&crate::ExtractionFailure {
+                job_id: first.id.clone(),
+                worker_id: "worker".to_string(),
+                error: "extractor timed out".to_string(),
+                max_attempts: 1,
+                tenant_id: Some("a".to_string()),
+            })
+            .unwrap();
+        request.now_ms = Some(30);
+        let blocked = store.lease_extraction_jobs(&request).unwrap();
+        let skipped = store.skip_extraction_job(&first.id, Some("a")).unwrap();
+        let next = store.lease_extraction_jobs(&request).unwrap();
+
+        assert_eq!(first.episode_id, "ep_first");
+        assert!(blocked.is_empty(), "the failed job blocks its scope");
+        assert_eq!(skipped.status, crate::ExtractionJobStatus::Skipped);
+        let episodes = next
+            .iter()
+            .map(|job| job.episode_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(episodes, ["ep_second"]);
+    }
+
+    #[test]
+    fn a_transaction_that_fails_to_start_leaves_its_connection_usable() {
+        let url = crate::test_postgres_url();
+        let location = PostgresStore {
+            max_connections: 1,
+            ..PostgresStore::new(&url, "t_failed_begin")
+        };
+        let session = PgSession::connect(&location).unwrap();
+        let started = session.begin("BEGIN; SELECT 1/0", &[], None);
+        // The pool holds one connection, so this statement runs on the one that failed.
+        let after = session.with_client(|client| client.query_one("SELECT 1", &[]));
+
+        assert!(started.is_err());
+        assert_eq!(after.unwrap().get::<_, i32>(0), 1);
+    }
+
+    #[test]
+    fn a_closed_connection_that_cannot_open_again_frees_its_pool_slot() {
+        let url = crate::test_postgres_url();
+        let location = PostgresStore {
+            max_connections: 1,
+            ..PostgresStore::new(&url, "t_pool_slot")
+        };
+        let mut session = PgSession::connect(&location).unwrap();
+        let mut pooled = session.pool.lock().idle.pop().unwrap();
+        let pid = pooled
+            .query_one("SELECT pg_backend_pid()", &[])
+            .unwrap()
+            .get::<_, i32>(0);
+        Client::connect(&url, NoTls)
+            .unwrap()
+            .execute("SELECT pg_terminate_backend($1)", &[&pid])
+            .unwrap();
+        assert!(pooled.query_one("SELECT 1", &[]).is_err());
+        assert!(pooled.is_closed());
+        session.pool.lock().idle.push(pooled);
+        // No server listens on port 1, so the connection cannot open again.
+        session.url = "postgres://finch@127.0.0.1:1/finch".to_string();
+        let lost = session.with_client(|client| client.query_one("SELECT 1", &[]));
+
+        assert!(lost.is_err());
+        assert_eq!(session.open_connections(), 0);
+    }
+
+    #[test]
+    fn a_connection_that_fails_to_open_wakes_the_next_waiting_thread() {
+        let url = crate::test_postgres_url();
+        let location = PostgresStore {
+            max_connections: 1,
+            ..PostgresStore::new(&url, "t_pool_wake")
+        };
+        let mut session = PgSession::connect(&location).unwrap();
+        let held = session.pool.lock().idle.pop().unwrap();
+        // No server listens on port 1, so no new connection opens.
+        session.url = "postgres://finch@127.0.0.1:1/finch".to_string();
+        let session = Arc::new(session);
+        let (sent, done) = std::sync::mpsc::channel();
+        for _ in 0..2 {
+            let (session, sent) = (session.clone(), sent.clone());
+            thread::spawn(move || sent.send(session.checkout().is_err()).unwrap());
+        }
+        // Both threads wait for the one pool slot before it becomes free.
+        thread::sleep(std::time::Duration::from_millis(300));
+        session.discard(held);
+
+        for _ in 0..2 {
+            let failed = done.recv_timeout(std::time::Duration::from_secs(5));
+            assert_eq!(failed, Ok(true), "a waiting thread never woke");
+        }
     }
 
     #[test]

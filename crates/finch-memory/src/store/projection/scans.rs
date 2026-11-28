@@ -7,6 +7,22 @@ impl MemoryStore {
         scope: &MemoryScope,
         scan: StateRecordScan,
     ) -> ZResult<Vec<StateRecord>> {
+        self.scan_state_records_as_given(
+            scope,
+            StateRecordScan {
+                temporal: at_read_time(scan.temporal),
+                ..scan
+            },
+        )
+    }
+
+    /// The scan with its times as given: without a valid time it returns the records that have
+    /// no end time, so a projection write that calls it does not depend on the clock.
+    pub(super) fn scan_state_records_as_given(
+        &self,
+        scope: &MemoryScope,
+        scan: StateRecordScan,
+    ) -> ZResult<Vec<StateRecord>> {
         let _state_guard = self.lock_state_read(scope)?;
         let StateRecordScan { limit, temporal } = scan;
         if limit == 0 {
@@ -38,6 +54,7 @@ impl MemoryStore {
         terms: &BTreeSet<String>,
         temporal: BiTemporalQuery,
     ) -> ZResult<(BTreeSet<String>, Vec<StateRecord>)> {
+        let temporal = at_read_time(temporal);
         let mut rare = BTreeSet::new();
         let mut seen = BTreeSet::new();
         let mut records = Vec::new();
@@ -104,6 +121,7 @@ impl MemoryStore {
         if values.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
+        let temporal = at_read_time(temporal);
         let values = values.iter().map(String::as_str).collect::<Vec<_>>();
         let docs = scan_in_chunks(
             &self.state_records,
@@ -173,7 +191,8 @@ impl MemoryStore {
             .filter(|record| state_record_in_history_at(record, scope, temporal))
             .map(|record| (record.id.clone(), record))
             .collect::<BTreeMap<_, _>>();
-        let mut records = by_id.into_values().collect::<Vec<_>>();
+        let records = by_id.into_values().collect::<Vec<_>>();
+        let mut records = self.without_forgotten_states(scope, records, temporal.valid_at_ms)?;
         records.sort_by(|a, b| {
             a.observed_at_ms
                 .cmp(&b.observed_at_ms)
@@ -452,6 +471,16 @@ fn sort_by_state_priority(records: &mut [StateRecord]) {
 
 /// A state version recorded by `temporal.transaction_at_ms` that began by `temporal.valid_at_ms`,
 /// whether or not it has ended since.
+/// `temporal` with the clock time as its valid time when it has none. A read without a time
+/// then takes the state that holds now: a state with a later end time, and no state that starts
+/// later.
+fn at_read_time(temporal: BiTemporalQuery) -> BiTemporalQuery {
+    BiTemporalQuery {
+        valid_at_ms: temporal.valid_at_ms.or_else(|| Some(system_time_ms())),
+        ..temporal
+    }
+}
+
 fn state_record_in_history_at(
     record: &StateRecord,
     scope: &MemoryScope,

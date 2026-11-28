@@ -116,25 +116,41 @@ impl PyMemoryStore {
         self.without_gil(py, |m| m.lease_extraction_jobs_json(request_json))
     }
 
+    #[pyo3(signature = (job_id, worker_id, tenant_id=None))]
     fn complete_extraction_job_json(
         &self,
         py: Python<'_>,
         job_id: &str,
         worker_id: &str,
+        tenant_id: Option<&str>,
     ) -> PyResult<String> {
-        self.without_gil(py, |m| m.complete_extraction_job_json(job_id, worker_id))
+        self.without_gil(py, |m| {
+            m.complete_extraction_job_json(job_id, worker_id, tenant_id)
+        })
     }
 
     fn fail_extraction_job_json(&self, py: Python<'_>, failure_json: &str) -> PyResult<String> {
         self.without_gil(py, |m| m.fail_extraction_job_json(failure_json))
     }
 
-    fn retry_extraction_job_json(&self, py: Python<'_>, job_id: &str) -> PyResult<String> {
-        self.without_gil(py, |m| m.retry_extraction_job_json(job_id))
+    #[pyo3(signature = (job_id, tenant_id=None))]
+    fn retry_extraction_job_json(
+        &self,
+        py: Python<'_>,
+        job_id: &str,
+        tenant_id: Option<&str>,
+    ) -> PyResult<String> {
+        self.without_gil(py, |m| m.retry_extraction_job_json(job_id, tenant_id))
     }
 
-    fn skip_extraction_job_json(&self, py: Python<'_>, job_id: &str) -> PyResult<String> {
-        self.without_gil(py, |m| m.skip_extraction_job_json(job_id))
+    #[pyo3(signature = (job_id, tenant_id=None))]
+    fn skip_extraction_job_json(
+        &self,
+        py: Python<'_>,
+        job_id: &str,
+        tenant_id: Option<&str>,
+    ) -> PyResult<String> {
+        self.without_gil(py, |m| m.skip_extraction_job_json(job_id, tenant_id))
     }
 
     fn extraction_backlog_json(&self, py: Python<'_>, scope_json: &str) -> PyResult<String> {
@@ -357,6 +373,17 @@ impl PyMemoryStore {
         at_ms: Option<i64>,
     ) -> PyResult<String> {
         self.without_gil(py, |m| m.scan_claims_json(scope_json, limit, at_ms))
+    }
+
+    #[pyo3(signature = (scope_json, id, at_ms=None))]
+    fn get_claim_json(
+        &self,
+        py: Python<'_>,
+        scope_json: &str,
+        id: &str,
+        at_ms: Option<i64>,
+    ) -> PyResult<String> {
+        self.without_gil(py, |m| m.get_claim_json(scope_json, id, at_ms))
     }
 
     #[pyo3(signature = (scope_json, limit=1000, at_ms=None))]

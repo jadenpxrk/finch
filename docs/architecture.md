@@ -67,7 +67,9 @@ produced it. A dependency trace records which rule derived a state record from w
 
 Every record carries a scope: a space, and optional tenant, user, agent, project, and thread ids.
 Every read and write filters on the scope, so one store can hold many users. A read at a scope
-also returns the records of narrower scopes. A write changes records of its own scope only.
+also returns the records of narrower scopes. A write changes records of its own scope only. A
+scope in JSON with a key that is not one of these ids is an error, because a misspelled key
+would make the scope wider.
 
 ## 3. Ingest
 
@@ -113,6 +115,12 @@ Only the worker that holds the lease can complete or fail the job. `fail_extract
 the job to pending, or marks it failed at its maximum number of attempts. A failed job stops the
 later jobs of its scope. The caller then calls `retry_extraction_job` or `skip_extraction_job`.
 
+A queue call can name a tenant. The lease request and the failure report name it in
+`tenant_id`, and `extraction_backlog` takes it from its scope. `complete_extraction_job`,
+`retry_extraction_job`, and `skip_extraction_job` take it as an argument. A call that names a
+tenant reaches only the jobs of that tenant, and a job of another tenant is not found. In a
+store with tenant isolation, a queue call without a tenant fails.
+
 `extraction_backlog` gives the number of jobs that wait and the write time of the oldest. A
 nonzero backlog tells a reader that the state is behind the conversation. Span search finds the
 raw text before extraction.
@@ -142,7 +150,9 @@ A state record has two timelines. Valid time says when the fact held in the worl
 time says when Finch recorded and superseded the record. Say the user moved to Denver in March and
 said so in May. Then the valid time starts in March and the transaction time starts in May. A read
 can ask for the current state, for the state at a valid time, or for what Finch knew at a
-transaction time.
+transaction time. A read of the current state reads at the time of the clock. It includes a
+record whose valid time ends in the future, and leaves out a record whose valid time starts in
+the future.
 
 A newer claim on the same slot supersedes the older one. Both stay stored, and the older one
 keeps its valid interval. State records have six kinds: current, set, tombstone, unsupported,
@@ -193,25 +203,31 @@ so a derived value falls with its source.
 
 A forget hides its target claims, as a tombstone does, so the slot shows that the value is gone.
 Every search also replaces a forgotten value with `[forgotten]` in the span text that it returns,
-so a reader does not see the value in the raw text that stated it. The data stays stored, so a
-mistaken forget can be undone.
+so a reader does not see the value in the raw text that stated it. A value of fewer than 3
+characters can also be a common word, so a search replaces it only in the spans that the
+forgotten claim cites. A forget hides the values of the claims that it names by id. A forget
+without claim ids hides the values that its selector names, or every value of its slot when the
+selector names none. The history of a slot leaves out these values, and a set-valued slot keeps
+its other members. The data stays stored, so a mistaken forget can be undone.
 
 `MemoryStore::purge_forgotten(&scope, before_ms)` deletes what the forgets of the scope hide, for
 each forget that took effect before `before_ms`. It deletes the forgotten claims and the records
 that Finch derived from them: derived claims, state records, dependency traces, edges, and
 profiles. Entities, aliases, and slots lose the ids of the deleted claims, and Finch deletes the
-ones that have no evidence left. Purge also replaces the forgotten values in the text of the
-cited episodes and spans, and clears the vectors of those spans. The report names these spans,
-so the caller can embed them again. The correction record stays, but it holds no selector, new
-value, reason, or metadata that names a forgotten value. In each single-valued slot, a marker
+ones that have no evidence left. Purge also replaces the forgotten values in the text of every
+episode and span in the scope of the forget, and clears the vectors of the spans it changes.
+Text in other scopes stays, so a purge of a space does not change one user's text for the
+forget of another user. The report names the changed spans, so the caller can embed them
+again. The correction record stays, but it holds no selector, new value, reason, or metadata
+that names a forgotten value. In each single-valued slot, a marker
 claim with no value keeps the tombstone, so an older value does not become current. A purge
 that finds nothing left to delete changes nothing.
 
 Two calls delete stored data. `MemoryStore::erase_scope(&scope)` deletes every row of the scope
 and of each scope inside it, in every table. Rows of broader scopes and of other scopes stay.
-`MemoryStore::erase_episodes(&scope, &ids)` deletes the episodes and their spans. It also deletes
-each claim, rule, and correction that cites them, with the records derived from those, as a
-purge does. Then Finch projects the state of each affected scope again. A claim that another
+`MemoryStore::erase_episodes(&scope, &ids)` deletes the episodes and their spans. It deletes the
+spans also when the store holds them without the episode. It also deletes each claim, rule, and
+correction that cites them, with the records derived from those, as a purge does. Then Finch projects the state of each affected scope again. A claim that another
 episode supports stays. Each call returns the number of deleted rows per table.
 
 Every state write changes several tables: the batch write API, the single writes of a claim,
@@ -250,8 +266,10 @@ The day words are the English weekday names, `today`, `tonight`, `tomorrow`, and
 counts from the day of the span's `valid_from_ms`, so each message needs its own time. That day
 is in UTC unless `day_words_utc_offset_minutes` gives the time zone of the speakers. A reader
 then finds a deadline without calendar arithmetic. The context requests of the JSON API take it
-as the `date_day_words` flag. Answer validation ignores the added dates when it compares a quote
-with its span.
+as the `date_day_words` flag. When answer validation compares a quote with its span, the quote
+can leave these dates out. A date in the quote must be the date that the packed text shows after
+that day word. If the span text shows no date there, the date must be the one that the time of
+the span gives in some time zone.
 
 The hits and the query name a set of slots. Finch loads the state records of those slots that
 were valid at the query time. It adds every slot a dependency rule links them to and loads

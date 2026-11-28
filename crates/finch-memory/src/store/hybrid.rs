@@ -145,7 +145,7 @@ impl MemoryStore {
         }
     }
 
-    /// Returns the spans with the given ids that are active at `at_ms`.
+    /// Returns the spans with the given ids that are active at `at_ms`, in id order.
     pub fn fetch_spans_by_ids(
         &self,
         scope: &MemoryScope,
@@ -167,6 +167,8 @@ impl MemoryStore {
             );
         }
         spans.retain(|span| span.scope.matches_filter(scope) && span_active_at(span, at_ms));
+        spans.sort_by(|a, b| a.id.cmp(&b.id));
+        spans.dedup_by(|a, b| a.id == b.id);
         Ok(spans)
     }
 

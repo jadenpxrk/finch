@@ -30,6 +30,11 @@ node_modules/
 logs/
 /tmp/
 .serena/
+finch-scale-test-policy.json
 
 # agent session scratch
 .agents/
+
+# Node addon that `npm run build` writes
+finch-node/index.node
+finch-node/package-lock.json

@@ -367,8 +367,13 @@ impl MemoryStore {
     }
 
     /// Marks a leased extraction job done. Returns the job as JSON.
-    pub fn complete_extraction_job_json(&self, job_id: &str, worker_id: &str) -> ZResult<String> {
-        let job = self.complete_extraction_job(job_id, worker_id)?;
+    pub fn complete_extraction_job_json(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        tenant_id: Option<&str>,
+    ) -> ZResult<String> {
+        let job = self.complete_extraction_job(job_id, worker_id, tenant_id)?;
         serde_json::to_string(&job).map_err(json_status)
     }
 
@@ -381,14 +386,22 @@ impl MemoryStore {
     }
 
     /// Returns a failed extraction job to pending. Returns the job as JSON.
-    pub fn retry_extraction_job_json(&self, job_id: &str) -> ZResult<String> {
-        let job = self.retry_extraction_job(job_id)?;
+    pub fn retry_extraction_job_json(
+        &self,
+        job_id: &str,
+        tenant_id: Option<&str>,
+    ) -> ZResult<String> {
+        let job = self.retry_extraction_job(job_id, tenant_id)?;
         serde_json::to_string(&job).map_err(json_status)
     }
 
     /// Marks a failed extraction job skipped. Returns the job as JSON.
-    pub fn skip_extraction_job_json(&self, job_id: &str) -> ZResult<String> {
-        let job = self.skip_extraction_job(job_id)?;
+    pub fn skip_extraction_job_json(
+        &self,
+        job_id: &str,
+        tenant_id: Option<&str>,
+    ) -> ZResult<String> {
+        let job = self.skip_extraction_job(job_id, tenant_id)?;
         serde_json::to_string(&job).map_err(json_status)
     }
 
@@ -409,6 +422,18 @@ impl MemoryStore {
         let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
         let records = self.scan_claims(&scope, limit, at_ms)?;
         serde_json::to_string(&records).map_err(json_status)
+    }
+
+    /// Returns the active claim `id` of the scope that is valid at `at_ms`, as JSON, or `null`.
+    pub fn get_claim_json(
+        &self,
+        scope_json: &str,
+        id: &str,
+        at_ms: Option<i64>,
+    ) -> ZResult<String> {
+        let scope = serde_json::from_str::<MemoryScope>(scope_json).map_err(json_status)?;
+        let claim = self.get_claim(&scope, id, at_ms)?;
+        serde_json::to_string(&claim).map_err(json_status)
     }
 
     /// Returns up to `limit` current claims valid at `at_ms`, as JSON.

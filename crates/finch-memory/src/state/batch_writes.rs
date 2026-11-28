@@ -28,8 +28,11 @@ impl MemoryStore {
         let scope = batch.scope.clone();
         self.with_state_mutation(&scope, false, || {
             if let Some(completion) = &batch.extraction_job {
-                let job =
-                    self.complete_extraction_job(&completion.job_id, &completion.worker_id)?;
+                let job = self.complete_extraction_job(
+                    &completion.job_id,
+                    &completion.worker_id,
+                    scope.tenant_id.as_deref(),
+                )?;
                 if job.scope != scope {
                     return Err(Status::invalid_argument(format!(
                         "extraction job {} belongs to another scope than the batch",

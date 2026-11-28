@@ -1,6 +1,6 @@
 use super::*;
 use crate::store::lifecycle::{correction_targets_claim, materialized_rule_value};
-use crate::store::state_records::state_record_from_claim;
+use crate::store::state_records::{state_record_from_claim, SetMemberRemovals};
 
 #[test]
 fn fixed_rule_value_takes_precedence_over_copy_template() {
@@ -2071,7 +2071,7 @@ fn assert_same_day_history(in_one_batch: bool, valid_from: [i64; 3], replace_sec
     let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let mut claims = Vec::new();
-    for (sequence, (value, valid_from)) in ["Cryptara", "Verisigil", "Sigilix"]
+    for (sequence, (value, valid_from)) in ["Brimvault", "Tallowmark", "Corvanet"]
         .into_iter()
         .zip(valid_from)
         .enumerate()
@@ -2123,7 +2123,7 @@ fn assert_same_day_history(in_one_batch: bool, valid_from: [i64; 3], replace_sec
                 target_type: "claim".to_string(),
                 target_ids: vec![claims[1].id.clone()],
                 target_selector: None,
-                new_value: Some("Sigilix".to_string()),
+                new_value: Some("Corvanet".to_string()),
                 reason: None,
                 actor: ActorKind::User,
                 authority: CorrectionAuthority::User,
@@ -2195,7 +2195,7 @@ fn assert_same_day_history(in_one_batch: bool, valid_from: [i64; 3], replace_sec
         .collect::<Vec<_>>();
     let mut distinct = values.clone();
     distinct.dedup();
-    assert_eq!(distinct, vec!["Cryptara", "Verisigil", "Sigilix"]);
+    assert_eq!(distinct, vec!["Brimvault", "Tallowmark", "Corvanet"]);
 
     let current = store
         .scan_state_records(&scope, state_scan(10, Some(valid_from[2])))
@@ -2204,7 +2204,114 @@ fn assert_same_day_history(in_one_batch: bool, valid_from: [i64; 3], replace_sec
         .filter(|state| state.slot_id.as_ref() == Some(&slot_id))
         .filter_map(|state| state.object_value)
         .collect::<Vec<_>>();
-    assert_eq!(current, vec!["Sigilix"]);
+    assert_eq!(current, vec!["Corvanet"]);
 
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn read_without_a_time_keeps_a_state_until_its_end_time_passes() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let store = EvidencedStore::create(&temp_dir("future_end_time"), 3).unwrap();
+    let scope = scope();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let day_ms = 86_400_000;
+    for (id, predicate, value, valid_to_ms) in [
+        ("claim_leave", "work status", "on leave", now_ms + day_ms),
+        ("claim_trip", "location", "in Lisbon", now_ms - day_ms),
+    ] {
+        let mut claim = make_claim(
+            &scope,
+            id,
+            "user",
+            predicate,
+            Some(value),
+            now_ms - 2 * day_ms,
+            (ClaimKind::Fact, ClaimPolarity::Affirmative),
+        );
+        claim.valid_to_ms = Some(valid_to_ms);
+        store.append_claim(&claim, None).unwrap();
+    }
+    let values = store
+        .scan_state_records(&scope, state_scan(10, None))
+        .unwrap()
+        .into_iter()
+        .filter_map(|record| record.object_value)
+        .collect::<Vec<_>>();
+
+    assert_eq!(values, ["on leave"]);
+}
+
+#[test]
+fn read_without_a_time_takes_the_state_that_holds_now_and_not_its_scheduled_successor() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let store = EvidencedStore::create(&temp_dir("scheduled_successor"), 3).unwrap();
+    let scope = scope();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let day_ms = 86_400_000;
+    let change_ms = now_ms + day_ms;
+    let office = |id: &str, value: &str, observed_at_ms: i64| {
+        let kind = (ClaimKind::Fact, ClaimPolarity::Affirmative);
+        make_claim(
+            &scope,
+            id,
+            "user",
+            "office",
+            Some(value),
+            observed_at_ms,
+            kind,
+        )
+    };
+    let mut current = office("claim_office", "Porto", now_ms - 2 * day_ms);
+    current.valid_to_ms = Some(change_ms);
+    let mut scheduled = office("claim_office_next", "Lisbon", now_ms - day_ms);
+    scheduled.valid_from_ms = Some(change_ms);
+    store.append_claim(&current, None).unwrap();
+    store.append_claim(&scheduled, None).unwrap();
+    let values_at = |at_ms: Option<i64>| {
+        store
+            .scan_state_records(&scope, state_scan(10, at_ms))
+            .unwrap()
+            .into_iter()
+            .filter_map(|record| record.object_value)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(values_at(None), ["Porto"]);
+    assert_eq!(values_at(Some(change_ms - 1)), ["Porto"]);
+    assert_eq!(values_at(Some(change_ms)), ["Lisbon"]);
+}
+
+#[test]
+fn the_latest_removal_of_a_set_member_decides_in_any_claim_order() {
+    let scope = scope();
+    let allergy = |id: &str, at_ms: i64, status: MemoryStatus| {
+        let mut claim = make_claim(
+            &scope,
+            id,
+            "user",
+            "allergy",
+            Some("peanuts"),
+            at_ms,
+            (ClaimKind::Preference, ClaimPolarity::Affirmative),
+        );
+        claim.status = status;
+        claim
+    };
+    let stated_between = allergy("claim_between", 25, MemoryStatus::Active);
+    let slot_key = crate::store::lifecycle::claim_slot_lifecycle_key(&stated_between);
+    let (early, late) = (
+        allergy("claim_removed_early", 20, MemoryStatus::Tombstoned),
+        allergy("claim_removed_late", 30, MemoryStatus::Tombstoned),
+    );
+    for claims in [[early.clone(), late.clone()], [late, early]] {
+        let removals = SetMemberRemovals::from_claims(&claims);
+        assert!(removals.removes(&slot_key, &stated_between));
+    }
 }

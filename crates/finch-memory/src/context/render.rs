@@ -753,14 +753,15 @@ pub(super) fn is_active_set_claim(claim: &ClaimRecord) -> bool {
     matches!(claim.status, MemoryStatus::Active)
         && matches!(claim.polarity, ClaimPolarity::Affirmative)
         && crate::is_direct_state_claim(claim)
-        && matches!(claim.claim_kind, ClaimKind::Relationship | ClaimKind::Event)
+        && claim.claim_kind.is_set_valued()
 }
 
 pub(super) fn set_claim_kind_key(claim_kind: ClaimKind) -> u8 {
     match claim_kind {
         ClaimKind::Relationship => 0,
         ClaimKind::Event => 1,
-        _ => 2,
+        ClaimKind::Preference => 2,
+        _ => 3,
     }
 }
 
@@ -830,7 +831,7 @@ pub(super) fn claim_context_kind(claim: &ClaimRecord) -> &'static str {
         return "state_derived";
     }
     match claim.claim_kind {
-        ClaimKind::Relationship | ClaimKind::Event => "state_set",
+        kind if kind.is_set_valued() => "state_set",
         ClaimKind::Constraint => "state_rule",
         _ => "state_current",
     }

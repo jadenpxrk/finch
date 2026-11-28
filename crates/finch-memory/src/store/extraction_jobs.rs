@@ -71,6 +71,10 @@ pub struct ExtractionLeaseRequest {
     /// Number of attempts after which a job with an expired lease stops at `Failed`. Each
     /// expired lease counts as one attempt. Must be 1 or more.
     pub max_attempts: u32,
+    /// Tenant whose jobs to lease. `None` means the jobs of every tenant. A store with tenant
+    /// isolation needs it.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
 }
 
 /// A worker's report that the extraction of a leased job failed.
@@ -84,6 +88,9 @@ pub struct ExtractionFailure {
     pub error: String,
     /// Number of failed attempts after which the job stops at `Failed`. Must be 1 or more.
     pub max_attempts: u32,
+    /// Tenant of the job. A store with tenant isolation needs it.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
 }
 
 /// A worker's leased job that a state mutation batch completes.
@@ -151,6 +158,7 @@ impl MemoryStore {
         let fail_expired = "WITH expired AS ( \
                SELECT pk AS job_pk FROM memory_extraction_jobs \
                WHERE status = 'leased' AND lease_expires_at_ms <= $1 AND attempt_count + 1 >= $2 \
+                 AND ($3::text IS NULL OR tenant_id = $3) \
                FOR UPDATE SKIP LOCKED) \
              UPDATE memory_extraction_jobs SET status = 'failed', \
                attempt_count = attempt_count + 1, lease_owner = NULL, lease_expires_at_ms = NULL, \
@@ -163,6 +171,7 @@ impl MemoryStore {
                SELECT j.pk AS job_pk FROM memory_extraction_jobs j \
                WHERE (j.status = 'pending' OR (j.status = 'leased' \
                    AND j.lease_expires_at_ms <= $1 AND j.attempt_count + 1 < $5)) \
+                 AND ($6::text IS NULL OR j.tenant_id = $6) \
                  AND NOT EXISTS ( \
                    SELECT 1 FROM memory_extraction_jobs e \
                    WHERE e.status IN ('pending', 'leased', 'failed') \
@@ -176,11 +185,20 @@ impl MemoryStore {
                seq = nextval('write_seq') \
              FROM free WHERE pk = free.job_pk RETURNING {JOB_COLUMNS}"
         );
-        let rows = self.session.with_client(|client| {
-            client.execute(fail_expired, &[&now, &max_attempts])?;
-            let params: [&(dyn ToSql + Sync); 5] =
-                [&now, &limit, &request.worker_id, &expires, &max_attempts];
-            client.query(&lease, &params)
+        let tenant = request.tenant_id.as_deref();
+        let rows = self.with_queue_tenant(tenant, QueueAccess::Write, || {
+            self.session.with_client(|client| {
+                client.execute(fail_expired, &[&now, &max_attempts, &tenant])?;
+                let params: [&(dyn ToSql + Sync); 6] = [
+                    &now,
+                    &limit,
+                    &request.worker_id,
+                    &expires,
+                    &max_attempts,
+                    &tenant,
+                ];
+                client.query(&lease, &params)
+            })
         })?;
         let mut jobs = rows.iter().map(job_from_row).collect::<ZResult<Vec<_>>>()?;
         jobs.sort_by(|a, b| (a.sequence_no, &a.id).cmp(&(b.sequence_no, &b.id)));
@@ -188,13 +206,20 @@ impl MemoryStore {
     }
 
     /// Deletes a completed job and returns it with status `Done`. Only the worker that holds
-    /// its lease can complete it.
-    pub fn complete_extraction_job(&self, job_id: &str, worker_id: &str) -> ZResult<ExtractionJob> {
+    /// its lease can complete it. `tenant_id` is the tenant of the job; a store with tenant
+    /// isolation needs it.
+    pub fn complete_extraction_job(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        tenant_id: Option<&str>,
+    ) -> ZResult<ExtractionJob> {
         let mut job = self.transition_extraction_job(
+            tenant_id,
             job_id,
             &format!("leased by {worker_id}"),
             "DELETE FROM memory_extraction_jobs \
-             WHERE pk = $1 AND status = 'leased' AND lease_owner = $2",
+             WHERE pk = $1 AND status = 'leased' AND lease_owner = $3",
             &[&worker_id],
         )?;
         job.status = ExtractionJobStatus::Done;
@@ -211,12 +236,13 @@ impl MemoryStore {
         }
         let max_attempts = i64::from(failure.max_attempts);
         self.transition_extraction_job(
+            failure.tenant_id.as_deref(),
             &failure.job_id,
             &format!("leased by {}", failure.worker_id),
             "UPDATE memory_extraction_jobs SET attempt_count = attempt_count + 1, \
-               status = CASE WHEN attempt_count + 1 >= $5 THEN 'failed' ELSE 'pending' END, \
-               lease_owner = NULL, lease_expires_at_ms = NULL, last_error = $4, updated_at_ms = $2 \
-             WHERE pk = $1 AND status = 'leased' AND lease_owner = $3",
+               status = CASE WHEN attempt_count + 1 >= $6 THEN 'failed' ELSE 'pending' END, \
+               lease_owner = NULL, lease_expires_at_ms = NULL, last_error = $5, updated_at_ms = $3 \
+             WHERE pk = $1 AND status = 'leased' AND lease_owner = $4",
             &[
                 &system_time_ms(),
                 &failure.worker_id,
@@ -227,22 +253,34 @@ impl MemoryStore {
     }
 
     /// Returns a failed job to pending with no failed attempts, so a worker can lease it again.
-    pub fn retry_extraction_job(&self, job_id: &str) -> ZResult<ExtractionJob> {
+    /// `tenant_id` is the tenant of the job; a store with tenant isolation needs it.
+    pub fn retry_extraction_job(
+        &self,
+        job_id: &str,
+        tenant_id: Option<&str>,
+    ) -> ZResult<ExtractionJob> {
         self.transition_extraction_job(
+            tenant_id,
             job_id,
             "failed",
             "UPDATE memory_extraction_jobs SET status = 'pending', attempt_count = 0, \
-               updated_at_ms = $2 WHERE pk = $1 AND status = 'failed'",
+               updated_at_ms = $3 WHERE pk = $1 AND status = 'failed'",
             &[&system_time_ms()],
         )
     }
 
-    /// Marks a failed job skipped, so the later jobs of its scope can run.
-    pub fn skip_extraction_job(&self, job_id: &str) -> ZResult<ExtractionJob> {
+    /// Marks a failed job skipped, so the later jobs of its scope can run. `tenant_id` is the
+    /// tenant of the job; a store with tenant isolation needs it.
+    pub fn skip_extraction_job(
+        &self,
+        job_id: &str,
+        tenant_id: Option<&str>,
+    ) -> ZResult<ExtractionJob> {
         self.transition_extraction_job(
+            tenant_id,
             job_id,
             "failed",
-            "UPDATE memory_extraction_jobs SET status = 'skipped', updated_at_ms = $2 \
+            "UPDATE memory_extraction_jobs SET status = 'skipped', updated_at_ms = $3 \
              WHERE pk = $1 AND status = 'failed'",
             &[&system_time_ms()],
         )
@@ -251,8 +289,9 @@ impl MemoryStore {
     /// Counts the jobs of `scope` and its narrower scopes that are not complete or skipped. A
     /// nonzero count tells a reader that the extracted state is behind the stored episodes.
     pub fn extraction_backlog(&self, scope: &MemoryScope) -> ZResult<ExtractionBacklog> {
-        let row = self.session.with_client(|client| {
-            client.query_one(
+        let row = self.with_queue_tenant(scope.tenant_id.as_deref(), QueueAccess::Read, || {
+            self.session.with_client(|client| {
+                client.query_one(
                 "SELECT count(*), count(*) FILTER (WHERE status = 'failed'), min(created_at_ms) \
                  FROM memory_extraction_jobs \
                  WHERE status IN ('pending', 'leased', 'failed') AND space_id = $1 \
@@ -268,6 +307,7 @@ impl MemoryStore {
                     &scope.thread_id,
                 ],
             )
+            })
         })?;
         let count = |index: usize| -> ZResult<usize> {
             let count = row.try_get::<_, i64>(index).map_err(pg_error)?;
@@ -280,32 +320,69 @@ impl MemoryStore {
         })
     }
 
-    /// Runs `statement`, an update or delete of one job that binds $1 to the job id and then
-    /// `params`. When it changes no row, the error says whether the job is missing or not
-    /// `expected`.
+    /// Runs queue statements. A store with tenant isolation runs them in a transaction that
+    /// sees only the jobs of `tenant`, because row-level security shows no job without one.
+    /// Without tenant isolation, each statement filters on the tenant it binds.
+    fn with_queue_tenant<T>(
+        &self,
+        tenant: Option<&str>,
+        access: QueueAccess,
+        run: impl FnOnce() -> ZResult<T>,
+    ) -> ZResult<T> {
+        if !self.session.tenant_isolation || self.session.in_transaction() {
+            return run();
+        }
+        let Some(tenant) = tenant.filter(|tenant| !tenant.is_empty()) else {
+            return Err(Status::permission_denied(
+                "tenant isolation is on, so the extraction queue call needs a tenant_id",
+            ));
+        };
+        match access {
+            QueueAccess::Read => self.session.begin_snapshot(Some(tenant))?,
+            QueueAccess::Write => self.session.begin_write(&[], Some(tenant))?,
+        }
+        self.session.finish(run())
+    }
+
+    /// Runs `statement`, an update or delete of one job that ends in its `WHERE` conditions. It
+    /// binds $1 to the job id, $2 to `tenant`, and then `params`. A job of another tenant is not
+    /// found. When the statement changes no row, the error says whether the job is missing or
+    /// not `expected`.
     fn transition_extraction_job(
         &self,
+        tenant: Option<&str>,
         job_id: &str,
         expected: &str,
         statement: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> ZResult<ExtractionJob> {
-        let sql = format!("{statement} RETURNING {JOB_COLUMNS}");
-        let bound = std::iter::once(&job_id as &(dyn ToSql + Sync))
+        const OF_TENANT: &str = "($2::text IS NULL OR tenant_id = $2)";
+        let sql = format!("{statement} AND {OF_TENANT} RETURNING {JOB_COLUMNS}");
+        let bound = [&job_id as &(dyn ToSql + Sync), &tenant]
+            .into_iter()
             .chain(params.iter().copied())
             .collect::<Vec<_>>();
-        let row = self
-            .session
-            .with_client(|client| client.query_opt(&sql, &bound))?;
+        let (row, current) = self.with_queue_tenant(tenant, QueueAccess::Write, || {
+            let row = self
+                .session
+                .with_client(|client| client.query_opt(&sql, &bound))?;
+            if row.is_some() {
+                return Ok((row, None));
+            }
+            let current = self.session.with_client(|client| {
+                client.query_opt(
+                    &format!(
+                        "SELECT {JOB_COLUMNS} FROM memory_extraction_jobs \
+                         WHERE pk = $1 AND {OF_TENANT}"
+                    ),
+                    &[&job_id as &(dyn ToSql + Sync), &tenant],
+                )
+            })?;
+            Ok((None, current))
+        })?;
         if let Some(row) = row {
             return job_from_row(&row);
         }
-        let current = self.session.with_client(|client| {
-            client.query_opt(
-                &format!("SELECT {JOB_COLUMNS} FROM memory_extraction_jobs WHERE pk = $1"),
-                &[&job_id],
-            )
-        })?;
         match current {
             None => Err(Status::not_found(format!("no extraction job {job_id}"))),
             Some(row) => {
@@ -317,6 +394,13 @@ impl MemoryStore {
             }
         }
     }
+}
+
+/// Whether a queue call only reads the jobs or also changes them.
+#[derive(Clone, Copy)]
+enum QueueAccess {
+    Read,
+    Write,
 }
 
 fn job_from_row(row: &Row) -> ZResult<ExtractionJob> {

@@ -1340,6 +1340,7 @@ fn sql_or_eq_list<'a>(field: &str, items: impl Iterator<Item = &'a str>) -> Stri
 
 // The filter dialect escapes quotes with a backslash and rejects SQL quote doubling.
 // Backslashes that reach a quote or the end of the literal are read in pairs by the filter parser.
+// The parser also drops the last two backslashes of a run before a double quote.
 fn sql_escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut run = 0;
@@ -1349,6 +1350,13 @@ fn sql_escape(value: &str) -> String {
             '\'' => {
                 out.push_str(&"\\".repeat(2 * run + 1));
                 out.push('\'');
+                run = 0;
+            }
+            '"' => {
+                if run > 0 {
+                    out.push_str(&"\\".repeat(run + 2));
+                }
+                out.push('"');
                 run = 0;
             }
             _ => {

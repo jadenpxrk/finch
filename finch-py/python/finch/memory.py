@@ -22,14 +22,19 @@ def _ms(value: object) -> Optional[int]:
         raise TypeError("timestamp must not be bool")
     if isinstance(value, int):
         return value
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
     if isinstance(value, datetime):
+        # A time without a zone is UTC, as a datetime and as a string.
         if value.tzinfo is None:
             value = value.replace(tzinfo=timezone.utc)
         return int(value.timestamp() * 1000)
-    if isinstance(value, str):
-        text = value[:-1] + "+00:00" if value.endswith("Z") else value
-        return int(datetime.fromisoformat(text).timestamp() * 1000)
     raise TypeError("timestamp must be datetime, RFC3339 string, epoch ms, or None")
+
+
+def _ms_or_now(value: object) -> int:
+    at_ms = _ms(value)
+    return _now_ms() if at_ms is None else at_ms
 
 
 def _raw(value: object) -> Dict[str, Any]:
@@ -46,17 +51,16 @@ def _json(value: object) -> str:
 
 def _scope(value: Union["MemoryScope", Mapping[str, Any]]) -> Dict[str, Any]:
     raw = _raw(value)
-    space = raw.pop("space", None) or raw.pop("space_id", None)
+    space = raw.pop("space", None)
+    space = space or raw.pop("space_id", None)
     if not space:
         raise ValueError("scope.space is required")
-    return {
-        "space_id": space,
-        "tenant_id": raw.get("tenant_id"),
-        "user_id": raw.get("user_id"),
-        "agent_id": raw.get("agent_id"),
-        "project_id": raw.get("project_id"),
-        "thread_id": raw.get("thread_id"),
-    }
+    ids = ("tenant_id", "user_id", "agent_id", "project_id", "thread_id")
+    # A misspelled key would leave its id out and widen the scope.
+    unknown = sorted(set(raw) - set(ids) - {"space_id"})
+    if unknown:
+        raise ValueError(f"scope has unknown keys: {', '.join(unknown)}")
+    return {"space_id": space, **{name: raw.get(name) for name in ids}}
 
 
 def _parse(raw: str) -> Any:
@@ -230,6 +234,7 @@ class ExtractionLeaseRequest:
     lease_ms: int = 60_000
     max_attempts: int = 3
     now: object = None
+    tenant_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -238,6 +243,7 @@ class ExtractionFailure:
     worker_id: str
     error: str
     max_attempts: int = 3
+    tenant_id: Optional[str] = None
 
 
 class _EvalApi:
@@ -329,7 +335,7 @@ class FinchMemory:
 
     def ingest_episode(self, input: Union[EpisodeInput, Mapping[str, Any]]) -> Dict[str, Any]:
         raw = _raw(input)
-        at_ms = _ms(raw.get("event_time")) or _now_ms()
+        at_ms = _ms_or_now(raw.get("event_time"))
         payload = {
             "id": raw.get("id"),
             "scope": _scope(raw["scope"]),
@@ -352,7 +358,7 @@ class FinchMemory:
     def ingest_artifact(self, input: Union[ArtifactInput, Mapping[str, Any]]) -> Dict[str, Any]:
         raw = _raw(input)
         text = raw.get("text") or ""
-        at_ms = _ms(raw.get("event_time")) or _now_ms()
+        at_ms = _ms_or_now(raw.get("event_time"))
         title = raw.get("title") or raw.get("uri") or "artifact"
         payload = {
             "id": raw.get("id") or "artifact_" + hashlib.sha256((title + text).encode()).hexdigest()[:16],
@@ -388,12 +394,15 @@ class FinchMemory:
             "lease_ms": int(raw.get("lease_ms", 60_000)),
             "max_attempts": int(raw.get("max_attempts", 3)),
             "now_ms": _ms(raw.get("now")),
+            "tenant_id": raw.get("tenant_id"),
         }
         return {"jobs": _parse(self._store.lease_extraction_jobs_json(_json(payload)))}
 
-    def complete_extraction_job(self, job_id: str, worker_id: str) -> Dict[str, Any]:
-        """Mark a leased extraction job done."""
-        return _parse(self._store.complete_extraction_job_json(job_id, worker_id))
+    def complete_extraction_job(
+        self, job_id: str, worker_id: str, tenant_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Mark a leased extraction job done. A store with tenant isolation needs `tenant_id`."""
+        return _parse(self._store.complete_extraction_job_json(job_id, worker_id, tenant_id))
 
     def fail_extraction_job(
         self, input: Union[ExtractionFailure, Mapping[str, Any]]
@@ -405,16 +414,23 @@ class FinchMemory:
             "worker_id": raw["worker_id"],
             "error": str(raw["error"]),
             "max_attempts": int(raw.get("max_attempts", 3)),
+            "tenant_id": raw.get("tenant_id"),
         }
         return _parse(self._store.fail_extraction_job_json(_json(payload)))
 
-    def retry_extraction_job(self, job_id: str) -> Dict[str, Any]:
-        """Return a failed extraction job to pending."""
-        return _parse(self._store.retry_extraction_job_json(job_id))
+    def retry_extraction_job(self, job_id: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+        """Return a failed extraction job to pending.
 
-    def skip_extraction_job(self, job_id: str) -> Dict[str, Any]:
-        """Mark a failed extraction job skipped, so later jobs of its scope can run."""
-        return _parse(self._store.skip_extraction_job_json(job_id))
+        A store with tenant isolation needs `tenant_id`.
+        """
+        return _parse(self._store.retry_extraction_job_json(job_id, tenant_id))
+
+    def skip_extraction_job(self, job_id: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+        """Mark a failed extraction job skipped, so later jobs of its scope can run.
+
+        A store with tenant isolation needs `tenant_id`.
+        """
+        return _parse(self._store.skip_extraction_job_json(job_id, tenant_id))
 
     def extraction_backlog(self, scope: Union[MemoryScope, Mapping[str, Any]]) -> Dict[str, Any]:
         """Count the jobs of `scope` that wait for extraction or failed."""
@@ -438,7 +454,7 @@ class FinchMemory:
             "source_episode_ids": raw.get("source_episode_ids", []),
             "asserted_by": raw.get("asserted_by", "user"),
             "confidence": raw.get("confidence"),
-            "observed_at_ms": _ms(raw.get("observed_at")) or now,
+            "observed_at_ms": now if raw.get("observed_at") is None else _ms(raw.get("observed_at")),
             "valid_from_ms": _ms(raw.get("valid_from")),
             "valid_to_ms": _ms(raw.get("valid_to")),
         }
@@ -449,11 +465,11 @@ class FinchMemory:
         claims = _parse(self._store.scan_current_claims_json(scope, int(input.get("limit", 1000)), _ms(input.get("at"))))
         return {"claims": claims}
 
-    def get_claim(self, id: str, scope: Union[MemoryScope, Mapping[str, Any]], limit: int = 1000) -> Optional[Dict[str, Any]]:
-        for claim in _parse(self._store.scan_claims_json(_json(_scope(scope)), limit, None)):
-            if claim.get("id") == id:
-                return claim
-        return None
+    def get_claim(
+        self, id: str, scope: Union[MemoryScope, Mapping[str, Any]], limit: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Return the claim `id` of `scope`, or None. `limit` has no effect."""
+        return _parse(self._store.get_claim_json(_json(_scope(scope)), id, None))
 
     def add_correction(self, input: Union[CorrectionInput, Mapping[str, Any]]) -> Dict[str, Any]:
         raw = _raw(input)

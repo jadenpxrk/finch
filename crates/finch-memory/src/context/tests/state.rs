@@ -1119,3 +1119,42 @@ fn several_answer_targets_pack_their_values_as_one_list() {
     timeline[0].read_view = crate::StateReadView::Timeline;
     assert!(render_answer_values(&timeline).is_none());
 }
+
+#[test]
+fn preference_claims_of_one_slot_render_as_one_set_state() {
+    let allergy = |id: &str, value: &str, at_ms: i64| {
+        let text = format!("User is allergic to {value}.");
+        let mut claim = claim(id, "user", "allergy", Some(value), &text, at_ms);
+        claim.claim_kind = ClaimKind::Preference;
+        claim
+    };
+
+    let compiled = build_query_state_context(
+        &ContextInput {
+            claims: &[
+                allergy("claim_peanuts", "peanuts", 10),
+                allergy("claim_shellfish", "shellfish", 20),
+            ],
+            ..Default::default()
+        },
+        ContextOptions {
+            token_budget: 240,
+            include_provenance: false,
+        },
+    );
+
+    assert!(
+        compiled
+            .body
+            .contains("### SetState set_state:Preference:user:allergy"),
+        "{}",
+        compiled.body
+    );
+    assert!(compiled.body.contains("members: peanuts, shellfish"));
+    let kinds = compiled
+        .included
+        .iter()
+        .map(|item| item.kind.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, ["state_set"]);
+}

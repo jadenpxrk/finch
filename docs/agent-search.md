@@ -22,7 +22,16 @@ file becomes the folder of the document. Header lines at the top of a file, such
 `id:`, or `date:`, followed by a blank line, give the title, id, and date. Finch does not
 store these lines as document text. Without them, the
 id is the file path, the title is the first line, and the date is the first `YYYY-MM-DD` in
-the file name or the first lines of the text.
+the file name or the first lines of the text. Lines such as `Ada: hello` at the top of a chat
+are document text, because they name no title, id, or date.
+
+The id from a file path has no file extension. If another document has that id, the file keeps
+its extension in the id. An `id:` line with an id that another document has is an error.
+
+`finch add` for a directory that the store holds writes its documents again. Before it writes a
+document, it deletes the text that the store holds for that id. `FINCH_INDEX`
+names a new directory, an empty directory, or a directory that holds a keyword index. `finch
+add` fails if the directory holds other files.
 
 The embedding command reads a JSON array of strings on standard input. It writes a JSON array
 of vectors, one per string, on standard output. Without the command, search uses keywords only,

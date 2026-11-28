@@ -338,7 +338,7 @@ fn slot_alias_validity_does_not_rewrite_earlier_claims() {
 fn invalid_same_batch_slot_alias_rolls_back_claims() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("slot_alias_atomic_rollback");
-    let store = crate::test_store(&dir, 3).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let claim = make_claim(
         &scope,
@@ -371,7 +371,12 @@ fn invalid_same_batch_slot_alias_rolls_back_claims() {
         valid_to_ms: None,
     });
 
-    assert!(store.apply_state_mutation_batch(batch).is_err());
+    let error = store.apply_state_mutation_batch(batch).unwrap_err();
+    assert!(
+        error.message().contains("existing canonical slot"),
+        "{}",
+        error.message()
+    );
     assert!(store.scan_claims(&scope, 20, None).unwrap().is_empty());
     assert!(store
         .scan_slot_aliases(&scope, 20, None)
@@ -1053,10 +1058,10 @@ fn dependency_trace(
 }
 
 #[test]
-fn rejected_mutation_batch_does_not_leave_partial_claims() {
+fn batch_with_a_rule_without_evidence_is_rejected_before_it_writes() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_atomic_validation");
-    let store = crate::test_store(&dir, 3).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let scope = scope();
     let claim = make_claim(
         &scope,
@@ -1077,7 +1082,7 @@ fn rejected_mutation_batch_does_not_leave_partial_claims() {
     );
     invalid_rule.source_span_ids.clear();
 
-    assert!(store
+    let error = store
         .apply_state_mutation_batch(mutation(
             &scope,
             100,
@@ -1086,8 +1091,59 @@ fn rejected_mutation_batch_does_not_leave_partial_claims() {
             vec![invalid_rule],
             Vec::new(),
         ))
-        .is_err());
+        .unwrap_err();
+    assert!(
+        error.message().contains("require source evidence ids"),
+        "{}",
+        error.message()
+    );
     assert!(store.scan_claims(&scope, 10, None).unwrap().is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rule_write_that_fails_rolls_back_the_claims_the_batch_wrote_before_it() {
+    let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
+    let dir = temp_dir("state_protocol_rule_rollback");
+    let store = EvidencedStore::create(&dir, 3).unwrap();
+    let scope = scope();
+    let claim = make_claim(
+        &scope,
+        "claim_atomic",
+        "servicio",
+        "responsable",
+        Some("Ana"),
+        10,
+        (ClaimKind::Fact, ClaimPolarity::Affirmative),
+    );
+    let rule = exact_rule(
+        &scope,
+        "rule_atomic",
+        "servicio",
+        "responsable",
+        "contacto",
+        RuleAction::DeriveValue,
+    );
+
+    // The batch inserts its claims first, and the second rule with the same id then fails.
+    let error = store
+        .apply_state_mutation_batch(mutation(
+            &scope,
+            100,
+            vec![claim],
+            Vec::new(),
+            vec![rule.clone(), rule],
+            Vec::new(),
+        ))
+        .unwrap_err();
+    assert!(
+        error.message().contains("already exists"),
+        "{}",
+        error.message()
+    );
+    assert!(store.scan_claims(&scope, 10, None).unwrap().is_empty());
+    assert!(store.scan_rules(&scope, 10, None).unwrap().is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1097,7 +1153,7 @@ fn failed_mutation_rolls_back_writes_completed_before_storage_error() {
     let _guard = crate::TEST_STORE_MUTEX.lock().unwrap();
     let dir = temp_dir("state_protocol_runtime_rollback");
     let scope = scope();
-    let store = crate::test_store(&dir, 3).unwrap();
+    let store = EvidencedStore::create(&dir, 3).unwrap();
     let claim = make_claim(
         &scope,
         "claim_duplicate",
@@ -1108,7 +1164,7 @@ fn failed_mutation_rolls_back_writes_completed_before_storage_error() {
         (ClaimKind::Fact, ClaimPolarity::Affirmative),
     );
 
-    assert!(store
+    let error = store
         .apply_state_mutation_batch(mutation(
             &scope,
             100,
@@ -1117,7 +1173,12 @@ fn failed_mutation_rolls_back_writes_completed_before_storage_error() {
             Vec::new(),
             Vec::new(),
         ))
-        .is_err());
+        .unwrap_err();
+    assert!(
+        error.message().contains("already exists"),
+        "{}",
+        error.message()
+    );
     assert!(store.scan_claims(&scope, 10, None).unwrap().is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);

@@ -64,8 +64,8 @@ export FINCH_MEMORY_TEST_POSTGRES_URL=postgres://finch:finch@localhost:55432/fin
 - A behavior change to `finch-memory` includes a note in the pull request that says what a
   packed context looks like before and after.
 - Commit subject in the imperative, under 72 characters. The body says why, not what.
-- CI must be green: tests, clippy with warnings denied, the bindings build, and the Python
-  tests.
+- CI must be green: tests, clippy with warnings denied, the format check, the bindings build, and
+  the Python and Node.js tests.
 
 Before you open a change:
 
